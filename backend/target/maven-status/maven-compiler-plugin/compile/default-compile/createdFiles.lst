@@ -34,7 +34,6 @@ com/marketai/gmail/parser/AngelOneParser.class
 com/marketai/portfolio/dto/MergeSummaryDto$MergedGroup$MergedGroupBuilder.class
 com/marketai/tracking/entity/OtherAsset.class
 com/marketai/gmail/parser/SbiBankParser.class
-com/marketai/onetime/OneTimeDataCleanupRunner.class
 com/marketai/tracking/dto/LoanRequest.class
 com/marketai/common/util/FinancialDataValidator.class
 com/marketai/scheduled/entity/RecurringInvestment.class
