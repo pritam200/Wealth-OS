@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.marketai.tracking.service.FdRenewalTest
+-------------------------------------------------------------------------------
+Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.141 s - in com.marketai.tracking.service.FdRenewalTest

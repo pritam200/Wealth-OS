@@ -1,0 +1,15 @@
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/actions/TodaysActionsServiceTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/amfi/service/AmfiNavParsingTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/auth/AuthControllerTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/common/util/FinancialDataValidatorTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/gmail/ai/AiEmailExtractorSymbolResolutionTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/gmail/parser/CamsParserTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/gmail/parser/ContractNoteHelperTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/gmail/service/ReconciliationReportServiceTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/mf/service/MfPerformanceServiceTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/mf/service/MfSchemeLinkServiceTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/portfolio/service/PortfolioServiceTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/recommendation/PortfolioContextServiceTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/technical/TechnicalDataQualityTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/technical/TechnicalIndicatorServiceTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/tracking/service/FdRenewalTest.java

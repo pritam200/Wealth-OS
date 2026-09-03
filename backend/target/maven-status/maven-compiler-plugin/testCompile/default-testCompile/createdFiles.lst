@@ -1,0 +1,15 @@
+com/marketai/gmail/parser/ContractNoteHelperTest.class
+com/marketai/mf/service/MfSchemeLinkServiceTest.class
+com/marketai/technical/TechnicalDataQualityTest.class
+com/marketai/tracking/service/FdRenewalTest.class
+com/marketai/gmail/ai/AiEmailExtractorSymbolResolutionTest.class
+com/marketai/recommendation/PortfolioContextServiceTest.class
+com/marketai/portfolio/service/PortfolioServiceTest.class
+com/marketai/auth/AuthControllerTest.class
+com/marketai/amfi/service/AmfiNavParsingTest.class
+com/marketai/mf/service/MfPerformanceServiceTest.class
+com/marketai/gmail/parser/CamsParserTest.class
+com/marketai/gmail/service/ReconciliationReportServiceTest.class
+com/marketai/common/util/FinancialDataValidatorTest.class
+com/marketai/technical/TechnicalIndicatorServiceTest.class
+com/marketai/actions/TodaysActionsServiceTest.class

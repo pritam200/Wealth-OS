@@ -1,0 +1,34 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    database-platform: org.hibernate.dialect.H2Dialect
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+  cache:
+    type: simple
+
+app:
+  jwt:
+    secret: TestSecretKeyForJwtThatIsLongEnoughToWork12345678901234567890
+    expiration-ms: 86400000
+    refresh-expiration-ms: 604800000
+  gemini:
+    api-key: test-key
+    base-url: https://test.api
+    model: gemini-test
+  yahoo-finance:
+    base-url: https://test.finance
+    timeout-seconds: 5
+  news:
+    api-key: test-key
+    base-url: https://test.news
+  cors:
+    allowed-origins: http://localhost:3000,http://localhost:5173
