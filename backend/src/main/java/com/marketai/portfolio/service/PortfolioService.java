@@ -414,11 +414,138 @@ public class PortfolioService {
             }
         }
 
+        // 5. A wrong/truncated ticker that never received a live quote (Yahoo doesn't
+        // recognise it — a strong, objective signal, unlike guessing from spelling alone).
+        // Two sub-cases, resolved the same way the AI email extractor now validates NEW
+        // imports (see AiEmailExtractor.resolveSymbol): search the stock master for the
+        // held symbol/name.
+        //   - Resolves to exactly one stock the user ALREADY holds under a different symbol
+        //     -> MISMATCHED_TICKER, safe to auto-fix (fixMismatchedTickers): this is the same
+        //     real position recorded under two different ticker spellings (ATHER.NS vs the
+        //     real ATHERENERG.NS), not a guess — it's confirmed by the user's own other holding.
+        //   - Resolves to nothing at all -> UNVERIFIABLE_SYMBOL, flagged for manual removal
+        //     only (never auto-deleted — e.g. an ISIN fragment like "INE02" mistaken for a
+        //     ticker has no safe automatic fix, just a clear "this isn't a real stock" flag).
+        java.util.Set<String> heldSymbolsUpper = new java.util.HashSet<>();
+        for (Holding h : all) if (h.getSymbol() != null) heldSymbolsUpper.add(h.getSymbol().toUpperCase());
+
+        for (Holding h : all) {
+            if (h.getSymbol() == null || h.getSymbol().toUpperCase().endsWith(".MF")) continue;
+            if (h.getCurrentPrice() != null && h.getCurrentPrice().compareTo(BigDecimal.ZERO) > 0) continue; // has a real live quote — not suspect
+
+            String stripped = h.getSymbol().toUpperCase().replace(".NS", "").replace(".BO", "");
+            String resolvedSymbol = resolveAgainstOwnHoldings(stripped, h, all, heldSymbolsUpper);
+
+            // Only fall back to the live stock-search API (local seed list + Yahoo) when the
+            // fully-local check above found nothing — that network call can be rate-limited
+            // or simply unavailable, and this whole detection must still work when it is.
+            List<com.marketai.market.entity.Stock> hits = java.util.Collections.emptyList();
+            if (resolvedSymbol == null) {
+                try { hits = marketDataService.searchStocks(stripped); } catch (Exception e) { hits = java.util.Collections.emptyList(); }
+                for (com.marketai.market.entity.Stock s : hits) {
+                    if (s.getSymbol() != null && heldSymbolsUpper.contains(s.getSymbol().toUpperCase())
+                            && !s.getSymbol().equalsIgnoreCase(h.getSymbol())) {
+                        resolvedSymbol = s.getSymbol();
+                        break;
+                    }
+                }
+            }
+
+            if (resolvedSymbol != null) {
+                issues.add(com.marketai.portfolio.dto.IntegrityReportDto.Issue.builder()
+                    .holdingId(h.getId()).symbol(h.getSymbol()).name(h.getName())
+                    .type("MISMATCHED_TICKER")
+                    .description(h.getSymbol() + " never resolved to a live quote and appears to be the same position you already hold as " + resolvedSymbol + " — safe to auto-fix.")
+                    .currentValue(h.getCurrentValue())
+                    .resolvedSymbol(resolvedSymbol)
+                    .build());
+            } else if (hits.isEmpty()) {
+                issues.add(com.marketai.portfolio.dto.IntegrityReportDto.Issue.builder()
+                    .holdingId(h.getId()).symbol(h.getSymbol()).name(h.getName())
+                    .type("UNVERIFIABLE_SYMBOL")
+                    .description(h.getSymbol() + " does not match any known stock and has never received a live price — likely a parsing error (e.g. a fragment of an ISIN or client code), not a real ticker. Review and remove if incorrect.")
+                    .currentValue(h.getCurrentValue())
+                    .build());
+            }
+        }
+
         return com.marketai.portfolio.dto.IntegrityReportDto.builder()
             .totalHoldings(all.size())
             .issueCount(issues.size())
             .issues(issues)
             .build();
+    }
+
+    /**
+     * Local-only resolution: does this wrong/truncated symbol look like a prefix of a
+     * DIFFERENT symbol or name the same user already holds? Deliberately makes no network
+     * call — the AI-extractor's live-search resolution can be rate-limited or unavailable,
+     * and this exact bug (ATHER.NS vs the real ATHERENERG.NS, ADANI.NS vs ADANIENT.NS, etc.)
+     * is fully determinable from the user's own portfolio data alone. Requires:
+     *   - the fragment to be at least 4 characters (rules out coincidental short prefixes)
+     *   - exactly ONE other held symbol/name to match, so an ambiguous fragment (could be
+     *     either of two different real holdings) is left unresolved rather than guessed
+     */
+    private String resolveAgainstOwnHoldings(String strippedSymbol, Holding self, List<Holding> all, java.util.Set<String> heldSymbolsUpper) {
+        if (strippedSymbol.length() < 4) return null;
+        String candidates = null;
+        int matchCount = 0;
+        for (Holding other : all) {
+            if (other.getId().equals(self.getId()) || other.getSymbol() == null) continue;
+            if (other.getSymbol().toUpperCase().endsWith(".MF")) continue;
+            String otherStripped = other.getSymbol().toUpperCase().replace(".NS", "").replace(".BO", "");
+            if (otherStripped.equalsIgnoreCase(strippedSymbol)) continue; // same symbol — that's DUPLICATE_SYMBOL's job, not this
+            String otherName = other.getName() != null ? other.getName().toUpperCase().replaceAll("[^A-Z0-9]", "") : "";
+            boolean matches = otherStripped.startsWith(strippedSymbol) || otherName.startsWith(strippedSymbol);
+            if (matches) {
+                if (candidates != null && !candidates.equals(other.getSymbol())) return null; // ambiguous — more than one distinct candidate
+                candidates = other.getSymbol();
+                matchCount++;
+            }
+        }
+        return matchCount > 0 ? candidates : null;
+    }
+
+    /**
+     * Auto-fixes every MISMATCHED_TICKER case found by checkIntegrity: renames the wrong
+     * ticker to match the confirmed-correct one already held, then merges the two rows. Only
+     * acts on the high-confidence bucket (resolves to a symbol the user already holds) — never
+     * touches UNVERIFIABLE_SYMBOL, which has no safe automatic fix and stays a manual removal.
+     */
+    @Transactional
+    public com.marketai.portfolio.dto.MergeSummaryDto fixMismatchedTickers(Long userId) {
+        com.marketai.portfolio.dto.IntegrityReportDto report = checkIntegrity(userId);
+        List<com.marketai.portfolio.dto.MergeSummaryDto.MergedGroup> fixed = new ArrayList<>();
+        int totalFixed = 0;
+
+        for (com.marketai.portfolio.dto.IntegrityReportDto.Issue issue : report.getIssues()) {
+            if (!"MISMATCHED_TICKER".equals(issue.getType()) || issue.getResolvedSymbol() == null) continue;
+            Holding wrong = holdingRepository.findById(issue.getHoldingId())
+                .filter(h -> h.getPortfolio().getUser().getId().equals(userId)).orElse(null);
+            if (wrong == null) continue;
+
+            // The confirmed-correct holding checkIntegrity resolved this against — may be in
+            // a different portfolio than `wrong`.
+            Holding correct = null;
+            for (Portfolio p : portfolioRepository.findByUserId(userId)) {
+                correct = holdingRepository.findByPortfolioIdAndSymbol(p.getId(), issue.getResolvedSymbol().toUpperCase()).orElse(null);
+                if (correct != null) break;
+            }
+            if (correct == null) continue;
+
+            String wrongSymbol = wrong.getSymbol();
+            Holding merged = mergeHoldingsCore(correct, wrong, userId);
+            fixed.add(com.marketai.portfolio.dto.MergeSummaryDto.MergedGroup.builder()
+                .symbol(correct.getSymbol() + " (was " + wrongSymbol + ")")
+                .keptHoldingId(merged.getId())
+                .removedHoldingIds(java.util.Collections.singletonList(String.valueOf(wrong.getId())))
+                .build());
+            totalFixed++;
+        }
+
+        log.info("fixMismatchedTickers: user {} — {} mismatched ticker(s) resolved and merged", userId, totalFixed);
+        return com.marketai.portfolio.dto.MergeSummaryDto.builder()
+            .groupsMerged(fixed.size()).holdingsMerged(totalFixed).groups(fixed).build();
     }
 
     /**
@@ -442,7 +569,19 @@ public class PortfolioService {
             throw new IllegalArgumentException("Refusing to merge holdings with different symbols: "
                 + keep.getSymbol() + " vs " + remove.getSymbol());
         }
+        return mergeHoldingsCore(keep, remove, userId);
+    }
 
+    /**
+     * Core merge, symbol-agnostic — used both by {@link #mergeHoldings} (which enforces the
+     * same-symbol guard first) and by mismatched-ticker resolution, where `remove` legitimately
+     * holds a different (wrong) symbol than `keep` and is deleted outright rather than ever
+     * renamed to `keep`'s symbol — renaming it first would collide with the
+     * (portfolio_id, symbol) unique constraint whenever both rows live in the same portfolio.
+     */
+    private Holding mergeHoldingsCore(Holding keep, Holding remove, Long userId) {
+        Long keepHoldingId = keep.getId();
+        Long removeHoldingId = remove.getId();
         BigDecimal keepValue = keep.getAverageCost().multiply(keep.getQuantity());
         BigDecimal removeValue = remove.getAverageCost().multiply(remove.getQuantity());
         BigDecimal totalQty = keep.getQuantity().add(remove.getQuantity());
@@ -523,6 +662,46 @@ public class PortfolioService {
             .holdingsMerged(totalMerged)
             .groups(merged)
             .build();
+    }
+
+    /**
+     * Corrects a holding's symbol in place — for the "wrong ticker with no duplicate to
+     * merge into" case (e.g. a holding recorded as "SBI.NS", which doesn't exist on NSE,
+     * with no existing "SBIN.NS" holding to combine it with). Preserves quantity/cost/history
+     * untouched; only the symbol string changes, so the position starts resolving to a real
+     * quote instead of silently sitting at cost forever.
+     */
+    /**
+     * Hand-verified mismatched-ticker fix for pairs where the wrong symbol shares no string
+     * relationship with the correct one (e.g. LARSEN.NS vs LT.NS — both come from a fragment
+     * of the company name, not the ticker) and so can't be found by the automated heuristic in
+     * {@link #checkIntegrity}. Looks up both holdings and merges within one transaction (doing
+     * the lookup outside a transaction would hit a lazy-init exception on the user/portfolio
+     * association). No-ops (returns null) if either symbol isn't currently held.
+     */
+    @Transactional
+    public Holding mergeHoldingsBySymbolPair(Long userId, String correctSymbol, String wrongSymbol) {
+        Holding correct = null;
+        Holding wrong = null;
+        for (Portfolio p : portfolioRepository.findByUserId(userId)) {
+            if (correct == null) correct = holdingRepository.findByPortfolioIdAndSymbol(p.getId(), correctSymbol.toUpperCase()).orElse(null);
+            if (wrong == null) wrong = holdingRepository.findByPortfolioIdAndSymbol(p.getId(), wrongSymbol.toUpperCase()).orElse(null);
+        }
+        if (correct == null || wrong == null) return null;
+        return mergeHoldingsCore(correct, wrong, userId);
+    }
+
+    @Transactional
+    public Holding renameHoldingSymbol(Long userId, Long holdingId, String newSymbol) {
+        Holding h = holdingRepository.findById(holdingId)
+            .filter(x -> x.getPortfolio().getUser().getId().equals(userId))
+            .orElseThrow(() -> new ResourceNotFoundException("Holding", "id", holdingId));
+        String old = h.getSymbol();
+        h.setSymbol(newSymbol.toUpperCase());
+        h.setUpdatedAt(LocalDateTime.now());
+        h = holdingRepository.save(h);
+        log.info("Renamed holding {} symbol from {} to {} for user {}", holdingId, old, newSymbol, userId);
+        return h;
     }
 
     @Transactional

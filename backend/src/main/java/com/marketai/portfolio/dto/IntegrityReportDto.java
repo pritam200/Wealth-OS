@@ -19,8 +19,14 @@ public class IntegrityReportDto {
         private Long holdingId;
         private String symbol;
         private String name;
-        private String type;        // UNVERIFIABLE_NAME | DUPLICATE_FOLIO | DUPLICATE_DISPLAY_NAME
+        // UNVERIFIABLE_NAME | DUPLICATE_FOLIO | DUPLICATE_DISPLAY_NAME | DUPLICATE_SYMBOL |
+        // MISMATCHED_TICKER | UNVERIFIABLE_SYMBOL
+        private String type;
         private String description;
         private BigDecimal currentValue;
+        // MISMATCHED_TICKER only — the confirmed-correct symbol this holding should be merged
+        // into, resolved once by checkIntegrity and reused as-is by fixMismatchedTickers so
+        // the two never risk disagreeing on re-derivation.
+        private String resolvedSymbol;
     }
 }

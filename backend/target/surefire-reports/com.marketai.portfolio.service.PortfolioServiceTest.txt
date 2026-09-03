@@ -1,4 +1,26 @@
 -------------------------------------------------------------------------------
 Test set: com.marketai.portfolio.service.PortfolioServiceTest
 -------------------------------------------------------------------------------
-Tests run: 18, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.264 s - in com.marketai.portfolio.service.PortfolioServiceTest
+Tests run: 18, Failures: 2, Errors: 0, Skipped: 0, Time elapsed: 0.404 s <<< FAILURE! - in com.marketai.portfolio.service.PortfolioServiceTest
+checkIntegrity_flagsSameSymbolAcrossPortfolios_theActualIncidentCase  Time elapsed: 0.029 s  <<< FAILURE!
+java.lang.AssertionError: 
+
+Expecting ArrayList:
+  ["DUPLICATE_SYMBOL",
+    "DUPLICATE_SYMBOL",
+    "UNVERIFIABLE_SYMBOL",
+    "UNVERIFIABLE_SYMBOL"]
+to contain only:
+  ["DUPLICATE_SYMBOL"]
+but the following element(s) were unexpected:
+  ["UNVERIFIABLE_SYMBOL", "UNVERIFIABLE_SYMBOL"]
+
+	at com.marketai.portfolio.service.PortfolioServiceTest.checkIntegrity_flagsSameSymbolAcrossPortfolios_theActualIncidentCase(PortfolioServiceTest.java:326)
+
+checkIntegrity_noIssuesForCleanPortfolio  Time elapsed: 0.007 s  <<< FAILURE!
+org.opentest4j.AssertionFailedError: 
+
+expected: 0
+ but was: 1
+	at com.marketai.portfolio.service.PortfolioServiceTest.checkIntegrity_noIssuesForCleanPortfolio(PortfolioServiceTest.java:305)
+

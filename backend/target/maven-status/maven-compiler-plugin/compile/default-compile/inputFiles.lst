@@ -144,6 +144,7 @@
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/news/entity/News.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/news/repository/NewsRepository.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/news/service/NewsService.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/onetime/OneTimeDataCleanupRunner.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/portfolio/controller/PortfolioController.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/portfolio/dto/AddHoldingRequest.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/portfolio/dto/IntegrityReportDto.java

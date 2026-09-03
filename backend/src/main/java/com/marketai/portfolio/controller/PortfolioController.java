@@ -127,6 +127,12 @@ public class PortfolioController {
         return ResponseEntity.ok(portfolioService.mergeDuplicateSymbols(user.getId()));
     }
 
+    @PostMapping("/fix-mismatched-tickers")
+    @Operation(summary = "Auto-fixes holdings recorded under a wrong/truncated ticker (e.g. ATHER.NS) that never received a live quote and confidently resolve to a different symbol you already hold (e.g. ATHERENERG.NS) — renames and merges. Never touches a symbol that resolves to nothing (see integrity-check's UNVERIFIABLE_SYMBOL, which stays a manual review).")
+    public ResponseEntity<com.marketai.portfolio.dto.MergeSummaryDto> fixMismatchedTickers(@AuthenticationPrincipal User user) {
+        return ResponseEntity.ok(portfolioService.fixMismatchedTickers(user.getId()));
+    }
+
     @PostMapping("/rebuild")
     @Operation(summary = "Rebuild all holdings from transaction history — fixes quantity/avg cost mismatches and removes fully-sold stocks")
     public ResponseEntity<Map<String, Object>> rebuild(@AuthenticationPrincipal User user) {

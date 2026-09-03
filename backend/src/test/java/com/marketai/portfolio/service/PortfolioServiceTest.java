@@ -33,6 +33,7 @@ class PortfolioServiceTest {
     private PortfolioRepository portfolioRepository;
     private HoldingRepository holdingRepository;
     private TransactionRepository transactionRepository;
+    private MarketDataService marketDataService;
     private PortfolioService service;
 
     private static final Long USER_ID = 1L;
@@ -43,7 +44,7 @@ class PortfolioServiceTest {
         portfolioRepository = mock(PortfolioRepository.class);
         holdingRepository = mock(HoldingRepository.class);
         transactionRepository = mock(TransactionRepository.class);
-        MarketDataService marketDataService = mock(MarketDataService.class);
+        marketDataService = mock(MarketDataService.class);
         RedemptionService redemptionService = mock(RedemptionService.class);
 
         service = new PortfolioService(portfolioRepository, holdingRepository, transactionRepository,
@@ -299,6 +300,10 @@ class PortfolioServiceTest {
             .quantity(BigDecimal.TEN).averageCost(new BigDecimal("1500")).build();
         when(portfolioRepository.findByUserId(USER_ID)).thenReturn(Collections.singletonList(Portfolio.builder().id(PORTFOLIO_ID).build()));
         when(holdingRepository.findByPortfolioId(PORTFOLIO_ID)).thenReturn(Collections.singletonList(clean));
+        // Simulate the local stock-seed lookup finding this as a real, known ticker (as it
+        // would in production) so a merely-not-yet-priced holding isn't mistaken for garbage.
+        when(marketDataService.searchStocks("HDFCBANK")).thenReturn(Collections.singletonList(
+            com.marketai.market.entity.Stock.builder().symbol("HDFCBANK.NS").name("HDFC Bank").build()));
 
         IntegrityReportDto report = service.checkIntegrity(USER_ID);
 
@@ -320,6 +325,11 @@ class PortfolioServiceTest {
             .broker("MStock").quantity(new BigDecimal("6")).averageCost(new BigDecimal("5019.98")).build();
         when(holdingRepository.findByPortfolioId(PORTFOLIO_ID)).thenReturn(Collections.singletonList(a));
         when(holdingRepository.findByPortfolioId(pf2)).thenReturn(Collections.singletonList(b));
+        // Simulate the local stock-seed lookup finding TITAN.NS as a real, known ticker (as it
+        // would in production) so these merely-not-yet-priced holdings aren't mistaken for
+        // garbage — they're already correctly flagged as DUPLICATE_SYMBOL instead.
+        when(marketDataService.searchStocks("TITAN")).thenReturn(Collections.singletonList(
+            com.marketai.market.entity.Stock.builder().symbol("TITAN.NS").name("TITAN").build()));
 
         IntegrityReportDto report = service.checkIntegrity(USER_ID);
 
