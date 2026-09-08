@@ -8,6 +8,7 @@ com/marketai/portfolio/service/PortfolioServiceTest.class
 com/marketai/auth/AuthControllerTest.class
 com/marketai/amfi/service/AmfiNavParsingTest.class
 com/marketai/mf/service/MfPerformanceServiceTest.class
+com/marketai/portfolio/util/XirrCalculatorTest.class
 com/marketai/gmail/parser/CamsParserTest.class
 com/marketai/gmail/service/ReconciliationReportServiceTest.class
 com/marketai/common/util/FinancialDataValidatorTest.class

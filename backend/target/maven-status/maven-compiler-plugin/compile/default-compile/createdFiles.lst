@@ -3,6 +3,7 @@ com/marketai/card/entity/CreditCard.class
 com/marketai/gmail/service/GmailClientService$TokenRefreshCallback.class
 com/marketai/auth/entity/RefreshToken.class
 com/marketai/portfolio/dto/IntegrityReportDto$IntegrityReportDtoBuilder.class
+com/marketai/reconciliation/dto/ReconciliationReportDto$ReconciliationReportDtoBuilder.class
 com/marketai/market/client/YahooFinanceClient$CrumbSession.class
 com/marketai/gmail/service/GmailClientService$1.class
 com/marketai/actions/dto/TodaysActionsResponse$SellReduceAction$SellReduceActionBuilder.class
@@ -56,6 +57,7 @@ com/marketai/networth/entity/NetWorthSnapshot.class
 com/marketai/actions/dto/TodaysActionsResponse$WatchAction.class
 com/marketai/goal/entity/FinancialGoal.class
 com/marketai/portfolio/dto/TransactionDto$TransactionDtoBuilder.class
+com/marketai/portfolio/scheduler/HoldingReconciliationScheduler.class
 com/marketai/scheduled/repository/RecurringInvestmentRepository.class
 com/marketai/common/exception/ExternalApiException.class
 com/marketai/amfi/dto/AmfiNavResult.class
@@ -89,6 +91,7 @@ com/marketai/ai/service/AiService.class
 com/marketai/expense/repository/ExpenseRepository.class
 com/marketai/gmail/parser/ParsedEmail.class
 com/marketai/gmail/service/GmailClientService$PdfAttachmentRef.class
+com/marketai/reconciliation/dto/ReconciliationIssue$ReconciliationIssueBuilder.class
 com/marketai/gmail/security/PasswordCipher.class
 com/marketai/actions/dto/TodaysActionsResponse.class
 com/marketai/tracking/dto/RdRequest.class
@@ -110,6 +113,7 @@ com/marketai/gmail/dto/ReconciliationReportDto$ReconciliationReportDtoBuilder.cl
 com/marketai/gmail/ai/AiEmailExtractor.class
 com/marketai/recommendation/dto/PortfolioContext$Flag$FlagBuilder.class
 com/marketai/tracking/entity/EpfAccount$EpfAccountBuilder.class
+com/marketai/reconciliation/controller/ReconciliationController.class
 com/marketai/ai/client/GeminiClient.class
 com/marketai/gmail/parser/ZerodhaParser.class
 com/marketai/redemption/dto/ReinvestmentRequest.class
@@ -155,6 +159,7 @@ com/marketai/reminder/dto/ReminderResponse.class
 com/marketai/redemption/dto/DeploymentPlan$Tranche.class
 com/marketai/auth/dto/AuthResponse$AuthResponseBuilder.class
 com/marketai/scheduled/dto/RecurringInvestmentResponse.class
+com/marketai/tracking/scheduler/DepositMaturityScheduler.class
 com/marketai/gmail/dto/GmailStatusResponse$GmailStatusResponseBuilder.class
 com/marketai/gmail/repository/ProcessedEmailRepository.class
 com/marketai/gmail/dto/GmailSyncResult$ReconciliationReport$ReconciliationReportBuilder.class
@@ -162,10 +167,12 @@ com/marketai/portfolio/dto/TransactionDto.class
 com/marketai/market/dto/MarketOverviewDto$MarketBreadth$MarketBreadthBuilder.class
 com/marketai/gmail/parser/ParsedEmail$Type.class
 com/marketai/gmail/service/PasswordHintExtractor.class
+com/marketai/recommendation/controller/WealthController.class
 com/marketai/gmail/parser/DividendParser.class
 com/marketai/gmail/entity/ProcessedEmail.class
 com/marketai/recommendation/service/RecommendationEngine$NextActionDecision.class
 com/marketai/actions/service/TodaysActionsService.class
+com/marketai/reconciliation/service/ReconciliationService.class
 com/marketai/gmail/dto/SavedPasswordResponse.class
 com/marketai/news/service/NewsService.class
 com/marketai/gmail/entity/GmailToken$GmailTokenBuilder.class
@@ -252,6 +259,7 @@ com/marketai/gmail/parser/YesBankParser.class
 com/marketai/auth/dto/AuthResponse.class
 com/marketai/auth/entity/User.class
 com/marketai/gmail/dto/GmailSyncResult$SyncLogEntry$SyncLogEntryBuilder.class
+com/marketai/portfolio/util/XirrCalculator$CashFlow.class
 com/marketai/gmail/entity/GmailToken.class
 com/marketai/gmail/dto/GmailSyncResult$ReconciliationReport.class
 com/marketai/mf/scheduler/MfNavHistoryScheduler.class
@@ -271,6 +279,7 @@ com/marketai/card/service/CardService$ScoredCard.class
 com/marketai/recommendation/dto/PortfolioContext$Exposure$ExposureBuilder.class
 com/marketai/auth/dto/LoginRequest.class
 com/marketai/tracking/dto/TrackingSummaryResponse$TrackingSummaryResponseBuilder.class
+com/marketai/reconciliation/dto/ReconciliationIssue.class
 com/marketai/common/exception/GlobalExceptionHandler.class
 com/marketai/actions/dto/TodaysActionsResponse$ReinvestmentPlan.class
 com/marketai/gmail/service/GmailClientService.class
@@ -283,6 +292,7 @@ com/marketai/gmail/parser/AxisBankParser.class
 com/marketai/mf/service/MfNavHistoryService$NavPoint.class
 com/marketai/recommendation/dto/PortfolioContext$Flag.class
 com/marketai/auth/repository/UserRepository.class
+com/marketai/reconciliation/dto/ReconciliationReportDto.class
 com/marketai/card/dto/CardDtos$CardRequest.class
 com/marketai/gmail/dto/ReconciliationReportDto$DetailRow.class
 com/marketai/expense/entity/ExpenseCategory.class
@@ -293,6 +303,7 @@ com/marketai/portfolio/entity/Portfolio$PortfolioBuilder.class
 com/marketai/card/dto/CardDtos$CardResponse.class
 com/marketai/actions/dto/TodaysActionsResponse$WatchAction$WatchActionBuilder.class
 com/marketai/tracking/repository/OtherAssetRepository.class
+com/marketai/portfolio/util/XirrCalculator.class
 com/marketai/amfi/controller/AmfiNavController.class
 com/marketai/market/service/MarketDataService.class
 com/marketai/reminder/service/ReminderService.class

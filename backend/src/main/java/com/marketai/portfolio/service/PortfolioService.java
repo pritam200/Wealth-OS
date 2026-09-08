@@ -85,15 +85,6 @@ public class PortfolioService {
         Holding holding;
         if (existing.isPresent()) {
             holding = existing.get();
-            // Recalculate weighted average cost
-            BigDecimal existingValue = holding.getAverageCost().multiply(holding.getQuantity());
-            BigDecimal newValue = req.getPrice().multiply(req.getQuantity());
-            BigDecimal totalQty = holding.getQuantity().add(req.getQuantity());
-            BigDecimal newAvgCost = existingValue.add(newValue)
-                    .divide(totalQty, 2, RoundingMode.HALF_UP);
-            holding.setQuantity(totalQty);
-            holding.setAverageCost(newAvgCost);
-            holding.setUpdatedAt(LocalDateTime.now());
             // Fill broker/folio only if not already set
             if (holding.getBroker() == null && req.getBroker() != null) {
                 holding.setBroker(req.getBroker());
@@ -137,7 +128,8 @@ public class PortfolioService {
                 .build();
         transactionRepository.save(txn);
 
-        return holding;
+        // A BUY only ever increases net quantity, so this never returns null (never deletes).
+        return recomputeFromLedger(holding);
     }
 
     @Transactional
@@ -163,6 +155,24 @@ public class PortfolioService {
         }
     }
 
+    /**
+     * Runs {@link #rebuildHoldingsFromTransactions} for every user — the nightly reconciliation
+     * pass that catches any drift between a holding's stored quantity/averageCost and what its
+     * transaction ledger actually implies, before a user ever notices a wrong number on screen.
+     */
+    public void reconcileAllUsers() {
+        for (User u : userRepository.findAll()) {
+            try {
+                int fixed = rebuildHoldingsFromTransactions(u.getId());
+                if (fixed > 0) {
+                    log.warn("Nightly reconciliation: user {} had {} holding(s) drifted from their transaction ledger — corrected", u.getId(), fixed);
+                }
+            } catch (Exception e) {
+                log.error("Nightly reconciliation failed for user {}: {}", u.getId(), e.getMessage());
+            }
+        }
+    }
+
     @Transactional
     public int rebuildHoldingsFromTransactions(Long userId) {
         List<Portfolio> portfolios = portfolioRepository.findByUserId(userId);
@@ -170,42 +180,85 @@ public class PortfolioService {
         for (Portfolio portfolio : portfolios) {
             List<Holding> holdings = holdingRepository.findByPortfolioId(portfolio.getId());
             for (Holding h : holdings) {
-                List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId());
-                if (txns.isEmpty()) continue;
-                BigDecimal netQty = BigDecimal.ZERO;
-                BigDecimal totalCost = BigDecimal.ZERO;
-                for (Transaction t : txns) {
-                    if (t.getType() == Transaction.TransactionType.BUY) {
-                        totalCost = totalCost.add(t.getPrice().multiply(t.getQuantity()));
-                        netQty = netQty.add(t.getQuantity());
-                    } else {
-                        BigDecimal sellQty = t.getQuantity().min(netQty);
-                        if (netQty.compareTo(BigDecimal.ZERO) > 0) {
-                            BigDecimal avgCostAtSale = totalCost.divide(netQty, 4, RoundingMode.HALF_UP);
-                            totalCost = totalCost.subtract(avgCostAtSale.multiply(sellQty));
-                        }
-                        netQty = netQty.subtract(sellQty);
-                        if (netQty.compareTo(BigDecimal.ZERO) < 0) netQty = BigDecimal.ZERO;
-                        if (totalCost.compareTo(BigDecimal.ZERO) < 0) totalCost = BigDecimal.ZERO;
-                    }
-                }
-                BigDecimal newAvgCost = netQty.compareTo(BigDecimal.ZERO) > 0
-                    ? totalCost.divide(netQty, 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
-                if (netQty.compareTo(BigDecimal.ZERO) <= 0) {
-                    holdingRepository.delete(h);
+                if (transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId()).isEmpty()) continue;
+                BigDecimal beforeQty = h.getQuantity();
+                BigDecimal beforeAvgCost = h.getAverageCost();
+                Holding after = recomputeFromLedger(h);
+                if (after == null) {
                     fixed++;
                     log.info("Removed fully sold holding: {}", h.getSymbol());
-                } else if (netQty.compareTo(h.getQuantity()) != 0 || newAvgCost.compareTo(h.getAverageCost()) != 0) {
-                    h.setQuantity(netQty);
-                    h.setAverageCost(newAvgCost);
-                    h.setUpdatedAt(LocalDateTime.now());
-                    holdingRepository.save(h);
+                } else if (after.getQuantity().compareTo(beforeQty) != 0 || after.getAverageCost().compareTo(beforeAvgCost) != 0) {
                     fixed++;
-                    log.info("Rebuilt holding {}: qty={}, avgCost={}", h.getSymbol(), netQty, newAvgCost);
+                    log.info("Rebuilt holding {}: qty={}, avgCost={}", after.getSymbol(), after.getQuantity(), after.getAverageCost());
                 }
             }
         }
         return fixed;
+    }
+
+    /**
+     * Real XIRR from this holding's actual BUY/SELL cash flows plus its current value as a
+     * final "as-if-sold-today" flow — replaces trusting {@link Holding#getXirr()}, a plain
+     * stored field populated only by manual entry or import, never verified against what the
+     * ledger implies. Falls back to that stored value only when the ledger itself can't
+     * produce a real answer (e.g. a holding with no transaction history at all, from an old
+     * bulk import) — a manual/unverified number is still better than blank.
+     */
+    private BigDecimal computeRealXirr(Holding h) {
+        List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId());
+        if (txns.isEmpty()) return h.getXirr();
+
+        List<com.marketai.portfolio.util.XirrCalculator.CashFlow> flows = new ArrayList<>();
+        for (Transaction t : txns) {
+            if (t.getTransactionDate() == null || t.getPrice() == null || t.getQuantity() == null) continue;
+            BigDecimal flowAmount = t.getPrice().multiply(t.getQuantity());
+            if (t.getType() == Transaction.TransactionType.BUY) flowAmount = flowAmount.negate();
+            flows.add(new com.marketai.portfolio.util.XirrCalculator.CashFlow(t.getTransactionDate(), flowAmount));
+        }
+        BigDecimal currentValue = h.getCurrentValue();
+        if (currentValue != null && currentValue.compareTo(BigDecimal.ZERO) > 0) {
+            flows.add(new com.marketai.portfolio.util.XirrCalculator.CashFlow(LocalDate.now(), currentValue));
+        }
+
+        Double xirrPct = com.marketai.portfolio.util.XirrCalculator.computeXirrPercent(flows);
+        return xirrPct != null ? BigDecimal.valueOf(xirrPct).setScale(2, RoundingMode.HALF_UP) : h.getXirr();
+    }
+
+    /**
+     * The single place quantity/averageCost is ever derived — always by replaying the full
+     * BUY/SELL transaction ledger for this holding, never by hand-rolling weighted-average
+     * math inline (that pattern used to be duplicated across addHolding/sellHolding/merge,
+     * and could silently drift from what the ledger actually implies). Deletes the holding
+     * and returns null if the ledger nets to zero or negative quantity (fully sold).
+     */
+    private Holding recomputeFromLedger(Holding h) {
+        List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId());
+        BigDecimal netQty = BigDecimal.ZERO;
+        BigDecimal totalCost = BigDecimal.ZERO;
+        for (Transaction t : txns) {
+            if (t.getType() == Transaction.TransactionType.BUY) {
+                totalCost = totalCost.add(t.getPrice().multiply(t.getQuantity()));
+                netQty = netQty.add(t.getQuantity());
+            } else {
+                BigDecimal sellQty = t.getQuantity().min(netQty);
+                if (netQty.compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal avgCostAtSale = totalCost.divide(netQty, 4, RoundingMode.HALF_UP);
+                    totalCost = totalCost.subtract(avgCostAtSale.multiply(sellQty));
+                }
+                netQty = netQty.subtract(sellQty);
+                if (netQty.compareTo(BigDecimal.ZERO) < 0) netQty = BigDecimal.ZERO;
+                if (totalCost.compareTo(BigDecimal.ZERO) < 0) totalCost = BigDecimal.ZERO;
+            }
+        }
+        if (netQty.compareTo(BigDecimal.ZERO) <= 0) {
+            holdingRepository.delete(h);
+            return null;
+        }
+        BigDecimal newAvgCost = totalCost.divide(netQty, 2, RoundingMode.HALF_UP);
+        h.setQuantity(netQty);
+        h.setAverageCost(newAvgCost);
+        h.setUpdatedAt(LocalDateTime.now());
+        return holdingRepository.save(h);
     }
 
     @Transactional(readOnly = true)
@@ -271,7 +324,7 @@ public class PortfolioService {
                             .broker(h.getBroker())
                             .folio(h.getFolio())
                             .buyDate(h.getBuyDate())
-                            .xirr(h.getXirr())
+                            .xirr(computeRealXirr(h))
                             .build();
                 })
                 .collect(Collectors.toList());
@@ -582,14 +635,8 @@ public class PortfolioService {
     private Holding mergeHoldingsCore(Holding keep, Holding remove, Long userId) {
         Long keepHoldingId = keep.getId();
         Long removeHoldingId = remove.getId();
-        BigDecimal keepValue = keep.getAverageCost().multiply(keep.getQuantity());
-        BigDecimal removeValue = remove.getAverageCost().multiply(remove.getQuantity());
-        BigDecimal totalQty = keep.getQuantity().add(remove.getQuantity());
-        if (totalQty.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal newAvgCost = keepValue.add(removeValue).divide(totalQty, 2, RoundingMode.HALF_UP);
-            keep.setQuantity(totalQty);
-            keep.setAverageCost(newAvgCost);
-        }
+        String removeSymbol = remove.getSymbol();
+
         if (keep.getBroker() == null && remove.getBroker() != null) keep.setBroker(remove.getBroker());
         if (keep.getFolio() == null && remove.getFolio() != null) keep.setFolio(remove.getFolio());
         if (remove.getBuyDate() != null && (keep.getBuyDate() == null || remove.getBuyDate().isBefore(keep.getBuyDate()))) {
@@ -604,8 +651,11 @@ public class PortfolioService {
         }
 
         holdingRepository.delete(remove);
+        // Both holdings held a positive quantity, so their combined ledger can never net to
+        // zero or negative — this never returns null.
+        keep = recomputeFromLedger(keep);
         log.info("Merged duplicate holding {} ({}) into {} for user {} — new qty={}, avgCost={}",
-            removeHoldingId, remove.getSymbol(), keepHoldingId, userId, keep.getQuantity(), keep.getAverageCost());
+            removeHoldingId, removeSymbol, keepHoldingId, userId, keep.getQuantity(), keep.getAverageCost());
         return keep;
     }
 
@@ -733,9 +783,16 @@ public class PortfolioService {
     }
 
     /**
-     * Correct a holding's quantity / average cost (e.g. after a stock split or
-     * bad import) and optionally set a manual current price. For mutual funds the
-     * live-quote fetch fails, so a manually-set price (NAV) persists and is used.
+     * Correct a holding's quantity / average cost (e.g. after a stock split or bad import) and
+     * optionally set a manual current price. For mutual funds the live-quote fetch fails, so a
+     * manually-set price (NAV) persists and is used.
+     *
+     * Quantity/average-cost corrections are never applied by overwriting the holding's fields
+     * directly — that let the displayed position silently diverge from what the transaction
+     * ledger implies. Instead a corrective transaction pair is recorded (an offsetting SELL of
+     * the prior position at its prior average cost, i.e. zero P&L, followed by a BUY at the
+     * corrected quantity/cost) and the holding is then re-derived by replaying the ledger, so
+     * the ledger stays the single source of truth even for manual fixes.
      */
     @Transactional
     public Holding updateHolding(Long portfolioId, Long holdingId, Long userId,
@@ -746,13 +803,23 @@ public class PortfolioService {
                 .orElseThrow(() -> new ResourceNotFoundException("Portfolio", "id", portfolioId));
         Holding h = holdingRepository.findById(holdingId)
                 .orElseThrow(() -> new ResourceNotFoundException("Holding", "id", holdingId));
-        if (quantity != null && quantity.compareTo(BigDecimal.ZERO) > 0) h.setQuantity(quantity);
-        if (averageCost != null && averageCost.compareTo(BigDecimal.ZERO) >= 0) h.setAverageCost(averageCost);
+
+        BigDecimal targetQty = (quantity != null && quantity.compareTo(BigDecimal.ZERO) > 0) ? quantity : null;
+        BigDecimal targetAvgCost = (averageCost != null && averageCost.compareTo(BigDecimal.ZERO) >= 0) ? averageCost : null;
         // If a total invested amount is given, derive avg cost from it (useful for MFs)
+        BigDecimal qtyForDerivation = targetQty != null ? targetQty : h.getQuantity();
         if (investedAmount != null && investedAmount.compareTo(BigDecimal.ZERO) > 0
-                && h.getQuantity() != null && h.getQuantity().compareTo(BigDecimal.ZERO) > 0) {
-            h.setAverageCost(investedAmount.divide(h.getQuantity(), 4, RoundingMode.HALF_UP));
+                && qtyForDerivation != null && qtyForDerivation.compareTo(BigDecimal.ZERO) > 0) {
+            targetAvgCost = investedAmount.divide(qtyForDerivation, 4, RoundingMode.HALF_UP);
         }
+
+        if (targetQty != null || targetAvgCost != null) {
+            BigDecimal finalQty = targetQty != null ? targetQty : h.getQuantity();
+            BigDecimal finalAvgCost = targetAvgCost != null ? targetAvgCost : h.getAverageCost();
+            recordManualCorrection(h, finalQty, finalAvgCost);
+            h = recomputeFromLedger(h); // finalQty > 0, so this never deletes/returns null
+        }
+
         if (currentPrice != null && currentPrice.compareTo(BigDecimal.ZERO) >= 0) h.setCurrentPrice(currentPrice);
         if (broker != null) h.setBroker(broker.trim().isEmpty() ? null : broker.trim());
         if (folio != null) h.setFolio(folio.trim().isEmpty() ? null : folio.trim());
@@ -760,6 +827,23 @@ public class PortfolioService {
         if (xirr != null) h.setXirr(xirr);
         h.setUpdatedAt(LocalDateTime.now());
         return holdingRepository.save(h);
+    }
+
+    private void recordManualCorrection(Holding h, BigDecimal targetQty, BigDecimal targetAvgCost) {
+        if (h.getQuantity() != null && h.getQuantity().compareTo(BigDecimal.ZERO) > 0) {
+            transactionRepository.save(Transaction.builder()
+                .holding(h).type(Transaction.TransactionType.SELL)
+                .quantity(h.getQuantity()).price(h.getAverageCost()).charges(BigDecimal.ZERO)
+                .transactionDate(LocalDate.now())
+                .notes("Manual correction — offsetting prior position")
+                .build());
+        }
+        transactionRepository.save(Transaction.builder()
+            .holding(h).type(Transaction.TransactionType.BUY)
+            .quantity(targetQty).price(targetAvgCost).charges(BigDecimal.ZERO)
+            .transactionDate(LocalDate.now())
+            .notes("Manual correction — corrected position")
+            .build());
     }
 
     @Transactional
@@ -775,12 +859,12 @@ public class PortfolioService {
             log.warn("Sell qty {} exceeds holding qty {} for {} — clamping to available", qtySold, h.getQuantity(), h.getSymbol());
             qtySold = h.getQuantity();
         }
-        java.math.BigDecimal newQty = h.getQuantity().subtract(qtySold);
+        // Realized P&L is booked against the average cost as it stood before this sale —
+        // capture it now, before the ledger recompute below revises the holding's balance.
         java.math.BigDecimal saleValue = salePrice.multiply(qtySold);
         java.math.BigDecimal costBasis = h.getAverageCost().multiply(qtySold);
         java.math.BigDecimal pnl = saleValue.subtract(costBasis).setScale(2, RoundingMode.HALF_UP);
 
-        // Record the SELL transaction before potentially deleting the holding
         Transaction sellTxn = Transaction.builder()
             .holding(h)
             .type(Transaction.TransactionType.SELL)
@@ -792,35 +876,37 @@ public class PortfolioService {
             .build();
         transactionRepository.save(sellTxn);
 
-        if (newQty.compareTo(java.math.BigDecimal.ZERO) <= 0) {
-            holdingRepository.deleteById(holdingId);
-        } else {
-            h.setQuantity(newQty);
-            holdingRepository.save(h);
-        }
+        // Replays the full ledger (including this sale) — deletes the holding itself if this
+        // sale exhausted the position, exactly like every other holding-quantity mutation.
+        recomputeFromLedger(h);
 
-        // Auto-record capital gain/loss as income
-        String desc = (pnl.compareTo(java.math.BigDecimal.ZERO) >= 0 ? "Capital Gain" : "Capital Loss")
-            + " — " + h.getSymbol().replace(".NS", "");
-        com.marketai.income.entity.Income inc = com.marketai.income.entity.Income.builder()
-            .userId(userId)
-            .description(desc)
-            .amount(pnl.abs())
-            .source("Capital Gain")
-            .incomeDate(java.time.LocalDate.now())
-            .note("Sold " + qtySold.stripTrailingZeros().toPlainString() + " units @ ₹" + salePrice + ". PnL: ₹" + pnl)
-            .build();
-        incomeRepo.save(inc);
-
-        // Additive lifecycle tracking for mutual funds only — doesn't change existing sell
-        // behavior, just gives the redemption a persistent record (STCG/LTCG split, cash
-        // available) instead of only leaving the single Income row above.
+        // For mutual funds, MfRedemption (STCG/LTCG split, reinvestment tracking) is the one
+        // realized-gain record — a generic Income "Capital Gain" row on top of it used to
+        // double-book the same rupees under two independent records. Only fall back to the
+        // generic Income row if the MF redemption record couldn't be created, so the gain is
+        // never silently lost.
+        boolean mfRedemptionRecorded = false;
         if (h.getSymbol() != null && h.getSymbol().endsWith(".MF")) {
             try {
                 redemptionService.recordRedemption(userId, h, qtySold, salePrice);
+                mfRedemptionRecorded = true;
             } catch (Exception e) {
                 log.warn("Could not record MF redemption for holding {}: {}", holdingId, e.getMessage());
             }
+        }
+
+        if (!mfRedemptionRecorded) {
+            String desc = (pnl.compareTo(java.math.BigDecimal.ZERO) >= 0 ? "Capital Gain" : "Capital Loss")
+                + " — " + h.getSymbol().replace(".NS", "");
+            com.marketai.income.entity.Income inc = com.marketai.income.entity.Income.builder()
+                .userId(userId)
+                .description(desc)
+                .amount(pnl.abs())
+                .source("Capital Gain")
+                .incomeDate(java.time.LocalDate.now())
+                .note("Sold " + qtySold.stripTrailingZeros().toPlainString() + " units @ ₹" + salePrice + ". PnL: ₹" + pnl)
+                .build();
+            incomeRepo.save(inc);
         }
     }
 }

@@ -126,6 +126,11 @@ public class GmailSyncService {
                     duplicatesSkipped++;
                     continue;
                 }
+                // A forwarded/resent email gets a NEW Gmail message id, so this check alone
+                // won't catch it — but ParsedEmailImporter's own content-keyed checks
+                // (isDuplicateTrade/isDuplicateIncome/isDuplicateExpense, FD/RD bank+amount+date)
+                // still refuse to double-book the actual financial record regardless of message
+                // id, which is what actually matters for correctness.
 
                 String from    = gmailClient.getFrom(message);
                 String subject = gmailClient.getSubject(message);

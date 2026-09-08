@@ -14,4 +14,7 @@ public interface FixedDepositRepository extends JpaRepository<FixedDeposit, Long
     // ACTIVE forever unless something — closeFd() or a detected renewal — changes it, so this
     // is every FD from that bank that hasn't already been resolved one way or the other).
     List<FixedDeposit> findByUser_IdAndBankIgnoreCaseAndStatus(Long userId, String bank, String status);
+    List<FixedDeposit> findByUser_IdAndBankIgnoreCaseAndStatusIn(Long userId, String bank, List<String> statuses);
+
+    List<FixedDeposit> findByStatus(String status);
 }

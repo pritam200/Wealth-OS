@@ -38,8 +38,9 @@ export interface NetWorthSnapshot {
 }
 export const netWorthApi = {
   series: () => apiClient.get<NetWorthSnapshot[]>('/api/networth/series'),
-  snapshot: (totalAssets: number, netWorth: number) =>
-    apiClient.post<NetWorthSnapshot>('/api/networth/snapshot', { totalAssets, netWorth }),
+  // Always computed server-side from the same canonical summary as wealthApi.getSummary() —
+  // never pass a client-computed total here, that's the exact bug this was rewritten to fix.
+  snapshot: () => apiClient.post<NetWorthSnapshot>('/api/networth/snapshot', {}),
 };
 
 /* ── Tax ── */

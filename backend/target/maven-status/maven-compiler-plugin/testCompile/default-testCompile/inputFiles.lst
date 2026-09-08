@@ -9,6 +9,7 @@
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/mf/service/MfPerformanceServiceTest.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/mf/service/MfSchemeLinkServiceTest.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/portfolio/service/PortfolioServiceTest.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/portfolio/util/XirrCalculatorTest.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/recommendation/PortfolioContextServiceTest.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/technical/TechnicalDataQualityTest.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/test/java/com/marketai/technical/TechnicalIndicatorServiceTest.java

@@ -57,7 +57,7 @@ class FdRenewalTest {
         LocalDate start = LocalDate.of(2025, 6, 1);
         LocalDate maturity = LocalDate.of(2026, 6, 1);
         FixedDeposit old = oldFd(100L, "HDFC Bank", new BigDecimal("11877"), new BigDecimal("6.25"), start, maturity);
-        when(fdRepo.findByUser_IdAndBankIgnoreCaseAndStatus(1L, "HDFC Bank", "ACTIVE"))
+        when(fdRepo.findByUser_IdAndBankIgnoreCaseAndStatusIn(1L, "HDFC Bank", Arrays.asList("ACTIVE", "MATURED")))
             .thenReturn(Collections.singletonList(old));
 
         // New FD opened right at the old one's maturity date, principal ~= old maturity value.
@@ -84,7 +84,7 @@ class FdRenewalTest {
         LocalDate start = LocalDate.of(2025, 6, 1);
         LocalDate maturity = LocalDate.of(2026, 6, 1);
         FixedDeposit old = oldFd(101L, "HDFC Bank", new BigDecimal("11877"), new BigDecimal("6.25"), start, maturity);
-        when(fdRepo.findByUser_IdAndBankIgnoreCaseAndStatus(1L, "HDFC Bank", "ACTIVE"))
+        when(fdRepo.findByUser_IdAndBankIgnoreCaseAndStatusIn(1L, "HDFC Bank", Arrays.asList("ACTIVE", "MATURED")))
             .thenReturn(Collections.singletonList(old));
 
         // A brand-new, unrelated FD for a much larger amount opened around the same time.
@@ -106,7 +106,7 @@ class FdRenewalTest {
         LocalDate start = LocalDate.of(2024, 1, 1);
         LocalDate maturity = LocalDate.of(2025, 1, 1);
         FixedDeposit old = oldFd(102L, "HDFC Bank", new BigDecimal("11877"), new BigDecimal("6.25"), start, maturity);
-        when(fdRepo.findByUser_IdAndBankIgnoreCaseAndStatus(1L, "HDFC Bank", "ACTIVE"))
+        when(fdRepo.findByUser_IdAndBankIgnoreCaseAndStatusIn(1L, "HDFC Bank", Arrays.asList("ACTIVE", "MATURED")))
             .thenReturn(Collections.singletonList(old));
 
         // New FD principal matches the old maturity value closely, but starts 8 months later —
@@ -131,7 +131,7 @@ class FdRenewalTest {
             maturityFar.minusYears(1), maturityFar);
         FixedDeposit near = oldFd(104L, "HDFC Bank", new BigDecimal("11877"), new BigDecimal("6.25"),
             maturityNear.minusYears(1), maturityNear);
-        when(fdRepo.findByUser_IdAndBankIgnoreCaseAndStatus(1L, "HDFC Bank", "ACTIVE"))
+        when(fdRepo.findByUser_IdAndBankIgnoreCaseAndStatusIn(1L, "HDFC Bank", Arrays.asList("ACTIVE", "MATURED")))
             .thenReturn(Arrays.asList(far, near));
 
         FixedDeposit fresh = FixedDeposit.builder()

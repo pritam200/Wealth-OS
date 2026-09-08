@@ -9,9 +9,7 @@ const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
 const fmtShort = (n: number) => n >= 1e7 ? `₹${(n / 1e7).toFixed(1)}Cr` : n >= 1e5 ? `₹${(n / 1e5).toFixed(1)}L` : `₹${(n / 1e3).toFixed(0)}k`;
 
-// `record` (optional) lets the parent push today's freshly-computed net worth so a
-// snapshot is captured even before the series endpoint has any history.
-export function NetWorthTrend({ record }: { record?: { totalAssets: number; netWorth: number } }) {
+export function NetWorthTrend() {
   const maskText = useMaskedText();
   const [series, setSeries] = useState<NetWorthSnapshot[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -20,16 +18,16 @@ export function NetWorthTrend({ record }: { record?: { totalAssets: number; netW
     let alive = true;
     const go = async () => {
       try {
-        if (record && record.totalAssets > 0) {
-          await netWorthApi.snapshot(record.totalAssets, record.netWorth);
-        }
+        // Captures today's snapshot from the server-computed wealth summary (never a
+        // client-supplied total) so the trend has today's point even before any history exists.
+        await netWorthApi.snapshot();
         const { data } = await netWorthApi.series();
         if (alive) setSeries(data);
       } catch {} finally { if (alive) setLoaded(true); }
     };
     go();
     return () => { alive = false; };
-  }, [record?.totalAssets, record?.netWorth]);
+  }, []);
 
   if (!loaded) return null;
 

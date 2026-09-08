@@ -8,9 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-import java.math.BigDecimal;
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/networth")
@@ -24,11 +22,10 @@ public class NetWorthController {
         return ResponseEntity.ok(service.series(user.getId()));
     }
 
+    /** Records today's snapshot from the server-computed wealth summary — never trusts a
+     *  client-supplied total (see {@link NetWorthService#record}). */
     @PostMapping("/snapshot")
-    public ResponseEntity<NetWorthSnapshot> snapshot(@AuthenticationPrincipal User user,
-                                                     @RequestBody Map<String, Object> body) {
-        BigDecimal totalAssets = new BigDecimal(String.valueOf(body.getOrDefault("totalAssets", "0")));
-        BigDecimal netWorth = new BigDecimal(String.valueOf(body.getOrDefault("netWorth", "0")));
-        return ResponseEntity.ok(service.record(user.getId(), totalAssets, netWorth));
+    public ResponseEntity<NetWorthSnapshot> snapshot(@AuthenticationPrincipal User user) {
+        return ResponseEntity.ok(service.record(user.getId()));
     }
 }

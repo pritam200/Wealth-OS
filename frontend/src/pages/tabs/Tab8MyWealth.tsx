@@ -11,31 +11,26 @@ import { OtherAssetsSection } from '../../components/wealth/OtherAssetsSection';
 import { WealthCalculator } from '../../components/wealth/WealthCalculator';
 import { trackingApi } from '../../api/tracking';
 import type { TrackingSummary } from '../../api/tracking';
+import { wealthApi } from '../../api/wealth';
+import type { PortfolioContext } from '../../api/wealth';
 import { PortfolioSection, NetWorthBar } from './Tab7RiskMatrix';
 
 /* ─────────────────────────────────────────────────────────────
    MAIN TAB — MY WEALTH
 ───────────────────────────────────────────────────────────── */
 export function Tab8MyWealth() {
-  const [stocksCurrent,  setStocksCurrent]  = useState(0);
-  const [mfCurrent,      setMfCurrent]      = useState(0);
   const [summary, setSummary] = useState<TrackingSummary | null>(null);
-  const [portfolioLoaded, setPortfolioLoaded] = useState(false);
+  const [wealth, setWealth] = useState<PortfolioContext | null>(null);
   const [showImport, setShowImport] = useState(false);
 
   const loadSummary = useCallback(async () => {
     try { const { data } = await trackingApi.getSummary(); setSummary(data); } catch {}
+    try { const { data } = await wealthApi.getSummary(); setWealth(data); } catch {}
   }, []);
 
   useEffect(() => { loadSummary(); }, [loadSummary]);
 
-  const fdVal    = summary?.totalFdCurrentValue ?? summary?.totalFdPrincipal ?? 0;
-  const rdVal    = summary?.totalRdCurrentValue ?? 0;
-  const otherVal = summary?.totalOtherAssets ?? 0;
-  const epfVal   = summary?.totalEpf ?? 0;
-  const loans    = summary?.totalLoanOutstanding ?? 0;
-  const totalAssets = stocksCurrent + fdVal + rdVal + otherVal + epfVal;
-  const netWorth = totalAssets - loans;
+  const totalAssets = wealth?.totalAssets ?? 0;
 
   return (
     <div className="space-y-5">
@@ -63,14 +58,11 @@ export function Tab8MyWealth() {
         </button>
       </div>
 
-      <NetWorthBar stocksCurrent={stocksCurrent} mfCurrent={mfCurrent} summary={summary} />
+      <NetWorthBar wealth={wealth} emi={summary?.totalMonthlyEmi ?? 0} />
 
-      {/* Only snapshot once BOTH async sources (tracking summary + portfolio holdings)
-          have reported in — otherwise a partial total gets recorded as "today's"
-          net worth and looks like a huge fake overnight loss/gain on the trend chart. */}
-      {portfolioLoaded && summary && totalAssets > 0 && <NetWorthTrend record={{ totalAssets, netWorth }} />}
+      {totalAssets > 0 && <NetWorthTrend />}
 
-      <PortfolioSection onValues={(_inv, cur, mfCur) => { setStocksCurrent(cur); setMfCurrent(mfCur); setPortfolioLoaded(true); }} />
+      <PortfolioSection onValues={() => {}} />
 
       <div>
         <h3 className="text-white font-semibold text-sm mb-3">Fixed Income &amp; Retirement</h3>

@@ -41,7 +41,11 @@ public class TrackingService {
             .startDate(req.getStartDate())
             .maturityDate(req.getMaturityDate())
             .build();
-        return toFdResponse(fdRepo.save(fd));
+        fd = fdRepo.save(fd);
+        // Renewal detection previously ran only on the Gmail-import path (ParsedEmailImporter)
+        // — a manually-entered renewal FD was never linked to its predecessor and could
+        // double-count. Every FD creation path must go through the same detection.
+        return detectAndLinkRenewal(userId, fd.getId());
     }
 
     // Renewal-matching tolerances, stated explicitly so the rule is auditable rather than a
@@ -66,7 +70,10 @@ public class TrackingService {
         FixedDeposit newFd = fdRepo.findByIdAndUserId(newFdId, userId).orElse(null);
         if (newFd == null || newFd.getStartDate() == null) return newFd != null ? toFdResponse(newFd) : null;
 
-        List<FixedDeposit> candidates = fdRepo.findByUser_IdAndBankIgnoreCaseAndStatus(userId, newFd.getBank(), "ACTIVE");
+        // MATURED is included alongside ACTIVE: the nightly maturity check may have already
+        // flipped the old FD to MATURED by the time this renewal is recorded, and it's still a
+        // valid renewal candidate — only CLOSED/MATURED_RENEWED are already resolved.
+        List<FixedDeposit> candidates = fdRepo.findByUser_IdAndBankIgnoreCaseAndStatusIn(userId, newFd.getBank(), java.util.Arrays.asList("ACTIVE", "MATURED"));
 
         FixedDeposit best = null;
         long bestDateDiff = Long.MAX_VALUE;
@@ -218,7 +225,63 @@ public class TrackingService {
             .startDate(req.getStartDate())
             .tenureMonths(req.getTenureMonths())
             .build();
-        return toRdResponse(rdRepo.save(rd));
+        rd = rdRepo.save(rd);
+        return detectAndLinkRdRenewal(userId, rd.getId());
+    }
+
+    /**
+     * RD equivalent of {@link #detectAndLinkRenewal} — same matching rule (same bank, maturity
+     * date within {@link #RENEWAL_DATE_WINDOW_DAYS} of the new RD's start, new monthly amount's
+     * implied corpus within {@link #RENEWAL_AMOUNT_TOLERANCE} of the old RD's matured corpus),
+     * since RDs are just as commonly rolled over as FDs and had no linkage at all before this.
+     */
+    @Transactional
+    public RdResponse detectAndLinkRdRenewal(Long userId, Long newRdId) {
+        RecurringDeposit newRd = rdRepo.findByIdAndUserId(newRdId, userId).orElse(null);
+        if (newRd == null || newRd.getStartDate() == null) return newRd != null ? toRdResponse(newRd) : null;
+
+        List<RecurringDeposit> candidates = rdRepo.findByUser_IdAndBankIgnoreCaseAndStatusIn(userId, newRd.getBank(), java.util.Arrays.asList("ACTIVE", "MATURED"));
+
+        RecurringDeposit best = null;
+        long bestDateDiff = Long.MAX_VALUE;
+        BigDecimal bestCorpus = null;
+
+        for (RecurringDeposit candidate : candidates) {
+            if (candidate.getId().equals(newRd.getId())) continue;
+            LocalDate candidateMaturity = candidate.getMaturityDate();
+            if (candidateMaturity == null) continue;
+
+            long dateDiff = Math.abs(ChronoUnit.DAYS.between(candidateMaturity, newRd.getStartDate()));
+            if (dateDiff > RENEWAL_DATE_WINDOW_DAYS) continue;
+
+            BigDecimal corpus = computeRdCorpus(candidate.getMonthlyAmount(), candidate.getRate(), candidate.getTenureMonths());
+            if (corpus.compareTo(BigDecimal.ZERO) <= 0) continue;
+
+            // Compare against the new RD's total committed value (monthly * tenure) rather than
+            // its first installment — an RD's "principal" is the whole schedule, not one payment.
+            BigDecimal newRdCommitted = newRd.getMonthlyAmount().multiply(BigDecimal.valueOf(newRd.getTenureMonths()));
+            double pctDiff = newRdCommitted.subtract(corpus).abs()
+                .divide(corpus, 6, RoundingMode.HALF_UP).doubleValue();
+            if (pctDiff > RENEWAL_AMOUNT_TOLERANCE) continue;
+
+            if (dateDiff < bestDateDiff) {
+                best = candidate;
+                bestDateDiff = dateDiff;
+                bestCorpus = corpus;
+            }
+        }
+
+        if (best != null) {
+            best.setStatus("MATURED_RENEWED");
+            best.setMaturityAmount(bestCorpus);
+            best.setRenewedToId(newRd.getId());
+            rdRepo.save(best);
+
+            newRd.setRenewedFromId(best.getId());
+            newRd = rdRepo.save(newRd);
+        }
+
+        return toRdResponse(newRd);
     }
 
     public List<RdResponse> listRds(Long userId) {
@@ -231,6 +294,32 @@ public class TrackingService {
         if (!rdRepo.existsByIdAndUserId(id, userId))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         rdRepo.deleteById(id);
+    }
+
+    /** RD equivalent of {@link #closeFd} — books the actual (or projected) maturity amount as
+     *  interest income and marks the RD CLOSED so it stops counting toward net worth. */
+    @Transactional
+    public RdResponse closeRd(Long id, Long userId, BigDecimal actualAmount) {
+        RecurringDeposit rd = rdRepo.findByIdAndUserId(id, userId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        BigDecimal received = actualAmount != null ? actualAmount :
+            computeRdCorpus(rd.getMonthlyAmount(), rd.getRate(), rd.getTenureMonths());
+        BigDecimal totalDeposited = rd.getMonthlyAmount().multiply(BigDecimal.valueOf(rd.getTenureMonths()));
+        rd.setStatus("CLOSED");
+        rd.setMaturityAmount(received);
+        rd.setClosedDate(LocalDate.now());
+        rdRepo.save(rd);
+        BigDecimal interestEarned = received.subtract(totalDeposited).max(BigDecimal.ZERO);
+        com.marketai.income.entity.Income inc = com.marketai.income.entity.Income.builder()
+            .userId(userId)
+            .description("RD interest — " + rd.getBank())
+            .amount(interestEarned)
+            .source("Interest")
+            .incomeDate(LocalDate.now())
+            .note("RD closed. Total deposited: ₹" + totalDeposited + ", Maturity: ₹" + received + ", Rate: " + rd.getRate() + "%")
+            .build();
+        incomeRepo.save(inc);
+        return toRdResponse(rd);
     }
 
     private RdResponse toRdResponse(RecurringDeposit rd) {
@@ -252,6 +341,12 @@ public class TrackingService {
             .projectedCorpus(corpus)
             .interestEarned(interest.max(BigDecimal.ZERO))
             .progressPercent(progress)
+            .maturityDate(rd.getMaturityDate())
+            .status(rd.getStatus())
+            .actualMaturityAmount(rd.getMaturityAmount())
+            .closedDate(rd.getClosedDate())
+            .renewedToId(rd.getRenewedToId())
+            .renewedFromId(rd.getRenewedFromId())
             .build();
     }
 
@@ -471,6 +566,76 @@ public class TrackingService {
         return toEpfResponse(epfRepo.save(e));
     }
 
+    /**
+     * Flips ACTIVE FDs/RDs whose maturity date has passed into MATURED — a status distinct
+     * from ACTIVE so an overdue deposit surfaces as needing a decision (withdraw or renew)
+     * instead of silently sitting frozen at its maturity value forever with no signal. Never
+     * touches CLOSED/MATURED_RENEWED/already-MATURED rows.
+     */
+    @Transactional
+    public void markMaturedDeposits() {
+        LocalDate today = LocalDate.now();
+        for (FixedDeposit fd : fdRepo.findByStatus("ACTIVE")) {
+            if (fd.getMaturityDate() != null && !today.isBefore(fd.getMaturityDate())) {
+                fd.setStatus("MATURED");
+                fdRepo.save(fd);
+            }
+        }
+        for (RecurringDeposit rd : rdRepo.findByStatus("ACTIVE")) {
+            LocalDate maturity = rd.getMaturityDate();
+            if (maturity != null && !today.isBefore(maturity)) {
+                rd.setStatus("MATURED");
+                rdRepo.save(rd);
+            }
+        }
+    }
+
+    /**
+     * FD/RD equivalent of {@link com.marketai.portfolio.service.PortfolioService#checkIntegrity}
+     * — flags problems instead of letting them sit invisibly: an FD/RD that's been sitting
+     * MATURED for over a month with no closure or renewal decision recorded, and a renewal
+     * link that points at a since-deleted FD/RD (a data-loss situation the UI must not paper
+     * over by silently ignoring the dangling reference).
+     */
+    public List<com.marketai.reconciliation.dto.ReconciliationIssue> checkFdRdIntegrity(Long userId) {
+        List<com.marketai.reconciliation.dto.ReconciliationIssue> issues = new java.util.ArrayList<>();
+        List<FdResponse> fds = listFds(userId);
+        List<RdResponse> rds = listRds(userId);
+
+        for (FdResponse fd : fds) {
+            if ("MATURED".equals(fd.getStatus()) && fd.getDaysToMaturity() != null && fd.getDaysToMaturity() < -30) {
+                issues.add(com.marketai.reconciliation.dto.ReconciliationIssue.builder()
+                    .domain("FD").type("MATURED_IDLE").referenceId(fd.getId()).severity("MEDIUM")
+                    .description(fd.getBank() + " FD matured " + (-fd.getDaysToMaturity()) + " days ago and hasn't been closed or renewed yet — record what happened to it.")
+                    .build());
+            }
+            if (fd.getRenewedToId() != null && fds.stream().noneMatch(x -> fd.getRenewedToId().equals(x.getId()))) {
+                issues.add(com.marketai.reconciliation.dto.ReconciliationIssue.builder()
+                    .domain("FD").type("ORPHANED_RENEWAL_LINK").referenceId(fd.getId()).severity("HIGH")
+                    .description(fd.getBank() + " FD is marked renewed into a successor FD that no longer exists — its money may not be counted anywhere.")
+                    .build());
+            }
+        }
+
+        for (RdResponse rd : rds) {
+            if ("MATURED".equals(rd.getStatus()) && rd.getMaturityDate() != null
+                    && ChronoUnit.DAYS.between(rd.getMaturityDate(), LocalDate.now()) > 30) {
+                issues.add(com.marketai.reconciliation.dto.ReconciliationIssue.builder()
+                    .domain("RD").type("MATURED_IDLE").referenceId(rd.getId()).severity("MEDIUM")
+                    .description(rd.getBank() + " RD matured " + ChronoUnit.DAYS.between(rd.getMaturityDate(), LocalDate.now()) + " days ago and hasn't been closed or renewed yet — record what happened to it.")
+                    .build());
+            }
+            if (rd.getRenewedToId() != null && rds.stream().noneMatch(x -> rd.getRenewedToId().equals(x.getId()))) {
+                issues.add(com.marketai.reconciliation.dto.ReconciliationIssue.builder()
+                    .domain("RD").type("ORPHANED_RENEWAL_LINK").referenceId(rd.getId()).severity("HIGH")
+                    .description(rd.getBank() + " RD is marked renewed into a successor RD that no longer exists — its money may not be counted anywhere.")
+                    .build());
+            }
+        }
+
+        return issues;
+    }
+
     /* ── Summary ─────────────────────────────────────────────── */
 
     public TrackingSummaryResponse getSummary(Long userId) {
@@ -490,8 +655,13 @@ public class TrackingService {
         BigDecimal totalFdPrincipal = activeFds.stream().map(FdResponse::getPrincipal).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalFdMaturity  = activeFds.stream().map(FdResponse::getMaturityValue).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalFdCurrent   = activeFds.stream().map(FdResponse::getCurrentValue).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal totalRdCorpus    = rds.stream().map(RdResponse::getProjectedCorpus).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal totalRdCurrent   = rds.stream().map(RdResponse::getCurrentValue).reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Same reasoning as FD above: a CLOSED or MATURED_RENEWED RD's money either left the
+        // account or is now counted via the successor RD — including it here would double it.
+        List<RdResponse> activeRds = rds.stream()
+            .filter(rd -> !"CLOSED".equalsIgnoreCase(rd.getStatus()) && !"MATURED_RENEWED".equalsIgnoreCase(rd.getStatus()))
+            .collect(Collectors.toList());
+        BigDecimal totalRdCorpus    = activeRds.stream().map(RdResponse::getProjectedCorpus).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalRdCurrent   = activeRds.stream().map(RdResponse::getCurrentValue).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalOther       = others.stream().map(OtherAssetResponse::getValue).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalOutstanding = loans.stream().map(LoanResponse::getOutstanding).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalEmi         = loans.stream().map(LoanResponse::getEmi).reduce(BigDecimal.ZERO, BigDecimal::add);

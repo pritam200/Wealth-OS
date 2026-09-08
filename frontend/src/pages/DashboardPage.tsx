@@ -4,6 +4,10 @@ import { portfolioApi } from '../api/portfolio';
 import type { IntegrityReport } from '../api/portfolio';
 import { trackingApi } from '../api/tracking';
 import type { TrackingSummary } from '../api/tracking';
+import { wealthApi } from '../api/wealth';
+import type { PortfolioContext } from '../api/wealth';
+import { reconciliationApi } from '../api/reconciliation';
+import type { ReconciliationIssue } from '../api/reconciliation';
 import type { PortfolioSummary } from '../types';
 import { NetWorthBar } from './tabs/Tab7RiskMatrix';
 import { usePrivacyStore } from '../store/privacyStore';
@@ -78,6 +82,38 @@ function IntegrityBanner({ report, onMerged }: { report: IntegrityReport; onMerg
   );
 }
 
+/* FD/RD/net-worth issues from the generalized reconciliation layer — same "flag it, never
+   silently show a wrong number" pattern as IntegrityBanner above, for the domains that
+   previously had no equivalent check at all. Manual review only; no auto-fix action here. */
+function ReconciliationBanner({ issues }: { issues: ReconciliationIssue[] }) {
+  if (!issues.length) return null;
+  const highSeverity = issues.filter(i => i.severity === 'HIGH').length;
+  return (
+    <div className="card border border-yellow-400/30 bg-yellow-400/5">
+      <div className="flex items-start gap-3">
+        <AlertTriangle size={18} className="text-yellow-400 shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-yellow-400 mb-1.5">
+            {issues.length} reconciliation issue{issues.length !== 1 ? 's' : ''} found
+            {highSeverity > 0 ? ` (${highSeverity} high priority)` : ''}
+          </p>
+          <div className="space-y-1">
+            {issues.map((issue, i) => (
+              <div key={`${issue.domain}-${issue.type}-${issue.referenceId}-${i}`}
+                className="text-2xs bg-surface-hover/60 rounded px-2 py-1.5 text-gray-300">
+                <span className={issue.severity === 'HIGH' ? 'text-bear font-medium' : 'text-yellow-400 font-medium'}>
+                  {issue.domain}
+                </span>
+                {' — '}{issue.description}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0, notation: n >= 1_00_00_000 ? 'compact' : 'standard' }).format(n || 0);
 
@@ -97,10 +133,10 @@ const LINK_CARDS: LinkCard[] = [
 // out of this page goes through the same onNavigate(tabId) callback the sidebar uses.
 export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => void }) {
   const [summary, setSummary] = useState<TrackingSummary | null>(null);
-  const [stocksCurrent, setStocksCurrent] = useState(0);
-  const [mfCurrent, setMfCurrent] = useState(0);
+  const [wealth, setWealth] = useState<PortfolioContext | null>(null);
   const [holdingCount, setHoldingCount] = useState(0);
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
+  const [otherIssues, setOtherIssues] = useState<ReconciliationIssue[]>([]);
   const [loading, setLoading] = useState(true);
   // Shared with the Topbar's eye toggle — one privacy switch controls every screen,
   // not a page-local one that resets when you navigate away.
@@ -110,32 +146,31 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [{ data: trackingSummary }, { data: portfolios }] = await Promise.all([
+      const [{ data: trackingSummary }, { data: portfolios }, { data: wealthSummary }] = await Promise.all([
         trackingApi.getSummary(),
         portfolioApi.list(),
+        wealthApi.getSummary(),
       ]);
       setSummary(trackingSummary);
+      setWealth(wealthSummary);
       portfolioApi.integrityCheck().then(r => setIntegrityReport(r.data)).catch(() => {});
+      // Portfolio-domain issues already surface via the banner above (with its own merge
+      // action) — only show FD/RD/net-worth issues here, so nothing is flagged twice.
+      reconciliationApi.getReport()
+        .then(r => setOtherIssues(r.data.issues.filter(i => i.domain !== 'PORTFOLIO')))
+        .catch(() => {});
       if (portfolios.length) {
         const summaries = (await Promise.all(
           portfolios.map(p => portfolioApi.getSummary(p.id).then(r => r.data).catch(() => null))
         )).filter(Boolean) as PortfolioSummary[];
-        const allHoldings = summaries.flatMap(s => s.holdings ?? []);
-        const totalCurrent = summaries.reduce((s, p) => s + (p.currentValue ?? 0), 0);
-        setHoldingCount(allHoldings.length);
-        setStocksCurrent(totalCurrent);
-        setMfCurrent(allHoldings.filter(h => (h.symbol ?? '').endsWith('.MF')).reduce((s, h) => s + (h.currentValue ?? 0), 0));
+        setHoldingCount(summaries.flatMap(s => s.holdings ?? []).length);
       }
     } catch {} finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  const fdVal = summary?.totalFdCurrentValue ?? summary?.totalFdPrincipal ?? 0;
-  const rdVal = summary?.totalRdCurrentValue ?? 0;
-  const loans = summary?.totalLoanOutstanding ?? 0;
-  const totalAssets = stocksCurrent + fdVal + rdVal + (summary?.totalOtherAssets ?? 0) + (summary?.totalEpf ?? 0);
-  const netWorth = totalAssets - loans;
+  const netWorth = wealth?.netWorth ?? 0;
 
   if (loading) return (
     <div className="space-y-4">
@@ -147,6 +182,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
   return (
     <div className="space-y-6">
       {integrityReport && <IntegrityBanner report={integrityReport} onMerged={load} />}
+      <ReconciliationBanner issues={otherIssues} />
       {/* ── Hero ── */}
       <div className="card-elevated flex flex-wrap items-center justify-between gap-6">
         <div>
@@ -171,7 +207,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
         </div>
       </div>
 
-      <NetWorthBar stocksCurrent={stocksCurrent} mfCurrent={mfCurrent} summary={summary} />
+      <NetWorthBar wealth={wealth} emi={summary?.totalMonthlyEmi ?? 0} />
 
       {/* ── Quick links — every module one tap away, no recommendation content duplicated here ── */}
       <div>

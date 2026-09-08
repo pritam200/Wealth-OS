@@ -15,8 +15,8 @@ import { LoanSection } from '../../components/wealth/LoanSection';
 import { WealthCalculator } from '../../components/wealth/WealthCalculator';
 import { amfiNavApi } from '../../api/amfiNav';
 import { portfolioApi } from '../../api/portfolio';
-import { trackingApi } from '../../api/tracking';
-import type { TrackingSummary } from '../../api/tracking';
+import { wealthApi } from '../../api/wealth';
+import type { PortfolioContext } from '../../api/wealth';
 import type { PortfolioSummary, HoldingDto } from '../../types';
 import { PieChart as RechartsPie, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -343,19 +343,16 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
   );
 }
 
-export function NetWorthBar({ stocksCurrent, mfCurrent = 0, summary }: { stocksCurrent: number; mfCurrent?: number; summary: TrackingSummary | null }) {
+// `emi` is not part of the wealth summary (it's a cash-flow figure, not an asset), so it still
+// comes from the tracking summary — every money total below comes from `wealth`, the one
+// backend-computed source of truth, never recomputed here.
+export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | null; emi?: number }) {
   const masked = usePrivacyStore(s => s.masked);
   const toggleMasked = usePrivacyStore(s => s.toggle);
-  if (!summary && stocksCurrent === 0) return null;
-  const fdVal    = summary?.totalFdCurrentValue ?? summary?.totalFdPrincipal ?? 0;
-  const rdVal    = summary?.totalRdCurrentValue ?? 0;
-  const otherVal = summary?.totalOtherAssets ?? 0;
-  const epfVal   = summary?.totalEpf ?? 0;
-  const loans    = summary?.totalLoanOutstanding ?? 0;
-  const emi      = summary?.totalMonthlyEmi ?? 0;
-  const stockOnly = Math.max(0, stocksCurrent - mfCurrent);   // stocksCurrent = stocks + MF combined
-  const total    = stocksCurrent + fdVal + rdVal + otherVal + epfVal;
-  const net      = total - loans;
+  if (!wealth || wealth.totalAssets === 0) return null;
+  const { stocksValue: stockOnly, mfValue: mfCurrent, fdValue: fdVal, rdValue: rdVal,
+    otherAssetsValue: otherVal, epfValue: epfVal, loansOutstanding: loans,
+    totalAssets: total, netWorth: net } = wealth;
   const pieData  = [
     stockOnly > 0     ? { name: 'Stocks',        value: stockOnly,     fill: '#6d5efc' } : null,
     mfCurrent > 0     ? { name: 'Mutual Funds',  value: mfCurrent,     fill: '#e84fd9' } : null,
@@ -425,18 +422,16 @@ export function NetWorthBar({ stocksCurrent, mfCurrent = 0, summary }: { stocksC
 /* ─────────────────────────────────────────────────────────────
    RISK SCORE CARD
 ───────────────────────────────────────────────────────────── */
-function RiskScoreCard({ summary, stocksCurrent }: { summary: TrackingSummary | null; stocksCurrent: number }) {
+function RiskScoreCard({ wealth }: { wealth: PortfolioContext | null }) {
   const maskText = useMaskedText();
-  if (!summary) return null;
+  if (!wealth) return null;
 
-  const fdVal   = summary.totalFdCurrentValue ?? summary.totalFdPrincipal ?? 0;
-  const rdVal   = summary.totalRdCurrentValue ?? 0;
-  const loanVal = summary.totalLoanOutstanding ?? 0;
-  const otherVal = summary.totalOtherAssets ?? 0;
-  const epfVal  = summary.totalEpf ?? 0;
-  const totalAssets = stocksCurrent + fdVal + rdVal + otherVal + epfVal;
+  const { fdValue: fdVal, rdValue: rdVal, loansOutstanding: loanVal, otherAssetsValue: otherVal,
+    epfValue: epfVal, totalAssets, equityCurrent: stocksCurrent } = wealth;
 
-  const equityPct  = totalAssets > 0 ? (stocksCurrent / totalAssets * 100) : 0;
+  const equityPct  = wealth.equityPercent ?? 0;
+  // Debt/Other split shown here separates EPF into its own slice, so it's computed from the
+  // same wealth totals rather than reusing wealth.debtPercent (which folds EPF into debt).
   const debtPct    = totalAssets > 0 ? ((fdVal + rdVal) / totalAssets * 100) : 0;
   const otherPct   = totalAssets > 0 ? (otherVal / totalAssets * 100) : 0;
   const debtToEquity = stocksCurrent > 0 ? loanVal / stocksCurrent : 0;
@@ -565,22 +560,19 @@ function RiskScoreCard({ summary, stocksCurrent }: { summary: TrackingSummary | 
    MAIN TAB — RISK MATRIX
 ───────────────────────────────────────────────────────────── */
 export function Tab7RiskMatrix() {
-  const [stocksCurrent,  setStocksCurrent]  = useState(0);
-  const [summary, setSummary] = useState<TrackingSummary | null>(null);
+  const [wealth, setWealth] = useState<PortfolioContext | null>(null);
 
   const loadSummary = useCallback(async () => {
-    try { const { data } = await trackingApi.getSummary(); setSummary(data); } catch {}
+    try { const { data } = await wealthApi.getSummary(); setWealth(data); } catch {}
   }, []);
 
   useEffect(() => { loadSummary(); }, [loadSummary]);
 
-  const fdVal   = summary?.totalFdCurrentValue ?? summary?.totalFdPrincipal ?? 0;
-  const rdVal   = summary?.totalRdCurrentValue ?? 0;
-  const loanVal = summary?.totalLoanOutstanding ?? 0;
-  const otherVal = summary?.totalOtherAssets ?? 0;
-  const epfVal  = summary?.totalEpf ?? 0;
-  const totalAssets = stocksCurrent + fdVal + rdVal + otherVal + epfVal;
-  const netWorth    = totalAssets - loanVal;
+  const fdVal   = wealth?.fdValue ?? 0;
+  const rdVal   = wealth?.rdValue ?? 0;
+  const stocksCurrent = wealth?.equityCurrent ?? 0;
+  const totalAssets = wealth?.totalAssets ?? 0;
+  const netWorth    = wealth?.netWorth ?? 0;
 
   return (
     <div className="space-y-5">
@@ -596,7 +588,7 @@ export function Tab7RiskMatrix() {
 
       {/* Chart-bearing section (Risk Score gauge + Asset Allocation pie) renders first,
           ahead of plain stat tiles and tables below. */}
-      <RiskScoreCard summary={summary} stocksCurrent={stocksCurrent} />
+      <RiskScoreCard wealth={wealth} />
 
       {/* Net worth summary strip */}
       {totalAssets > 0 && (
@@ -608,7 +600,7 @@ export function Tab7RiskMatrix() {
         </div>
       )}
 
-      <PortfolioSection onValues={(_inv, cur) => { setStocksCurrent(cur); }} />
+      <PortfolioSection onValues={() => {}} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div>

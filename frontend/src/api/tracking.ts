@@ -12,7 +12,7 @@ export interface FdResponse {
   maturityValue: number; currentValue: number; interestEarned: number; daysToMaturity: number | null;
   // MATURED_RENEWED: matured and its proceeds were rolled into a new FD (see renewedToId) —
   // excluded from net-worth totals since the money is now counted via that successor FD.
-  status?: 'ACTIVE' | 'CLOSED' | 'MATURED_RENEWED';
+  status?: 'ACTIVE' | 'MATURED' | 'CLOSED' | 'MATURED_RENEWED';
   actualMaturityAmount?: number; closedDate?: string;
   // Present only on the relevant side of a detected renewal.
   renewedToId?: number | null;
@@ -28,6 +28,13 @@ export interface RdResponse {
   startDate: string; tenureMonths: number;
   monthsElapsed: number; totalDeposited: number; currentValue: number;
   projectedCorpus: number; interestEarned: number; progressPercent: number;
+  maturityDate?: string;
+  // Same lifecycle as FdResponse.status — MATURED_RENEWED is excluded from net-worth totals
+  // since the money is now counted via the successor RD (see renewedToId).
+  status?: 'ACTIVE' | 'MATURED' | 'CLOSED' | 'MATURED_RENEWED';
+  actualMaturityAmount?: number; closedDate?: string;
+  renewedToId?: number | null;
+  renewedFromId?: number | null;
 }
 
 export interface LoanRequest {
@@ -81,6 +88,8 @@ export const trackingApi = {
   addRd:    (r: RdRequest) => apiClient.post<RdResponse>('/api/tracking/rd', r),
   updateRd: (id: number, r: RdRequest) => apiClient.put<RdResponse>(`/api/tracking/rd/${id}`, r),
   deleteRd: (id: number) => apiClient.delete(`/api/tracking/rd/${id}`),
+  closeRd: (id: number, actualAmount?: number) =>
+    apiClient.post(`/api/tracking/rd/${id}/close`, actualAmount != null ? { actualAmount } : {}),
 
   // Loan
   listLoans:   () => apiClient.get<LoanResponse[]>('/api/tracking/loan'),

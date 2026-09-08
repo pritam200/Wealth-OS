@@ -20,4 +20,10 @@ public class RdResponse {
     private BigDecimal projectedCorpus;
     private BigDecimal interestEarned;
     private double progressPercent;
+    private LocalDate maturityDate;
+    private String status;
+    private BigDecimal actualMaturityAmount;
+    private LocalDate closedDate;
+    private Long renewedToId;
+    private Long renewedFromId;
 }

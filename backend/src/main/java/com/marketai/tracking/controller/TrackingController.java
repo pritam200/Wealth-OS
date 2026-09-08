@@ -80,6 +80,17 @@ public class TrackingController {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/rd/{id}/close")
+    public ResponseEntity<RdResponse> closeRd(@AuthenticationPrincipal User user,
+                                              @PathVariable Long id,
+                                              @RequestBody(required = false) java.util.Map<String, Object> body) {
+        java.math.BigDecimal amount = null;
+        if (body != null && body.containsKey("actualAmount")) {
+            amount = new java.math.BigDecimal(body.get("actualAmount").toString());
+        }
+        return ResponseEntity.ok(trackingService.closeRd(id, user.getId(), amount));
+    }
+
     /* ── Loans ── */
     @GetMapping("/loan")
     public ResponseEntity<List<LoanResponse>> listLoans(@AuthenticationPrincipal User user) {

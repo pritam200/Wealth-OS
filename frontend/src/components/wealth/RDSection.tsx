@@ -42,6 +42,18 @@ export function RDSection({ onRefresh }: { onRefresh: () => void }) {
     try { await trackingApi.deleteRd(id); await load(); onRefresh(); } catch {}
   };
 
+  const [closingId, setClosingId] = useState<number | null>(null);
+  const [closeAmt, setCloseAmt]   = useState('');
+
+  const closeRd = async (id: number) => {
+    try {
+      const amt = closeAmt ? Number(closeAmt) : undefined;
+      await trackingApi.closeRd(id, amt);
+      setClosingId(null); setCloseAmt('');
+      await load(); onRefresh();
+    } catch {}
+  };
+
   const rdPreview = (() => {
     if (!f.monthlyAmount || !f.rate || !f.tenureMonths) return null;
     const n = Number(f.tenureMonths), r = Number(f.rate) / 100 / 12, m = Number(f.monthlyAmount);
@@ -99,27 +111,53 @@ export function RDSection({ onRefresh }: { onRefresh: () => void }) {
 
       {!items.length
         ? <p className="text-gray-600 text-xs text-center py-4">No RDs added yet.</p>
-        : items.map(rd => (
-          <div key={rd.id} className="py-2 border-b border-surface-border/40 last:border-0">
+        : items.map(rd => {
+          const isRenewed = rd.status === 'MATURED_RENEWED';
+          const isClosed = rd.status === 'CLOSED' || isRenewed;
+          const isMatured = rd.status === 'MATURED';
+          const successor = isRenewed && rd.renewedToId != null ? items.find(x => x.id === rd.renewedToId) : undefined;
+          const predecessor = rd.renewedFromId != null ? items.find(x => x.id === rd.renewedFromId) : undefined;
+          return (
+          <div key={rd.id} className={`py-2 border-b border-surface-border/40 last:border-0 ${isClosed ? 'opacity-70' : ''}`}>
             <div className="flex items-center justify-between mb-1">
-              <div>
+              <div className="min-w-0">
                 <span className="text-white text-xs font-medium">{rd.bank}</span>
                 <span className="text-gray-600 text-xs ml-1.5">{maskText(fmtINR(rd.monthlyAmount))}/mo · {maskText(`${rd.rate}%`)} · {rd.tenureMonths}m</span>
+                {rd.status === 'CLOSED' && <span className="ml-2 text-2xs bg-gray-700 text-gray-400 px-1 rounded">CLOSED</span>}
+                {isMatured && <span className="ml-2 text-2xs bg-yellow-400/15 text-yellow-400 px-1 rounded">Matured — action needed</span>}
+                {isRenewed && <span className="ml-2 text-2xs bg-bull/15 text-bull px-1 rounded">Matured ✓ Renewed</span>}
+                {predecessor && <div className="text-2xs text-gray-600 mt-0.5">← Renewed from {predecessor.bank} RD of {maskText(fmtINR(predecessor.monthlyAmount))}/mo</div>}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 <div className="text-right">
-                  <div className="num text-xs text-white">{maskText(fmtINR(rd.totalDeposited))} → <span className="text-bull">{maskText(fmtINR(rd.projectedCorpus))}</span></div>
+                  <div className="num text-xs text-white">{maskText(fmtINR(rd.totalDeposited))} → <span className="text-bull">{maskText(fmtINR(rd.actualMaturityAmount ?? rd.projectedCorpus))}</span></div>
                   <div className="text-2xs text-gray-500">{rd.monthsElapsed}/{rd.tenureMonths} months</div>
+                  {rd.status === 'CLOSED' && rd.closedDate && <div className="text-2xs text-gray-600">Closed {rd.closedDate}</div>}
+                  {isRenewed && successor && <div className="text-2xs text-bull">→ Renewed into {maskText(fmtINR(successor.monthlyAmount))}/mo RD</div>}
                 </div>
-                <button onClick={() => startEdit(rd)} className="btn-icon text-gray-500 hover:text-white p-0.5" title="Edit RD"><Edit2 size={11} /></button>
+                {!isClosed && <button onClick={() => startEdit(rd)} className="btn-icon text-gray-500 hover:text-white p-0.5" title="Edit RD"><Edit2 size={11} /></button>}
+                {!isClosed && (
+                  <button onClick={() => setClosingId(rd.id === closingId ? null : rd.id)}
+                    className="btn-icon text-gray-500 hover:text-bull p-0.5 text-2xs" title="Record RD closure in your tracker (no real bank action)">✓</button>
+                )}
                 <button onClick={() => del(rd.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
               </div>
             </div>
             <div className="h-1 bg-surface-muted rounded-full overflow-hidden">
               <div className="h-full bg-accent rounded-full" style={{ width: `${Math.min(rd.progressPercent, 100)}%` }} />
             </div>
+            {closingId === rd.id && (
+              <div className="mt-1.5 flex gap-2 items-center bg-surface-hover rounded p-2">
+                <input type="number" value={closeAmt} onChange={e => setCloseAmt(e.target.value)}
+                  placeholder={`Actual amount (default: ${fmtINR(rd.projectedCorpus)})`}
+                  className="input-field text-xs flex-1" />
+                <button onClick={() => closeRd(rd.id)} className="btn-primary text-xs py-1 px-3">Confirm Close</button>
+                <button onClick={() => { setClosingId(null); setCloseAmt(''); }} className="btn-ghost text-xs py-1">Cancel</button>
+              </div>
+            )}
           </div>
-        ))
+          );
+        })
       }
     </div>
   );

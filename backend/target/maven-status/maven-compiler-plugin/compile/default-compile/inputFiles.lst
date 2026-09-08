@@ -156,12 +156,19 @@
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/portfolio/repository/HoldingRepository.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/portfolio/repository/PortfolioRepository.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/portfolio/repository/TransactionRepository.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/portfolio/scheduler/HoldingReconciliationScheduler.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/portfolio/service/PortfolioService.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/portfolio/util/XirrCalculator.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/recommendation/controller/RecommendationController.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/recommendation/controller/WealthController.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/recommendation/dto/MfRecommendationRequest.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/recommendation/dto/PortfolioContext.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/recommendation/service/PortfolioContextService.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/recommendation/service/RecommendationEngine.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/reconciliation/controller/ReconciliationController.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/reconciliation/dto/ReconciliationIssue.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/reconciliation/dto/ReconciliationReportDto.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/reconciliation/service/ReconciliationService.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/redemption/controller/RedemptionController.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/redemption/dto/DeploymentPlan.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/redemption/dto/ReinvestmentRequest.java
@@ -207,4 +214,5 @@
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/tracking/repository/LoanRepository.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/tracking/repository/OtherAssetRepository.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/tracking/repository/RecurringDepositRepository.java
+/Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/tracking/scheduler/DepositMaturityScheduler.java
 /Users/pksingh/Documents/indian-markets-ai-platform/backend/src/main/java/com/marketai/tracking/service/TrackingService.java

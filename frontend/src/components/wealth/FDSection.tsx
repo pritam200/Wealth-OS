@@ -149,6 +149,7 @@ export function FDSection({ onRefresh }: { onRefresh: () => void }) {
                   <span className="text-white text-xs font-medium">{fd.bank}</span>
                   <span className="text-gray-600 text-xs ml-1.5">{maskText(`${fd.rate}%`)} {fd.compounding}{fd.autoRenew ? ' · auto-renew' : ''}</span>
                   {fd.status === 'CLOSED' && <span className="ml-2 text-2xs bg-gray-700 text-gray-400 px-1 rounded">CLOSED</span>}
+                  {fd.status === 'MATURED' && <span className="ml-2 text-2xs bg-yellow-400/15 text-yellow-400 px-1 rounded">Matured — action needed</span>}
                   {isRenewed && <span className="ml-2 text-2xs bg-bull/15 text-bull px-1 rounded">Matured ✓ Renewed</span>}
                   {predecessor && <div className="text-2xs text-gray-600 mt-0.5">← Renewed from {predecessor.bank} FD of {maskText(fmtINR(predecessor.principal))}</div>}
                 </div>
