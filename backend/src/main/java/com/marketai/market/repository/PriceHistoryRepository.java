@@ -14,4 +14,7 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
     List<PriceHistory> findTop200BySymbolOrderByDateDesc(String symbol);
 
     boolean existsBySymbolAndDate(String symbol, LocalDate date);
+
+    /** Intraday bars for one timeframe, newest first. Empty until the intraday backfill runs. */
+    java.util.List<PriceHistory> findBySymbolAndIntervalOrderByBarStartDesc(String symbol, String interval);
 }

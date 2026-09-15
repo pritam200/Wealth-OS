@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { CHART, tooltipStyle } from '../theme/chartTheme';
 import { marketApi } from '../api/market';
 import { recommendationApi, isInsufficient } from '../api/analyst';
 import type { AnalystAssessment } from '../api/analyst';
@@ -22,12 +23,12 @@ const numOr = (n: number | null | undefined, digits: number) => (n == null ? '�
 // that's what used to let this page say BUY while every other tab said BOOK PROFIT for the
 // very same stock.
 const VERDICT_TONE: Record<string, string> = {
-  ACCUMULATE:  'bg-bull/20 text-bull border-bull/30',
-  CONTINUE:    'bg-bull/20 text-bull border-bull/30',
-  BOOK_PROFIT: 'bg-yellow-400/15 text-yellow-400 border-yellow-400/30',
-  EXIT:        'bg-bear/20 text-bear border-bear/30',
-  REVIEW:      'bg-orange-400/15 text-orange-400 border-orange-400/30',
-  HOLD:        'bg-neutral/20 text-neutral border-neutral/30',
+  ACCUMULATE:  'bg-bull/15 text-bull border-bull/30',
+  CONTINUE:    'bg-bull/15 text-bull border-bull/30',
+  BOOK_PROFIT: 'bg-neutral/15 text-neutral border-neutral/30',
+  EXIT:        'bg-bear/15 text-bear border-bear/30',
+  REVIEW:      'bg-neutral/15 text-neutral border-neutral/30',
+  HOLD:        'bg-gray-900 text-gray-400 border-surface-border',
 };
 const verdictLabel = (a: string) => a.replace(/_/g, ' ');
 
@@ -95,7 +96,7 @@ export function StockPage() {
   if (!quote) return <div className="card text-gray-500 text-center py-16">Stock not found</div>;
 
   const isPositive = quote.changePercent >= 0;
-  const chartColor = isPositive ? '#22c55e' : '#ef4444';
+  const chartColor = isPositive ? CHART.bull : CHART.bear;
 
   const chartData = history.map(h => ({
     date: h.date,
@@ -112,7 +113,7 @@ export function StockPage() {
       <div className="card">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
-            <h1 className="text-3xl font-bold font-mono text-white">{quote.symbol}</h1>
+            <h1 className="text-3xl font-bold font-mono text-ink">{quote.symbol}</h1>
             <p className="text-gray-400 mt-1">{quote.name}</p>
             {quote.sector && (
               <span className="text-xs bg-brand/10 text-brand border border-brand/20 px-2 py-0.5 rounded-full mt-2 inline-block">
@@ -121,7 +122,7 @@ export function StockPage() {
             )}
           </div>
           <div className="text-right">
-            <div className="text-4xl font-bold text-white">{fmt(quote.currentPrice)}</div>
+            <div className="text-4xl font-bold text-ink">{fmt(quote.currentPrice)}</div>
             <div className={`flex items-center gap-1 justify-end mt-1 ${isPositive ? 'text-bull' : 'text-bear'}`}>
               {isPositive ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
               <span className="font-medium">
@@ -140,7 +141,7 @@ export function StockPage() {
           ].map(i => (
             <div key={i.label}>
               <div className="stat-label">{i.label}</div>
-              <div className="text-white font-medium mt-1">{i.value}</div>
+              <div className="text-ink font-medium mt-1">{i.value}</div>
             </div>
           ))}
         </div>
@@ -157,7 +158,7 @@ export function StockPage() {
           </div>
           <div>
             <div className="stat-label">P/E Ratio</div>
-            <div className="text-white font-medium mt-1">{quote.pe?.toFixed(1) ?? '—'}</div>
+            <div className="text-ink font-medium mt-1">{quote.pe?.toFixed(1) ?? '—'}</div>
           </div>
         </div>
       </div>
@@ -165,7 +166,7 @@ export function StockPage() {
       {/* Price Chart */}
       <div className="card">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="font-semibold text-white">Price History</h2>
+          <h2 className="font-semibold text-ink">Price History</h2>
           <div className="flex gap-1">
             {RANGES.map(r => (
               <button
@@ -174,7 +175,7 @@ export function StockPage() {
                 className={`px-3 py-1 rounded text-xs font-medium transition-all ${
                   range.label === r.label
                     ? 'bg-brand text-white'
-                    : 'text-gray-500 hover:text-white hover:bg-surface-hover'
+                    : 'text-gray-500 hover:text-ink hover:bg-surface-hover'
                 }`}
               >
                 {r.label}
@@ -194,26 +195,27 @@ export function StockPage() {
               </defs>
               <XAxis
                 dataKey="label"
-                tick={{ fill: '#6b7280', fontSize: 11 }}
+                tick={{ fill: CHART.text, fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
                 interval="preserveStartEnd"
               />
               <YAxis
                 domain={[minClose, maxClose]}
-                tick={{ fill: '#6b7280', fontSize: 11 }}
+                tick={{ fill: CHART.text, fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={v => `₹${v.toLocaleString('en-IN')}`}
                 width={80}
               />
               <Tooltip
-                contentStyle={{ background: '#1a1d27', border: '1px solid #2a2d3e', borderRadius: 8, fontSize: 12 }}
-                labelStyle={{ color: '#9ca3af' }}
+                contentStyle={tooltipStyle}
+                labelStyle={{ color: CHART.muted }}
+                itemStyle={{ color: CHART.ink }}
                 formatter={(v) => [fmt(Number(v ?? 0)), 'Close']}
               />
-              {tech?.support && <ReferenceLine y={tech.support} stroke="#22c55e" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: 'Support', fill: '#22c55e', fontSize: 10 }} />}
-              {tech?.resistance && <ReferenceLine y={tech.resistance} stroke="#ef4444" strokeDasharray="4 4" strokeOpacity={0.5} label={{ value: 'Resistance', fill: '#ef4444', fontSize: 10 }} />}
+              {tech?.support && <ReferenceLine y={tech.support} stroke={CHART.bull} strokeDasharray="4 4" strokeOpacity={0.7} label={{ value: 'Support', fill: CHART.bull, fontSize: 10 }} />}
+              {tech?.resistance && <ReferenceLine y={tech.resistance} stroke={CHART.bear} strokeDasharray="4 4" strokeOpacity={0.7} label={{ value: 'Resistance', fill: CHART.bear, fontSize: 10 }} />}
               <Area type="monotone" dataKey="close" stroke={chartColor} strokeWidth={2} fill="url(#chartGrad)" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
@@ -230,7 +232,7 @@ export function StockPage() {
           <div className="card">
             <div className="flex items-start justify-between gap-3 mb-6">
               <div>
-                <h2 className="font-semibold text-white">Technical Analysis</h2>
+                <h2 className="font-semibold text-ink">Technical Analysis</h2>
                 <p className="text-2xs text-gray-600 mt-0.5">Indicator values below · verdict from the recommendation engine</p>
               </div>
               <EngineVerdict a={assessment} />
@@ -243,12 +245,12 @@ export function StockPage() {
             <div className="grid grid-cols-2 gap-3 mb-4">
               {[
                 { label: 'RSI (14)', value: numOr(tech.rsi, 1),
-                  cls: tech.rsi == null ? 'text-gray-600' : tech.rsi < 30 ? 'text-bull' : tech.rsi > 70 ? 'text-bear' : 'text-white' },
+                  cls: tech.rsi == null ? 'text-gray-600' : tech.rsi < 30 ? 'text-bull' : tech.rsi > 70 ? 'text-bear' : 'text-ink' },
                 { label: 'MACD', value: numOr(tech.macd, 2),
                   cls: tech.macd == null ? 'text-gray-600' : tech.macd > 0 ? 'text-bull' : 'text-bear' },
                 { label: 'Trend', value: tech.trend?.replace(/_/g, ' ') ?? '—',
                   cls: tech.trend?.includes('UP') ? 'text-bull' : tech.trend?.includes('DOWN') ? 'text-bear' : 'text-neutral' },
-                { label: 'ATR', value: fmtOr(tech.atr), cls: tech.atr == null ? 'text-gray-600' : 'text-white' },
+                { label: 'ATR', value: fmtOr(tech.atr), cls: tech.atr == null ? 'text-gray-600' : 'text-ink' },
               ].map(i => (
                 <div key={i.label} className="bg-surface-hover rounded-lg p-3">
                   <div className="stat-label">{i.label}</div>
@@ -281,7 +283,7 @@ export function StockPage() {
 
         {/* News for this stock */}
         <div className="card">
-          <h2 className="font-semibold text-white mb-4">Related News</h2>
+          <h2 className="font-semibold text-ink mb-4">Related News</h2>
           <div className="space-y-3 overflow-y-auto max-h-72">
             {news.length === 0 ? (
               <p className="text-gray-600 text-sm text-center py-8">No related news</p>
@@ -294,7 +296,7 @@ export function StockPage() {
                 className="block p-3 rounded-lg hover:bg-surface-hover transition-colors group"
               >
                 <div className="flex items-start gap-2">
-                  <p className="text-sm text-gray-300 group-hover:text-white line-clamp-2 flex-1">{item.title}</p>
+                  <p className="text-sm text-gray-300 group-hover:text-ink line-clamp-2 flex-1">{item.title}</p>
                   <ExternalLink size={12} className="text-gray-600 shrink-0 mt-0.5" />
                 </div>
                 <div className="flex gap-2 mt-1">

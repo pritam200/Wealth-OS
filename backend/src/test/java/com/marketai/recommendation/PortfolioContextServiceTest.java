@@ -35,6 +35,7 @@ class PortfolioContextServiceTest {
     private HoldingRepository holdingRepo;
     private StockRepository stockRepo;
     private TrackingService tracking;
+    private com.marketai.ledger.repository.CashAccountRepository cashRepo;
     private PortfolioContextService service;
 
     @BeforeEach
@@ -43,7 +44,9 @@ class PortfolioContextServiceTest {
         holdingRepo = mock(HoldingRepository.class);
         stockRepo = mock(StockRepository.class);
         tracking = mock(TrackingService.class);
-        service = new PortfolioContextService(portfolioRepo, holdingRepo, stockRepo, tracking);
+        cashRepo = mock(com.marketai.ledger.repository.CashAccountRepository.class);
+        when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(BigDecimal.ZERO);
+        service = new PortfolioContextService(portfolioRepo, holdingRepo, stockRepo, tracking, cashRepo);
 
         when(portfolioRepo.findByUserIdOrderByIdAsc(USER))
             .thenReturn(Collections.singletonList(Portfolio.builder().id(PF).build()));
@@ -56,6 +59,17 @@ class PortfolioContextServiceTest {
             .totalFdCurrentValue(BigDecimal.ZERO).totalFdPrincipal(BigDecimal.ZERO)
             .totalRdCurrentValue(BigDecimal.ZERO).totalEpf(BigDecimal.ZERO)
             .totalOtherAssets(BigDecimal.ZERO).totalLoanOutstanding(BigDecimal.ZERO)
+            .build();
+    }
+
+    /** A .MF symbol is what PortfolioContextService uses to classify a holding as a fund. */
+    private Holding mf(String symbol, double units, double avgNav, double nav) {
+        return Holding.builder()
+            .id(Math.abs((long) symbol.hashCode()))
+            .symbol(symbol).name(symbol.replace(".MF", ""))
+            .quantity(BigDecimal.valueOf(units))
+            .averageCost(BigDecimal.valueOf(avgNav))
+            .currentPrice(BigDecimal.valueOf(nav))
             .build();
     }
 
@@ -156,5 +170,37 @@ class PortfolioContextServiceTest {
         assertThat(ctx.getEquityInvested()).isEqualByComparingTo("2000.00");
         assertThat(ctx.getEquityCurrent()).isEqualByComparingTo("2000.00");
         assertThat(ctx.getEquityPnl()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    @DisplayName("Cash is part of total assets, so a bank balance is no longer invisible")
+    void cashCountsTowardTotalAssets() {
+        when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(new BigDecimal("100000"));
+        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Collections.singletonList(
+            stock("AAA.NS", 10, 100, 100)));   // 1000 of equity
+
+        PortfolioContext ctx = service.build(USER);
+
+        assertThat(ctx.getCashValue()).isEqualByComparingTo("100000.00");
+        assertThat(ctx.getTotalAssets()).isEqualByComparingTo("101000.00");
+    }
+
+    @Test
+    @DisplayName("An internal transfer (bank -> MF) leaves net worth unchanged")
+    void internalTransferDoesNotChangeNetWorth() {
+        // Before: 100,000 in cash, no fund holding.
+        when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(new BigDecimal("100000"));
+        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Collections.emptyList());
+        BigDecimal before = service.build(USER).getNetWorth();
+
+        // After: 50,000 moved into a mutual fund. Cash drops by exactly what the fund gained.
+        when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(new BigDecimal("50000"));
+        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Collections.singletonList(
+            mf("PPFAS.MF", 500, 100, 100)));   // 500 units at NAV 100 = 50,000
+        BigDecimal after = service.build(USER).getNetWorth();
+
+        // The invariant: allocation shifted from cash to equity, total wealth did not move.
+        assertThat(after).isEqualByComparingTo(before);
+        assertThat(before).isEqualByComparingTo("100000.00");
     }
 }

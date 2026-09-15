@@ -41,12 +41,26 @@ spring:
 
 server:
   port: 8080
+
+management:
+  # Only /actuator/health is allowlisted in SecurityConfig — restrict exposure to match, rather
+  # than exposing the full actuator surface (env, beans, heapdump, ...) by accident.
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
   servlet:
     context-path: /
 
 app:
   jwt:
-    secret: ${JWT_SECRET:S3cr3tK3yF0rD3v0nlyChangeInProd1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn}
+    # No default on purpose. When unset, JwtService generates a strong random secret and
+    # persists it to the gitignored gmail.env — a committed signing key would let anyone
+    # with the repo mint a valid token for any account.
+    secret: ${JWT_SECRET:}
     expiration-ms: 86400000        # 24 hours
     refresh-expiration-ms: 604800000  # 7 days
 
@@ -54,6 +68,41 @@ app:
     api-key: ${GEMINI_API_KEY:}
     base-url: https://generativelanguage.googleapis.com/v1beta
     model: gemini-1.5-flash
+
+  sync:
+    worker:
+      # Small on purpose: the expensive step is the local LLM (~8s/email), and running many
+      # at once on one machine makes each slower rather than finishing sooner.
+      concurrency: 2
+      stale-after-minutes: 90
+
+  gmail:
+    push:
+      # Push is a latency optimisation only — the scheduled poll is never disabled, because
+      # Gmail caps notifications at 1/sec/user and silently drops the excess.
+      enabled: ${GMAIL_PUSH_ENABLED:false}
+      topic: ${GMAIL_PUSH_TOPIC:}
+      # Shared secret appended to the push endpoint URL; the endpoint is unauthenticated by
+      # necessity since Google calls it.
+      verification-token: ${GMAIL_PUSH_TOKEN:}
+
+  # AI reasoning layer. Local-first: Ollama needs no key and nothing leaves the machine.
+  # provider = ollama | gemini | none  ("none" disables every LLM path; the deterministic
+  # parsers and all arithmetic keep working, since the AI layer is strictly additive.)
+  llm:
+    provider: ${LLM_PROVIDER:ollama}
+    fallback-enabled: true
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      # qwen2.5:7b is the throughput choice — a full sync classifies hundreds of emails and
+      # the 14b takes several seconds each. Override to qwen2.5:14b for higher-accuracy,
+      # low-volume tasks (ambiguity resolution, advisory).
+      model: ${OLLAMA_MODEL:qwen2.5:7b}
+      timeout-seconds: 120
+      # Pinned to 0: classification and extraction must be reproducible run to run.
+      temperature: 0.0
+    # Below this confidence an extraction is never auto-imported — it goes to human review.
+    min-confidence: 0.85
 
   yahoo-finance:
     base-url: https://query1.finance.yahoo.com
@@ -63,13 +112,30 @@ app:
     refresh-rate-ms: 1800000
 
   # RecommendationEngine composite-score weights (stocks only — MFs use a separate
-  # tax/holding-period rule set). Must sum to 100.
+  # tax/holding-period rule set).
+  #
+  # These MUST sum to 100 — AnalystService.validateWeights fails startup otherwise, because a
+  # set summing to 90 silently shrinks every composite by a tenth and moves stocks across the
+  # BUY/HOLD/SELL thresholds with nothing reporting it.
+  #
+  # Weights changed from 30/20/20/30. Two reasons, both from the competitive research in
+  # docs/research/COMPETITIVE_RESEARCH.md:
+  #
+  #   - technical and momentum are both derived from price and are highly correlated, so
+  #     30+20 double-counted the same signal. Their combined share drops 50 -> 40.
+  #   - sentiment at 30% put the largest single weight on the softest input. Value Research,
+  #     the most methodologically transparent Indian rater, does not use sentiment as a rating
+  #     input at all, and weights valuation highest.
+  #
+  # Valuation is raised to 40, making it the largest weight, to match that principle. Sentiment is reduced rather than removed: without a
+  # fundamentals feed there is no quality or growth factor to absorb the freed weight, and
+  # leaving it on price would deepen the double-count this change exists to reduce.
   recommendation:
     weights:
-      technical: 30
-      momentum: 20
-      valuation: 20
-      sentiment: 30
+      technical: 25
+      momentum: 15
+      valuation: 40
+      sentiment: 20
 
   # Add your ngrok frontend URL here (comma-separated) when tunneling, e.g.
   # CORS_ALLOWED_ORIGINS=http://localhost:5173,https://7aee-153-72-47-54.ngrok-free.app

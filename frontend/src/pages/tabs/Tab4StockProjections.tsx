@@ -34,11 +34,11 @@ function ProjectionCard({ symbol, quote, tech, aiSummary }: {
     <div className="card hover:border-brand/30 transition-colors cursor-pointer" onClick={() => navigate(`/stock/${symbol}`)}>
       <div className="flex items-start justify-between mb-4">
         <div>
-          <h3 className="font-bold font-mono text-white text-lg">{symbol.replace('.NS', '')}</h3>
+          <h3 className="font-bold font-mono text-ink text-lg">{symbol.replace('.NS', '')}</h3>
           <p className="text-gray-500 text-xs truncate max-w-[200px]">{quote.name}</p>
         </div>
         <div className="text-right">
-          <div className="font-bold text-white">{fmt(quote.currentPrice)}</div>
+          <div className="font-bold text-ink">{fmt(quote.currentPrice)}</div>
           <div className={`text-sm ${quote.changePercent >= 0 ? 'text-bull' : 'text-bear'}`}>
             {quote.changePercent >= 0 ? '+' : ''}{quote.changePercent?.toFixed(2)}%
           </div>
@@ -130,11 +130,11 @@ export function Tab4StockProjections() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#9b5cf9] to-[#e84fd9] flex items-center justify-center text-white shadow-lift shrink-0">
+        <div className="w-11 h-11 rounded-2xl bg-brand/10 border border-brand/25 flex items-center justify-center text-brand-light shrink-0">
           <Target size={20} />
         </div>
         <div>
-          <h2 className="text-xl font-bold text-white mb-0.5">Price Projections</h2>
+          <h2 className="text-xl font-bold text-ink mb-0.5">Price Projections</h2>
           <p className="text-gray-500 text-sm">1–3 month target price ranges, volatility and structural catalysts</p>
         </div>
       </div>
@@ -152,7 +152,7 @@ export function Tab4StockProjections() {
               {suggestions.map(s => (
                 <button key={s.symbol} onMouseDown={() => analyze(s.symbol)}
                   className="w-full text-left px-3 py-1.5 hover:bg-surface-hover flex items-center justify-between">
-                  <span className="text-white text-xs font-mono font-medium">{s.symbol.replace('.NS', '')}</span>
+                  <span className="text-ink text-xs font-mono font-medium">{s.symbol.replace('.NS', '')}</span>
                   <span className="text-2xs text-gray-500 truncate max-w-[180px] ml-2">{s.name}</span>
                 </button>
               ))}
@@ -179,12 +179,12 @@ export function Tab4StockProjections() {
             <div className="card">
               <div className="flex items-start justify-between mb-3 flex-wrap gap-2">
                 <div>
-                  <div className="text-white font-bold text-lg font-mono">{c.symbol.replace('.NS', '')}</div>
+                  <div className="text-ink font-bold text-lg font-mono">{c.symbol.replace('.NS', '')}</div>
                   <div className="text-xs text-gray-500 truncate max-w-[240px]">{c.quote?.name}</div>
                 </div>
                 {c.quote && (
                   <div className="text-right">
-                    <div className="font-mono font-bold text-white text-lg">{fmt(c.quote.currentPrice)}</div>
+                    <div className="font-mono font-bold text-ink text-lg">{fmt(c.quote.currentPrice)}</div>
                     <div className={`text-sm font-mono ${c.quote.changePercent >= 0 ? 'text-bull' : 'text-bear'}`}>
                       {c.quote.changePercent >= 0 ? '+' : ''}{c.quote.changePercent?.toFixed(2)}%
                     </div>
@@ -194,7 +194,7 @@ export function Tab4StockProjections() {
                   <div className="flex gap-4 text-2xs">
                     <div><div className="text-gray-500">Support</div><div className="font-mono text-bull">{fmtOr(c.tech.support)}</div></div>
                     <div><div className="text-gray-500">Resistance</div><div className="font-mono text-bear">{fmtOr(c.tech.resistance)}</div></div>
-                    <div><div className="text-gray-500">RSI</div><div className="font-mono text-white">{c.tech.rsi?.toFixed(0) ?? '—'}</div></div>
+                    <div><div className="text-gray-500">RSI</div><div className="font-mono text-ink">{c.tech.rsi?.toFixed(0) ?? '—'}</div></div>
                   </div>
                 )}
               </div>

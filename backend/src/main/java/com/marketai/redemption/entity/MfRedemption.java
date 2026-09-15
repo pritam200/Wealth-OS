@@ -1,7 +1,7 @@
 package com.marketai.redemption.entity;
 
 import lombok.*;
-import javax.persistence.*;
+import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -19,7 +19,9 @@ import java.util.List;
 public class MfRedemption {
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+
+    @EqualsAndHashCode.Include
+    @ToString.Include    private Long id;
 
     @Column(name = "user_id", nullable = false)
     private Long userId;

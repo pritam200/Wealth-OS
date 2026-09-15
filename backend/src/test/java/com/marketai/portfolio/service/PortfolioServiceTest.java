@@ -241,7 +241,7 @@ class PortfolioServiceTest {
         ArgumentCaptor<com.marketai.income.entity.Income> incomeCaptor = ArgumentCaptor.forClass(com.marketai.income.entity.Income.class);
         verify(incomeRepo).save(incomeCaptor.capture());
         assertThat(incomeCaptor.getValue().getAmount()).isEqualByComparingTo("2000.00");
-        assertThat(incomeCaptor.getValue().getSource()).isEqualTo("Capital Gain");
+        assertThat(incomeCaptor.getValue().getSource()).isEqualTo(com.marketai.income.entity.IncomeSource.CAPITAL_GAIN);
 
         assertThat(h.getQuantity()).isEqualByComparingTo("6"); // 10 - 4 remaining
         verify(holdingRepository).save(h);

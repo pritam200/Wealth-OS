@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { AlertTriangle, Trash2, Loader2, Receipt } from 'lucide-react';
 import { ExpenseSection } from '../../components/wealth/ExpenseSection';
 import { IncomeSection, SavingsRatioCard } from '../../components/wealth/IncomeSection';
+import { MerchantSpendSection } from '../../components/wealth/MerchantSpendSection';
 import { expenseApi } from '../../api/expense';
 import type { ExpenseResponse } from '../../api/expense';
 import { useMaskedText } from '../../components/shared/Amount';
@@ -31,12 +32,12 @@ function MiscategorizedInvestmentsBanner() {
   const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
 
   return (
-    <div className="card border border-yellow-400/30 bg-yellow-400/5">
+    <div className="card border-neutral/30">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-start gap-2">
-          <AlertTriangle size={16} className="text-yellow-400 shrink-0 mt-0.5" />
+          <AlertTriangle size={16} className="text-neutral shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm text-white font-medium">{rows.length} investment-related entries were mis-imported as expenses</p>
+            <p className="text-sm text-ink font-medium">{rows.length} investment-related entries were mis-imported as expenses</p>
             <p className="text-xs text-gray-500 mt-0.5">
               {maskText(fmtINR(total))} total — SIP/mutual fund/broker debits that were incorrectly booked here before a Gmail-sync fix.
               These aren't real spending. Removing them won't affect your portfolio; re-run "Sync now" to import them correctly there.
@@ -44,7 +45,7 @@ function MiscategorizedInvestmentsBanner() {
           </div>
         </div>
         <button onClick={purge} disabled={purging}
-          className="btn-ghost text-xs border border-yellow-400/40 text-yellow-400 hover:bg-yellow-400/10 flex items-center gap-1.5 px-3 py-1.5 shrink-0">
+          className="btn-ghost text-xs border border-neutral/40 text-neutral hover:bg-neutral/10 flex items-center gap-1.5 px-3 py-1.5 shrink-0">
           {purging ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
           {purging ? 'Removing…' : `Remove all ${rows.length}`}
         </button>
@@ -57,11 +58,11 @@ export function Tab10Expenses() {
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#00c2ff] to-[#6d5efc] flex items-center justify-center text-white shadow-lift shrink-0">
+        <div className="w-11 h-11 rounded-2xl bg-brand/10 border border-brand/25 flex items-center justify-center text-brand-light shrink-0">
           <Receipt size={20} />
         </div>
         <div>
-          <h2 className="text-xl font-bold text-white mb-0.5">Income &amp; Expenses</h2>
+          <h2 className="text-xl font-bold text-ink mb-0.5">Income &amp; Expenses</h2>
           <p className="text-gray-500 text-xs">Your monthly cash flow — what comes in, what goes out, and how much you save</p>
         </div>
       </div>
@@ -74,6 +75,8 @@ export function Tab10Expenses() {
         <IncomeSection />
         <ExpenseSection />
       </div>
+
+      <MerchantSpendSection />
     </div>
   );
 }

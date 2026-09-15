@@ -1,11 +1,9 @@
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { AllocationDto } from '../../types';
 import { useMaskedText } from '../shared/Amount';
+import { CHART_SERIES, tooltipStyle, CHART } from '../../theme/chartTheme';
 
-const COLORS = [
-  '#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16',
-  '#14b8a6', '#f97316', '#a855f7', '#eab308',
-];
+const COLORS = CHART_SERIES;
 
 const MAX_SLICES = 8; // beyond this, readability suffers — bucket the tail into "Others"
 
@@ -49,7 +47,9 @@ export function AllocationChart({ allocation }: Props) {
           ))}
         </Pie>
         <Tooltip
-          contentStyle={{ background: '#1a1d27', border: '1px solid #2a2d3e', borderRadius: 8 }}
+          contentStyle={tooltipStyle}
+          itemStyle={{ color: CHART.ink }}
+          labelStyle={{ color: CHART.muted }}
           formatter={(v, _name, entry: any) => [
             `${maskText(new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number(v ?? 0)))} (${entry?.payload?.percent?.toFixed(1) ?? '0'}%)`,
             entry?.payload?.label,

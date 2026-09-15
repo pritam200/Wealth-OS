@@ -17,11 +17,11 @@ export function Tab12Planning() {
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#ffb454] to-[#ff8a5b] flex items-center justify-center text-white shadow-lift shrink-0">
+        <div className="w-11 h-11 rounded-2xl bg-neutral/10 border border-neutral/25 flex items-center justify-center text-neutral shrink-0">
           <Target size={20} />
         </div>
         <div>
-          <h2 className="text-xl font-bold text-white mb-0.5">Financial Planning</h2>
+          <h2 className="text-xl font-bold text-ink mb-0.5">Financial Planning</h2>
           <p className="text-gray-500 text-xs">Reminders, goals and tax — the forward-looking side of your money</p>
         </div>
       </div>
@@ -70,7 +70,7 @@ function ScheduledInvestmentsSection() {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <div className="icon-badge-brand"><CalendarClock size={15} /></div>
-          <h3 className="font-bold text-white text-sm">Scheduled Investments</h3>
+          <h3 className="font-bold text-ink text-sm">Scheduled Investments</h3>
           {items.length > 0 && <span className="badge-neutral">{maskText(fmtINR(monthlyTotal))}/mo</span>}
         </div>
         <button onClick={() => setOpen(o => !o)} className="btn-secondary text-xs flex items-center gap-1"><Plus size={11} /> Add</button>
@@ -110,7 +110,7 @@ function ScheduledInvestmentsSection() {
               <div className="flex items-center justify-between mb-1.5">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-2xs bg-brand/15 text-brand px-1.5 py-0.5 rounded">{i.type}</span>
-                  <span className="text-white text-xs font-medium truncate max-w-[160px]">{i.label}</span>
+                  <span className="text-ink text-xs font-medium truncate max-w-[160px]">{i.label}</span>
                   <span className="text-2xs text-gray-500 font-mono">{maskText(fmtINR(i.amount))}/mo</span>
                 </div>
                 <button onClick={async () => { await scheduledInvestmentApi.delete(i.id); load(); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
@@ -136,9 +136,9 @@ function ScheduledInvestmentsSection() {
 
 /* ── Reminders ── */
 const SEV_STYLE: Record<string, string> = {
-  OVERDUE: 'border-bear/40 bg-bear/5', DUE_SOON: 'border-yellow-400/40 bg-yellow-400/5', UPCOMING: 'border-surface-border bg-surface-hover',
+  OVERDUE: 'border-bear/40 bg-bear/5', DUE_SOON: 'border-neutral/40 bg-neutral/5', UPCOMING: 'border-surface-border bg-surface-hover',
 };
-const SEV_DOT: Record<string, string> = { OVERDUE: 'bg-bear', DUE_SOON: 'bg-yellow-400', UPCOMING: 'bg-gray-500' };
+const SEV_DOT: Record<string, string> = { OVERDUE: 'bg-bear', DUE_SOON: 'bg-neutral', UPCOMING: 'bg-gray-500' };
 
 export function RemindersPanel() {
   const maskText = useMaskedText();
@@ -150,7 +150,7 @@ export function RemindersPanel() {
     <div className="card">
       <div className="flex items-center gap-2.5 mb-3">
         <div className="icon-badge-brand"><Bell size={15} /></div>
-        <h3 className="font-bold text-white text-sm">Reminders</h3>
+        <h3 className="font-bold text-ink text-sm">Reminders</h3>
         {items.length > 0 && <span className="badge-neutral">{items.length}</span>}
       </div>
       {loading
@@ -164,13 +164,13 @@ export function RemindersPanel() {
                   <div className="flex items-center gap-2 min-w-0">
                     <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${SEV_DOT[r.severity]}`} />
                     <div className="min-w-0">
-                      <div className="text-white text-xs font-medium truncate">{r.title}</div>
+                      <div className="text-ink text-xs font-medium truncate">{r.title}</div>
                       <div className="text-2xs text-gray-500">{r.subtitle}</div>
                     </div>
                   </div>
                   <div className="text-right shrink-0 ml-2">
-                    {r.amount > 0 && <div className="text-xs font-mono text-white">{maskText(fmtINR(r.amount))}</div>}
-                    <div className={`text-2xs ${r.daysUntil < 0 ? 'text-bear' : r.daysUntil <= 7 ? 'text-yellow-400' : 'text-gray-500'}`}>
+                    {r.amount > 0 && <div className="text-xs font-mono text-ink">{maskText(fmtINR(r.amount))}</div>}
+                    <div className={`text-2xs ${r.daysUntil < 0 ? 'text-bear' : r.daysUntil <= 7 ? 'text-neutral' : 'text-gray-500'}`}>
                       {r.daysUntil < 0 ? `${Math.abs(r.daysUntil)}d overdue` : r.daysUntil === 0 ? 'due today' : `in ${r.daysUntil}d`}
                     </div>
                   </div>
@@ -215,7 +215,7 @@ function GoalsSection() {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <div className="icon-badge-gold"><Target size={15} /></div>
-          <h3 className="font-bold text-white text-sm">Financial Goals</h3>
+          <h3 className="font-bold text-ink text-sm">Financial Goals</h3>
         </div>
         <button onClick={() => setOpen(o => !o)} className="btn-secondary text-xs flex items-center gap-1"><Plus size={11} /> Add Goal</button>
       </div>
@@ -249,12 +249,12 @@ function GoalsSection() {
         : (
           <div className="space-y-3">
             {goals.map(g => {
-              const statusColor = g.status === 'ACHIEVED' ? 'text-bull' : g.status === 'ON_TRACK' ? 'text-bull' : 'text-yellow-400';
+              const statusColor = g.status === 'ACHIEVED' ? 'text-bull' : g.status === 'ON_TRACK' ? 'text-bull' : 'text-neutral';
               return (
                 <div key={g.id} className="bg-surface-hover rounded-lg p-3">
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2">
-                      <span className="text-white text-xs font-medium">{g.name}</span>
+                      <span className="text-ink text-xs font-medium">{g.name}</span>
                       <span className="text-2xs text-gray-600">{g.category}</span>
                       <span className={`text-2xs flex items-center gap-1 ${statusColor}`}>
                         {g.status === 'SHORTFALL' ? <AlertTriangle size={10} /> : <CheckCircle size={10} />}
@@ -271,10 +271,10 @@ function GoalsSection() {
                     <div className="h-full rounded-full bg-gradient-to-r from-brand to-bull" style={{ width: `${Math.min(100, g.progressPercent)}%` }} />
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-2xs">
-                    <div><span className="text-gray-600">Projected: </span><span className={`font-mono ${g.onTrack ? 'text-bull' : 'text-yellow-400'}`}>{maskText(fmtINR(g.projectedValue))}</span></div>
+                    <div><span className="text-gray-600">Projected: </span><span className={`font-mono ${g.onTrack ? 'text-bull' : 'text-neutral'}`}>{maskText(fmtINR(g.projectedValue))}</span></div>
                     <div><span className="text-gray-600">SIP: </span><span className="font-mono text-gray-300">{maskText(fmtINR(g.monthlyContribution))}/mo</span></div>
                     {g.requiredMonthly != null && g.status === 'SHORTFALL' && (
-                      <div><span className="text-gray-600">Need: </span><span className="font-mono text-yellow-400">{maskText(fmtINR(g.requiredMonthly))}/mo</span></div>
+                      <div><span className="text-gray-600">Need: </span><span className="font-mono text-neutral">{maskText(fmtINR(g.requiredMonthly))}/mo</span></div>
                     )}
                   </div>
                 </div>
@@ -297,7 +297,7 @@ function TaxSummary() {
     <div className="card">
       <div className="flex items-center gap-2.5 mb-3">
         <div className="icon-badge-brand"><Receipt size={15} /></div>
-        <h3 className="font-bold text-white text-sm">Tax Summary</h3>
+        <h3 className="font-bold text-ink text-sm">Tax Summary</h3>
         {tax && <span className="text-2xs text-gray-600">{tax.fyLabel}</span>}
       </div>
       {loading ? <div className="h-10 animate-pulse bg-surface-hover rounded" /> : !tax ? (
@@ -312,7 +312,7 @@ function TaxSummary() {
           </div>
           <div className="flex items-center justify-between bg-surface-hover rounded p-2.5 mb-3">
             <span className="text-xs text-gray-400">Estimated tax on investment income</span>
-            <span className="font-mono text-white text-sm font-bold">{maskText(`${fmtINR(tax.estimatedTaxLow)} – ${fmtINR(tax.estimatedTaxHigh)}`)}</span>
+            <span className="font-mono text-ink text-sm font-bold">{maskText(`${fmtINR(tax.estimatedTaxLow)} – ${fmtINR(tax.estimatedTaxHigh)}`)}</span>
           </div>
           <ul className="space-y-1">
             {tax.notes.map((n, i) => (

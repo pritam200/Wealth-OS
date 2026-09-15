@@ -22,6 +22,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Locale;
+import java.net.URI;
 
 @Service
 @RequiredArgsConstructor
@@ -74,7 +75,7 @@ public class NewsService {
     }
 
     private int fetchRssFeed(String feedUrl) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URL(feedUrl).openConnection();
+        HttpURLConnection conn = (HttpURLConnection) URI.create(feedUrl).toURL().openConnection();
         conn.setRequestProperty("User-Agent",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36");
         conn.setConnectTimeout(8000);
@@ -162,7 +163,7 @@ public class NewsService {
 
     private String extractDomain(String url) {
         try {
-            String host = new URL(url).getHost();
+            String host = URI.create(url).toURL().getHost();
             return host.replace("www.", "").replace("news.", "");
         } catch (Exception e) {
             return "News";

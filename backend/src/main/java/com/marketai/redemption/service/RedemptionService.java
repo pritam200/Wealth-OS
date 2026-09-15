@@ -70,6 +70,23 @@ public class RedemptionService {
         return redemptionRepo.save(redemption);
     }
 
+    /**
+     * Total redemption proceeds not yet redeployed, across all open redemptions.
+     *
+     * IMPORTANT: this is an *earmark on cash the user already holds*, not extra cash. When a
+     * fund is redeemed the money lands in a bank account, so it is already counted in
+     * CashAccount balances. Adding this figure to tracked cash would double-count it — it
+     * answers "how much of my cash came from a redemption and was meant to be reinvested",
+     * never "how much cash do I have".
+     */
+    public BigDecimal totalAwaitingRedeployment(Long userId) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (MfRedemption r : redemptionRepo.findByUserIdAndStatus(userId, "ACTIVE")) {
+            total = total.add(r.getCashRemaining());
+        }
+        return total;
+    }
+
     public List<MfRedemption> list(Long userId) {
         return redemptionRepo.findByUserIdOrderByRedemptionDateDesc(userId);
     }

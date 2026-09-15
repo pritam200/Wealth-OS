@@ -35,12 +35,134 @@ public class ParsedEmailImporter {
     private final com.marketai.card.repository.CreditCardRepository cardRepo;
     private final com.marketai.tracking.repository.FixedDepositRepository fdRepo;
     private final com.marketai.tracking.repository.RecurringDepositRepository rdRepo;
+    private final TransactionFingerprinter fingerprinter;
+    private final com.marketai.gmail.repository.ImportedTransactionFingerprintRepository fingerprintRepo;
+    private final com.marketai.document.identity.ReferenceHarvester referenceHarvester;
 
     public void importParsedEmail(Long userId, User user, ParsedEmail pe) throws Exception {
         importParsedEmail(userId, user, pe, null);
     }
 
     public void importParsedEmail(Long userId, User user, ParsedEmail pe, String gmailMessageId) throws Exception {
+        importParsedEmail(userId, user, pe, gmailMessageId, null);
+    }
+
+    /**
+     * @param documentText raw source text, used only to harvest payment-rail references. Pass
+     *                     null when unavailable — reference matching is then simply skipped and
+     *                     behaviour falls back to the content fingerprint.
+     *
+     * <p><b>Transactional because the financial record and its dedup fingerprint must commit
+     * together.</b> Without it, a fingerprint write failing after the record was already booked
+     * leaves the transaction in the ledger but unmarked — so the next sync sees it as new and
+     * imports it a second time. Double-booking is the precise failure the fingerprint exists to
+     * prevent, so the two writes cannot be allowed to diverge.
+     *
+     * <p>{@code rollbackFor = Exception.class} is required: this method declares a checked
+     * exception, and Spring rolls back only on unchecked exceptions by default. Leaving the
+     * default would mean a checked failure mid-import commits whatever had already been written.
+     *
+     * <p>Propagation is the default REQUIRED, and no caller holds a transaction, so each import
+     * gets its own. That is deliberate — one bad email in a sync of two hundred must not roll
+     * back the other hundred and ninety-nine.
+     */
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
+    public void importParsedEmail(Long userId, User user, ParsedEmail pe, String gmailMessageId,
+                                  String documentText) throws Exception {
+
+        // --- Tier 1: a rail-issued reference is decisive.
+        //
+        // Checked before the content hash because it catches duplicates the hash structurally
+        // cannot: one trade reported as a bank debit (gross) and as a contract note (net) shares
+        // no hashable field, but both quote the same UTR.
+        //
+        // Safe to act on automatically because it can only ever *prevent* a double-booking.
+        // Globally-unique rail references identify exactly one payment, and the lookup is scoped
+        // to this user and to the reference type, so a false positive would require the rail to
+        // have issued one identifier for two payments.
+        com.marketai.document.identity.ExternalReference ref = documentText == null ? null
+            : referenceHarvester.strongest(documentText)
+                .filter(com.marketai.document.identity.ExternalReference::isGloballyUnique)
+                .orElse(null);
+
+        String contentFingerprint = fingerprinter.fingerprint(pe);
+
+        if (ref != null) {
+            var priorByRef = fingerprintRepo.findFirstByUserIdAndExternalRefAndExternalRefType(
+                userId, ref.value(), ref.type().name());
+
+            if (priorByRef.isPresent()) {
+                var prior = priorByRef.get();
+
+                // Same rail reference, different financial content. The rail issued that
+                // identifier for exactly one payment, so two readings of it cannot both be
+                // right — one of them is a restatement, a correction, or a parser error.
+                //
+                // Not importing is correct: booking it would double-count, and overwriting the
+                // existing record would destroy already-verified financial history. But simply
+                // returning, which is what happened before, leaves a genuine discrepancy
+                // invisible. Record it against the original instead, for a human to resolve.
+                if (!contentFingerprint.equals(prior.getFingerprint()) && !prior.isConflictDetected()) {
+                    prior.setConflictDetected(true);
+                    prior.setConflictDetail(truncateDetail(String.format(
+                        "A later document quoted the same %s (%s) with different details: %s. "
+                            + "The originally imported record was kept; confirm which is correct.",
+                        ref.type(), ref.value(),
+                        pe.getSourceDescription() == null ? "no description" : pe.getSourceDescription())));
+                    fingerprintRepo.save(prior);
+                    log.warn("Conflict on {} {} for user {} — same reference, different content",
+                        ref.type(), ref.value(), userId);
+                    return;
+                }
+
+                log.debug("Skipping transaction already imported under {} {}: {}",
+                    ref.type(), ref.value(), pe.getSourceDescription());
+                return;
+            }
+        }
+
+        // --- Tier 2: uniform SHA-256 content gate, checked before any table-specific logic.
+        // The same real-world transaction arriving again (resent alert, overlapping statement
+        // PDF, a second parser matching the same email) hashes identically and is refused here,
+        // so no individual import path can double-book by forgetting its own dedup check.
+        String fp = contentFingerprint;
+        if (fingerprintRepo.existsByUserIdAndFingerprint(userId, fp)) {
+            log.debug("Skipping already-imported transaction (fingerprint {}): {}", fp, pe.getSourceDescription());
+            return;
+        }
+
+        routeImport(userId, user, pe, gmailMessageId);
+
+        // Recorded only after a successful import, so a failed attempt stays retryable.
+        fingerprintRepo.save(com.marketai.gmail.entity.ImportedTransactionFingerprint.builder()
+            .userId(userId)
+            .fingerprint(fp)
+            .type(pe.getType() != null ? pe.getType().name() : null)
+            .gmailMessageId(gmailMessageId)
+            .externalRef(ref != null ? ref.value() : null)
+            .externalRefType(ref != null ? ref.type().name() : null)
+            .description(pe.getSourceDescription() != null && pe.getSourceDescription().length() > 300
+                ? pe.getSourceDescription().substring(0, 300) : pe.getSourceDescription())
+            .build());
+    }
+
+    /** Keeps conflict detail inside its column without truncating mid-character. */
+    private static String truncateDetail(String s) {
+        if (s == null) return null;
+        return s.length() <= 500 ? s : s.substring(0, 497) + "...";
+    }
+
+    private void routeImport(Long userId, User user, ParsedEmail pe, String gmailMessageId) throws Exception {
+        // Switching on a null enum throws NullPointerException. That a null type is reachable is
+        // not hypothetical — the fingerprinter a few lines above this call explicitly handles
+        // `getType() == null`, so such a ParsedEmail gets as far as here and then aborts the
+        // whole message rather than skipping one unroutable item.
+        if (pe.getType() == null) {
+            log.warn("Skipping parsed item with no transaction type — nothing to route it to. Source: {}",
+                pe.getSourceDescription());
+            return;
+        }
+
         switch (pe.getType()) {
             case TRADE_BUY:
             case TRADE_SELL:
@@ -51,6 +173,15 @@ public class ParsedEmailImporter {
                 LocalDate fdStart = pe.getStartDate() != null ? pe.getStartDate() : LocalDate.now();
                 if (pe.getPrincipal() != null && fdRepo.existsByUser_IdAndBankAndPrincipalAndStartDate(userId, fdBank, pe.getPrincipal(), fdStart)) {
                     log.debug("Skipping duplicate FD: {} ₹{} on {}", fdBank, pe.getPrincipal(), fdStart);
+                    break;
+                }
+                // FdRequest carries @NotNull on principal, but bean validation only runs on the
+                // controller's @Valid boundary — this path calls the service directly, so a null
+                // principal would persist and then break every interest and maturity calculation
+                // that reads it.
+                if (pe.getPrincipal() == null || pe.getPrincipal().signum() <= 0) {
+                    log.warn("REJECTED FD import — no usable principal (bank={}, principal={}). Source: {}",
+                        fdBank, pe.getPrincipal(), pe.getSourceDescription());
                     break;
                 }
                 FdRequest fdReq = new FdRequest();
@@ -74,6 +205,11 @@ public class ParsedEmailImporter {
                 LocalDate rdStart = pe.getStartDate() != null ? pe.getStartDate() : LocalDate.now();
                 if (pe.getMonthlyAmount() != null && rdRepo.existsByUser_IdAndBankAndMonthlyAmountAndStartDate(userId, rdBank, pe.getMonthlyAmount(), rdStart)) {
                     log.debug("Skipping duplicate RD: {} ₹{}/mo on {}", rdBank, pe.getMonthlyAmount(), rdStart);
+                    break;
+                }
+                if (pe.getMonthlyAmount() == null || pe.getMonthlyAmount().signum() <= 0) {
+                    log.warn("REJECTED RD import — no usable monthly amount (bank={}, amount={}). Source: {}",
+                        rdBank, pe.getMonthlyAmount(), pe.getSourceDescription());
                     break;
                 }
                 RdRequest rdReq = new RdRequest();
@@ -119,7 +255,7 @@ public class ParsedEmailImporter {
             .userId(userId)
             .description(desc)
             .amount(pe.getAmount())
-            .source("Dividend")
+            .source(com.marketai.income.entity.IncomeSource.DIVIDEND)
             .incomeDate(date)
             .payer(company)
             .paymentMethod(pe.getPaymentMethod())
@@ -145,7 +281,7 @@ public class ParsedEmailImporter {
             .userId(userId)
             .description(desc)
             .amount(pe.getAmount())
-            .source(source)
+            .source(com.marketai.income.entity.IncomeSource.fromLabel(source))
             .incomeDate(date)
             .payer(payer)
             .paymentMethod(pe.getPaymentMethod())
@@ -198,7 +334,7 @@ public class ParsedEmailImporter {
         for (com.marketai.income.entity.Income i : existing) {
             if (gmailMessageId != null && gmailMessageId.equals(i.getSourceEmailId())) return true;
             if (i.getAmount().compareTo(amount) == 0 && desc != null && desc.equalsIgnoreCase(i.getDescription())) return true;
-            if (i.getAmount().compareTo(amount) == 0 && "Dividend".equals(i.getSource())
+            if (i.getAmount().compareTo(amount) == 0 && com.marketai.income.entity.IncomeSource.DIVIDEND == i.getSource()
                     && desc != null && desc.toLowerCase().contains("dividend")) return true;
         }
         return false;
@@ -226,9 +362,30 @@ public class ParsedEmailImporter {
     }
 
     private void importTrade(Long userId, User user, ParsedEmail pe) throws Exception {
+        // A trade is only a trade if it has a symbol, a quantity and a price. Each of these was
+        // previously used unchecked:
+        //
+        //   - `pe.getSymbol() + ".NS"` on a null symbol produced the literal string "null.NS"
+        //     and created a holding under it — a fabricated position that then took part in
+        //     ledger replay like any other.
+        //   - `BigDecimal.valueOf(pe.getQuantity())` unboxes an Integer, so a null quantity threw
+        //     NullPointerException out of the middle of the import and abandoned the message.
+        //   - `pe.getPrice()` was dereferenced further down the same path.
+        //
+        // Parsers return best-effort output from messy email; validating it here is what keeps
+        // that best-effort quality from becoming a ledger entry.
+        if (pe.getSymbol() == null || pe.getSymbol().isBlank()
+                || pe.getQuantity() == null || pe.getQuantity() <= 0
+                || pe.getPrice() == null || pe.getPrice().signum() <= 0) {
+            log.warn("REJECTED trade import — incomplete transaction: symbol={}, quantity={}, price={}. "
+                + "Refusing to create a holding from partial data. Source: {}",
+                pe.getSymbol(), pe.getQuantity(), pe.getPrice(), pe.getSourceDescription());
+            return;
+        }
+
         Portfolio portfolio = getOrCreatePortfolio(userId, user);
         String exchange = pe.getExchange() != null ? pe.getExchange() : "NSE";
-        String symbol = pe.getSymbol() + ("BSE".equalsIgnoreCase(exchange) ? ".BO" : ".NS");
+        String symbol = pe.getSymbol().trim() + ("BSE".equalsIgnoreCase(exchange) ? ".BO" : ".NS");
         LocalDate date = pe.getTradeDate() != null ? pe.getTradeDate() : LocalDate.now();
         BigDecimal quantity = BigDecimal.valueOf(pe.getQuantity());
 
@@ -274,7 +431,7 @@ public class ParsedEmailImporter {
             .userId(userId)
             .description(desc)
             .amount(saleValue)
-            .source("Capital Gain")
+            .source(com.marketai.income.entity.IncomeSource.CAPITAL_GAIN)
             .incomeDate(date)
             .note("Sold " + quantity.stripTrailingZeros().toPlainString() + " units @ ₹" + pe.getPrice() + " (holding not found)")
             .build());
@@ -289,9 +446,41 @@ public class ParsedEmailImporter {
 
         Portfolio portfolio = getOrCreatePortfolio(userId, user);
 
-        BigDecimal units = pe.getUnits() != null ? pe.getUnits() :
-                (pe.getNav() != null && pe.getAmount() != null ? pe.getAmount().divide(pe.getNav(), 4, java.math.RoundingMode.HALF_UP) : BigDecimal.ONE);
-        BigDecimal nav = pe.getNav() != null ? pe.getNav() : pe.getAmount();
+        // Units come from the document, or are derived as amount ÷ NAV. Both inputs must be
+        // present *and* the NAV non-zero: a malformed email carrying "NAV: 0.00" would otherwise
+        // throw ArithmeticException mid-import and abort the whole message.
+        BigDecimal units = pe.getUnits();
+        if (units == null && pe.getNav() != null && pe.getAmount() != null
+                && pe.getNav().signum() > 0) {
+            units = pe.getAmount().divide(pe.getNav(), 4, java.math.RoundingMode.HALF_UP);
+        }
+
+        // Previously this fell back to one unit priced at the whole transaction amount. The
+        // total value came out right, which is why it looked harmless — but the quantity and
+        // cost basis were both invented, and `recomputeFromLedger` replays them as fact. Mixing
+        // a fabricated "1 unit @ ₹5,000" with real units produces a nonsense average cost for
+        // the holding, and nothing downstream can tell which figure was made up.
+        //
+        // Refusing is consistent with the fund-name check above: this system does not create
+        // unverified holdings.
+        if (units == null || units.signum() <= 0) {
+            log.warn("REJECTED MF import — cannot derive units for '{}': units={}, nav={}, amount={}. "
+                + "Refusing to invent a unit count. Source: {}",
+                pe.getFundName(), pe.getUnits(), pe.getNav(), pe.getAmount(), pe.getSourceDescription());
+            return;
+        }
+
+        BigDecimal nav = pe.getNav() != null && pe.getNav().signum() > 0 ? pe.getNav() : null;
+        if (nav == null && pe.getAmount() != null) {
+            // Derive the per-unit price from the figures we do trust, rather than recording the
+            // transaction amount in a field that means "price per unit".
+            nav = pe.getAmount().divide(units, 4, java.math.RoundingMode.HALF_UP);
+        }
+        if (nav == null || nav.signum() <= 0) {
+            log.warn("REJECTED MF import — cannot establish a per-unit price for '{}'. Source: {}",
+                pe.getFundName(), pe.getSourceDescription());
+            return;
+        }
 
         String symbol;
         if (pe.getFundName() != null) {
@@ -302,7 +491,7 @@ public class ParsedEmailImporter {
         }
         LocalDate date = pe.getTradeDate() != null ? pe.getTradeDate() : LocalDate.now();
 
-        if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, units, nav != null ? nav : BigDecimal.ONE)) {
+        if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, units, nav)) {
             log.debug("Skipping duplicate MF import: {} {} units @ {} on {}", symbol, units, nav, date);
             return;
         }

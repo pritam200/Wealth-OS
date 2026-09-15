@@ -1,6 +1,7 @@
 package com.marketai.income.repository;
 
 import com.marketai.income.entity.Income;
+import com.marketai.income.entity.IncomeSource;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -14,7 +15,7 @@ public interface IncomeRepository extends JpaRepository<Income, Long> {
 
     List<Income> findByUserIdAndIncomeDateBetweenOrderByIncomeDateDesc(Long userId, LocalDate from, LocalDate to);
 
-    List<Income> findByUserIdAndSourceAndIncomeDateBetweenOrderByIncomeDateDesc(Long userId, String source, LocalDate from, LocalDate to);
+    List<Income> findByUserIdAndSourceAndIncomeDateBetweenOrderByIncomeDateDesc(Long userId, IncomeSource source, LocalDate from, LocalDate to);
 
     @Query("SELECT COALESCE(SUM(i.amount), 0) FROM Income i WHERE i.userId = :uid AND i.incomeDate BETWEEN :from AND :to")
     BigDecimal sumByUserIdAndDateRange(@Param("uid") Long userId, @Param("from") LocalDate from, @Param("to") LocalDate to);

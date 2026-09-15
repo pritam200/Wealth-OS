@@ -82,11 +82,11 @@ export function Tab3MarketForecast() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#00c2ff] to-[#6d5efc] flex items-center justify-center text-white shadow-lift shrink-0">
+        <div className="w-11 h-11 rounded-2xl bg-brand/10 border border-brand/25 flex items-center justify-center text-brand-light shrink-0">
           <Radar size={20} />
         </div>
         <div>
-          <h2 className="text-xl font-bold text-white mb-0.5">Market Forecast</h2>
+          <h2 className="text-xl font-bold text-ink mb-0.5">Market Forecast</h2>
           <p className="text-gray-500 text-xs">Volatility-based projections grounded in real price history — any index or stock</p>
         </div>
       </div>
@@ -99,7 +99,7 @@ export function Tab3MarketForecast() {
             {Object.entries(indices).map(([code, name]) => (
               <button key={code} onClick={() => setSymbol(code)}
                 className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-                  symbol === code ? 'bg-brand/15 border-brand/50 text-brand' : 'border-surface-border text-gray-400 hover:text-white'
+                  symbol === code ? 'bg-brand/15 border-brand/50 text-brand' : 'border-surface-border text-gray-400 hover:text-ink'
                 }`}>
                 {name}
               </button>
@@ -124,7 +124,7 @@ export function Tab3MarketForecast() {
                     {suggestions.map(s => (
                       <button key={s.symbol} onMouseDown={() => pick(s)}
                         className="w-full text-left px-3 py-1.5 hover:bg-surface-hover flex items-center justify-between">
-                        <span className="text-white text-xs font-mono font-medium">{s.symbol}</span>
+                        <span className="text-ink text-xs font-mono font-medium">{s.symbol}</span>
                         <span className="text-2xs text-gray-500 truncate max-w-[160px] ml-2">{s.name}</span>
                       </button>
                     ))}
@@ -141,7 +141,7 @@ export function Tab3MarketForecast() {
               {HORIZONS.map(h => (
                 <button key={h} onClick={() => setHorizon(h)}
                   className={`text-xs px-3 py-1.5 rounded-lg border ${
-                    horizon === h ? 'bg-brand/15 border-brand/50 text-brand' : 'border-surface-border text-gray-400 hover:text-white'
+                    horizon === h ? 'bg-brand/15 border-brand/50 text-brand' : 'border-surface-border text-gray-400 hover:text-ink'
                   }`}>{h}</button>
               ))}
             </div>
@@ -157,7 +157,7 @@ export function Tab3MarketForecast() {
         <div className="card">
           <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
             <div>
-              <div className="text-white font-semibold text-lg">{data.displayName}</div>
+              <div className="text-ink font-semibold text-lg">{data.displayName}</div>
               <span className="inline-flex items-center gap-1 mt-1 text-2xs px-2 py-0.5 rounded-full border border-dashed border-gray-700 text-gray-500">
                 <HelpCircle size={11} /> Insufficient data
               </span>
@@ -180,9 +180,9 @@ export function Tab3MarketForecast() {
           <div className="card">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div>
-                <div className="text-white font-semibold text-lg">{data.displayName}</div>
+                <div className="text-ink font-semibold text-lg">{data.displayName}</div>
                 <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-2xl font-mono font-bold text-white">{fmt(data.currentPrice)}</span>
+                  <span className="text-2xl font-mono font-bold text-ink">{fmt(data.currentPrice)}</span>
                   <span className={`text-xs font-semibold ${TREND_COLOR[data.trend] ?? 'text-gray-400'}`}>{data.trend?.replace('_', ' ')}</span>
                 </div>
               </div>
@@ -194,13 +194,13 @@ export function Tab3MarketForecast() {
               <div className="h-full bg-bear/20" style={{ width: pct(bandHigh('Bear')) }} />
               <div className="h-full bg-gray-700/40" style={{ width: `calc(${pct(bandHigh('Base'))} - ${pct(bandHigh('Bear'))})` }} />
               <div className="h-full bg-bull/20" style={{ flex: 1 }} />
-              <div className="absolute w-0.5 h-full bg-white" style={{ left: pct(data.currentPrice) }} />
+              <div className="absolute w-0.5 h-full bg-ink" style={{ left: pct(data.currentPrice) }} />
             </div>
             <div className="relative h-5 text-2xs font-mono text-gray-500">
               {/* rangeMin/rangeMax sit exactly at 0%/100% by definition, so they're
                   left/right-anchored (not centered) to stay inside the bar */}
               <span className="absolute left-0 text-left text-bear">{fmt(rangeMin)}</span>
-              <span className="absolute -translate-x-1/2 text-white" style={{ left: pct(data.currentPrice) }}>now</span>
+              <span className="absolute -translate-x-1/2 text-ink" style={{ left: pct(data.currentPrice) }}>now</span>
               <span className="absolute right-0 text-right text-bull">{fmt(rangeMax)}</span>
             </div>
           </div>
@@ -212,7 +212,7 @@ export function Tab3MarketForecast() {
 
           {/* Reference levels */}
           <div className="card">
-            <h3 className="text-white font-semibold text-sm mb-3">What this forecast is based on</h3>
+            <h3 className="text-ink font-semibold text-sm mb-3">What this forecast is based on</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
               {[
                 ['Expected move (1σ)', `± ${fmt(data.expectedMove)}`],
@@ -226,7 +226,7 @@ export function Tab3MarketForecast() {
               ].map(([l, v]) => (
                 <div key={l} className="bg-surface-hover rounded p-2">
                   <div className="stat-label text-2xs">{l}</div>
-                  <div className="font-mono text-white text-xs font-semibold">{v}</div>
+                  <div className="font-mono text-ink text-xs font-semibold">{v}</div>
                 </div>
               ))}
             </div>
@@ -255,7 +255,7 @@ function ScenarioCard({ s }: { s: ForecastScenario }) {
       </div>
       <div>
         <div className="text-gray-500 text-2xs mb-1">Target range</div>
-        <div className="font-mono text-white font-semibold text-sm">{fmt(s.low)} – {fmt(s.high)}</div>
+        <div className="font-mono text-ink font-semibold text-sm">{fmt(s.low)} – {fmt(s.high)}</div>
       </div>
       <div className="bg-surface-border/40 rounded p-2">
         <div className="text-gray-500 text-2xs mb-0.5">Expected move</div>

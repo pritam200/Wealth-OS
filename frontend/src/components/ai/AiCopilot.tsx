@@ -54,7 +54,7 @@ export function AiCopilot() {
     <div className="card flex flex-col h-[600px]">
       <div className="flex items-center gap-2 mb-4 pb-4 border-b border-surface-border">
         <Sparkles size={18} className="text-brand" />
-        <h2 className="font-semibold text-white">AI Market Copilot</h2>
+        <h2 className="font-semibold text-ink">AI Market Copilot</h2>
         <span className="ml-auto text-xs text-gray-600">Powered by Gemini</span>
       </div>
 

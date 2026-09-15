@@ -16,6 +16,7 @@ import com.marketai.gmail.repository.ExcludedSenderRepository;
 import com.marketai.gmail.repository.GmailTokenRepository;
 import com.marketai.gmail.repository.PendingPdfRepository;
 import com.marketai.gmail.repository.ProcessedEmailRepository;
+import com.marketai.ai.intel.EmailIntelResult;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +29,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
+import com.marketai.document.classify.SenderTrustEvaluator;
+import com.marketai.document.route.SelectionComparator;
+import com.marketai.document.route.SelectionComparison;
+import com.marketai.ai.intel.EmailIntelType;
 
 @Service
 @RequiredArgsConstructor
@@ -41,12 +46,17 @@ public class GmailSyncService {
     private final GmailClientService gmailClient;
     private final UserRepository userRepo;
     private final List<EmailParser> parsers;
+    private final SenderTrustEvaluator senderTrustEvaluator;
+    private final SelectionComparator selectionComparator;
     private final ParsedEmailImporter importer;
     private final com.marketai.gmail.ai.AiEmailExtractor aiEmailExtractor;
     private final PendingPdfRepository pendingPdfRepo;
     private final ExcludedSenderRepository excludedSenderRepo;
     private final PasswordHintExtractor passwordHintExtractor;
     private final PdfImportService pdfImportService;
+    private final com.marketai.ai.intel.EmailIntelAgent emailIntelAgent;
+    private final com.marketai.ai.review.service.EmailReviewService emailReviewService;
+    private final com.marketai.ai.llm.LlmProviderRouter llmRouter;
 
     @Value("${app.gmail.ai-fallback.enabled:true}")
     private boolean aiFallbackEnabled;
@@ -73,13 +83,40 @@ public class GmailSyncService {
             return emptyResult("A sync is already in progress. Please wait for it to complete.");
         }
         try {
-            return doSyncForUser(userId, lookbackPeriod);
+            return doSyncForUser(userId, lookbackPeriod, null);
         } finally {
             lock.unlock();
         }
     }
 
-    private GmailSyncResult doSyncForUser(Long userId, String lookbackPeriod) {
+    /**
+     * Processes an explicit set of message ids instead of re-scanning a date window — the
+     * incremental path, where Gmail's history API has already told us exactly what is new.
+     *
+     * Everything downstream (parsers, dedup, review queue) is identical; only how the message
+     * list is obtained differs.
+     */
+    public GmailSyncResult syncSpecificMessages(Long userId, List<String> messageIds) {
+        if (messageIds == null || messageIds.isEmpty()) {
+            return emptyResult(null);
+        }
+        ReentrantLock lock = USER_SYNC_LOCKS.computeIfAbsent(userId, k -> new ReentrantLock());
+        if (!lock.tryLock()) {
+            log.warn("Sync already in progress for user {} — skipping", userId);
+            return emptyResult("A sync is already in progress. Please wait for it to complete.");
+        }
+        try {
+            return doSyncForUser(userId, null, messageIds);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * @param explicitMessageIds when non-null, exactly these messages are processed and the
+     *                           date-window scan is skipped entirely.
+     */
+    private GmailSyncResult doSyncForUser(Long userId, String lookbackPeriod, List<String> explicitMessageIds) {
         GmailToken token = tokenRepo.findByUserId(userId).orElse(null);
         if (token == null) return emptyResult("Gmail not connected — please connect your Gmail account first.");
 
@@ -88,6 +125,7 @@ public class GmailSyncService {
 
         int imported = 0, skipped = 0, failed = 0;
         int totalEmails = 0, totalAttachments = 0, totalTransactionsFound = 0, duplicatesSkipped = 0;
+        int queuedForReview = 0;
         List<String> summaries = new ArrayList<>();
         List<GmailSyncResult.SyncLogEntry> logEntries = new ArrayList<>();
         List<String> actionItems = new ArrayList<>();
@@ -105,7 +143,23 @@ public class GmailSyncService {
 
             List<Message> messages;
             try {
-                messages = gmailClient.fetchRecentMessages(gmail, 300, lookbackPeriod);
+                if (explicitMessageIds != null) {
+                    // Incremental path: Gmail's history API already told us precisely what is
+                    // new, so we fetch only those. A window scan here would re-pay 20 quota
+                    // units per message for mail we have already processed.
+                    messages = new ArrayList<>();
+                    for (String id : explicitMessageIds) {
+                        try {
+                            messages.add(gmailClient.getMessage(gmail, id));
+                        } catch (Exception e) {
+                            // A single unreadable message (deleted between notification and
+                            // fetch) must not abort the whole batch.
+                            log.warn("Could not fetch message {}: {}", id, e.getMessage());
+                        }
+                    }
+                } else {
+                    messages = gmailClient.fetchRecentMessages(gmail, 300, lookbackPeriod);
+                }
             } catch (com.google.api.client.http.HttpResponseException httpEx) {
                 if (httpEx.getStatusCode() == 401) {
                     return emptyResult("Gmail token expired. Please disconnect and reconnect your Gmail account.");
@@ -121,10 +175,20 @@ public class GmailSyncService {
             for (Message message : messages) {
                 totalEmails++;
                 String msgId = message.getId();
-                if (processedRepo.existsByUserIdAndGmailMessageId(userId, msgId)) {
-                    skipped++;
-                    duplicatesSkipped++;
-                    continue;
+                ProcessedEmail existing = processedRepo.findByUserIdAndGmailMessageId(userId, msgId).orElse(null);
+                if (existing != null) {
+                    if (!"FAILED".equals(existing.getStatus())) {
+                        skipped++;
+                        duplicatesSkipped++;
+                        continue;
+                    }
+                    // A previous attempt at this email left it FAILED (transient error — parser
+                    // exception, DB hiccup). Unlike a genuinely-processed email, this must be
+                    // retried on every sync, not permanently skipped — otherwise the underlying
+                    // transaction is silently and permanently dropped. Fall through and reprocess;
+                    // saveProcessed() below updates this same row rather than inserting a new one
+                    // (the (user_id, gmail_message_id) unique constraint would otherwise reject it).
+                    log.info("Retrying previously FAILED email {} for user {}", msgId, userId);
                 }
                 // A forwarded/resent email gets a NEW Gmail message id, so this check alone
                 // won't catch it — but ParsedEmailImporter's own content-keyed checks
@@ -177,20 +241,64 @@ public class GmailSyncService {
                     }
                 }
 
-                if (parsed.isEmpty() && aiFallbackEnabled) {
-                    steps.add("No regex parser matched — trying AI extraction");
+                // Shadow-mode comparison: run classifier-based routing alongside the legacy
+                // selection above and record whether they agree. Neither path can affect the
+                // other — this only observes, so a bug here cannot change what gets imported.
+                //
+                // The point is to gather evidence on real mail before routing is allowed to
+                // decide anything. Read the tally at GET /api/gmail/selection-comparison;
+                // cutover needs regressions() at zero, not just passing unit tests.
+                try {
+                    SelectionComparison cmp = selectionComparator.compare(
+                        from, subject, body, matchedParser, parsers);
+                    if (!cmp.isClean()) {
+                        steps.add("Routing shadow: " + cmp.detail());
+                    }
+                } catch (Exception e) {
+                    // Belt and braces. The comparator already swallows its own failures; this
+                    // guarantees an observability feature can never break an import.
+                    log.debug("Selection comparison skipped: {}", e.toString());
+                }
+
+                // Local-LLM classification, only for emails no deterministic parser could read.
+                // Kept as a fallback rather than a per-email step on purpose: a local model
+                // costs seconds per call, so putting it in front of every message would turn a
+                // routine sync into a multi-minute job.
+                if (parsed.isEmpty() && aiFallbackEnabled && emailIntelAgent.isEnabled()) {
+                    steps.add("No regex parser matched — classifying with " + llmRouter.describeActive());
                     try {
-                        List<ParsedEmail> aiParsed = aiEmailExtractor.extract(from, subject, body);
-                        if (!aiParsed.isEmpty()) {
-                            parsed.addAll(aiParsed);
-                            matchedParser = "AiEmailExtractor (AI)";
-                            steps.add("AI extracted " + aiParsed.size() + " item(s)");
-                        } else {
-                            steps.add("AI found no transactions in email text");
+                        EmailIntelResult intel = emailIntelAgent.classify(userId, from, subject, body, msgId);
+                        switch (intel.getOutcome()) {
+                            case IMPORT:
+                                parsed.add(intel.getParsed());
+                                matchedParser = "EmailIntelAgent (" + intel.getType() + ")";
+                                steps.add(String.format("Classified as %s at %.0f%% confidence", intel.getType(),
+                                    intel.getConfidence() != null ? intel.getConfidence() * 100 : 0));
+                                break;
+                            case REVIEW_REQUIRED:
+                            case UNRESOLVED:
+                                // Previously this email was dropped with only a log line, so a
+                                // real transaction could go missing invisibly. Now it becomes a
+                                // row the user can accept, correct or reject.
+                                emailReviewService.enqueue(userId, msgId, from, subject, intel);
+                                queuedForReview++;
+                                steps.add("Sent to review queue: " + intel.getReviewReason());
+                                saveProcessed(userId, msgId, intel.getType() != null ? intel.getType().name() : "UNKNOWN",
+                                    "REVIEW_REQUIRED", intel.getReviewReason(), from, "EmailIntelAgent");
+                                logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                                    .gmailMessageId(msgId).sender(from).subject(subject)
+                                    .matchedParser("EmailIntelAgent").status("REVIEW_REQUIRED")
+                                    .type(intel.getType() != null ? intel.getType().name() : "UNKNOWN")
+                                    .detail(intel.getReviewReason()).pipelineSteps(steps).build());
+                                skipped++;
+                                continue;
+                            case NOT_A_TRANSACTION:
+                                steps.add("Classified as non-transactional (" + intel.getType() + ")");
+                                break;
                         }
                     } catch (Exception e) {
-                        steps.add("AI fallback failed: " + e.getMessage());
-                        log.warn("AI fallback failed on message {}: {}", msgId, e.getMessage());
+                        steps.add("AI classification failed: " + e.getMessage());
+                        log.warn("AI classification failed on message {}: {}", msgId, e.getMessage());
                     }
                 }
 
@@ -288,12 +396,64 @@ public class GmailSyncService {
                     continue;
                 }
 
+                // Sender authority check, placed after parsing so a held-back email still
+                // reaches the review queue with its extracted content rather than as a bare
+                // "something was blocked" row.
+                //
+                // Why it is needed: parser selection above matches substrings against `from`,
+                // which is the raw From header including the display name — and the display
+                // name is chosen by whoever sent the message. So
+                // `"Zerodha Alerts" <noreply@attacker.example>` satisfies
+                // containsIgnoreCase(from, "zerodha") and is handed to ZerodhaParser, whose
+                // output would then flow to the ledger.
+                //
+                // Scope is deliberately narrow. Only the impersonation shape is held back —
+                // a display name naming an issuer the sending domain cannot support. An
+                // unrecognised sender making no such claim still imports normally, because the
+                // issuer registry will always lag reality and blocking those would silently
+                // drop real transactions from any bank not yet catalogued.
+                SenderTrustEvaluator.Assessment trust = senderTrustEvaluator.evaluate(from);
+                if (!trust.permitsAutoImport()) {
+                    steps.add("Sender authority check failed: " + trust.detail());
+                    log.warn("Blocked auto-import for user {} message {}: {}", userId, msgId, trust.detail());
+
+                    // Nothing is dropped. Each parsed item becomes a review row the user can
+                    // accept if the sender is in fact legitimate.
+                    for (ParsedEmail pe : parsed) {
+                        emailReviewService.enqueue(userId, msgId, from, subject,
+                            EmailIntelResult.builder()
+                                .outcome(EmailIntelResult.Outcome.REVIEW_REQUIRED)
+                                .type(EmailIntelType.UNKNOWN)
+                                .parsed(pe)
+                                .reviewReason("Sender could not be verified — " + trust.detail())
+                                .reasoning("Held back by the sender authority check rather than the "
+                                    + "classifier. " + matchedParser + " read this email, but the "
+                                    + "sending domain does not belong to the issuer the header claims. "
+                                    + "Accept only if you recognise this sender as genuine.")
+                                .build());
+                        queuedForReview++;
+                    }
+                    saveProcessed(userId, msgId, "REVIEW", "SKIPPED",
+                        "Sender authority check failed: " + trust.detail(), from, matchedParser);
+                    logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                        .gmailMessageId(msgId).sender(from).subject(subject)
+                        .matchedParser(matchedParser).status("REVIEW")
+                        .detail("Sender authority check failed: " + trust.detail())
+                        .pipelineSteps(steps).build());
+                    continue;
+                }
+                if (trust.trust() == com.marketai.document.classify.SenderTrust.UNKNOWN_DOMAIN) {
+                    // Recorded, not blocked — useful signal for deciding what to add to the
+                    // registry, and visible in the sync log without costing the user an import.
+                    steps.add("Sender domain not in the issuer registry (imported anyway)");
+                }
+
                 int emailImported = 0;
                 totalTransactionsFound += parsed.size();
                 List<String> importedTypes = new ArrayList<>();
                 for (ParsedEmail pe : parsed) {
                     try {
-                        importer.importParsedEmail(userId, user, pe, msgId);
+                        importer.importParsedEmail(userId, user, pe, msgId, body);
                         summaries.add(pe.getSourceDescription());
                         importedTypes.add(pe.getType().name());
                         steps.add("DB updated: " + pe.getType().name() + " — " + pe.getSourceDescription());
@@ -365,11 +525,22 @@ public class GmailSyncService {
             .actionItems(actionItems)
             .build();
 
+        LocalDateTime lastSync = tokenRepo.findByUserId(userId).map(GmailToken::getLastSyncAt).orElse(null);
+
         return GmailSyncResult.builder()
                 .imported(imported).skipped(skipped).failed(failed)
                 .summaries(summaries).logEntries(logEntries)
                 .error(syncError)
                 .reconciliation(reconciliation)
+                .stats(com.marketai.gmail.dto.GmailSyncSummaryDto.builder()
+                    .lastSync(lastSync)
+                    .scanned(totalEmails)
+                    .newlyImported(imported)
+                    .duplicatesSkipped(duplicatesSkipped)
+                    .failed(failed)
+                    .extractedTransactions(totalTransactionsFound)
+                    .queuedForReview(queuedForReview)
+                    .build())
                 .build();
     }
 
@@ -388,17 +559,19 @@ public class GmailSyncService {
         });
     }
 
+    // Upsert, not insert: a retried FAILED email already has a row, and (user_id,
+    // gmail_message_id) is unique — a blind insert would throw and lose the new outcome.
     private void saveProcessed(Long userId, String msgId, String type, String status, String summary, String sender, String matchedParser) {
         try {
-            processedRepo.save(ProcessedEmail.builder()
-                    .userId(userId)
-                    .gmailMessageId(msgId)
-                    .type(type)
-                    .status(status)
-                    .matchedParser(matchedParser)
-                    .sender(sender != null && sender.length() > 320 ? sender.substring(0, 320) : sender)
-                    .resultSummary(summary != null && summary.length() > 900 ? summary.substring(0, 900) : summary)
-                    .build());
+            ProcessedEmail row = processedRepo.findByUserIdAndGmailMessageId(userId, msgId)
+                .orElseGet(() -> ProcessedEmail.builder().userId(userId).gmailMessageId(msgId).build());
+            row.setType(type);
+            row.setStatus(status);
+            row.setMatchedParser(matchedParser);
+            row.setSender(sender != null && sender.length() > 320 ? sender.substring(0, 320) : sender);
+            row.setResultSummary(summary != null && summary.length() > 900 ? summary.substring(0, 900) : summary);
+            row.setProcessedAt(LocalDateTime.now());
+            processedRepo.save(row);
         } catch (Exception e) {
             log.warn("Failed to save ProcessedEmail for message {}: {}", msgId, e.getMessage());
         }

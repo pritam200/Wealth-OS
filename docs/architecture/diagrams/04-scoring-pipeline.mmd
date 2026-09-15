@@ -1,0 +1,12 @@
+flowchart TB
+    U["Universe"] --> ELIG{"RatingEligibility"}
+    ELIG -->|ineligible| INEL["INELIGIBLE(reason)"]
+    ELIG -->|eligible| PROF{"SectorScoringProfile"}
+    PROF -->|financials| FIN["ROA / NIM / provision coverage<br/>CAR / SGR gap / PE-to-SGR"]
+    PROF -->|general| GEN["Standard ratio set"]
+    FIN --> BUCKET["rank to z-score to bucket average<br/>EQUAL-WEIGHT buckets"]
+    GEN --> BUCKET
+    BUCKET --> RF{"RedFlag channel"}
+    RF -->|flagged| VETO["VETO"]
+    RF -->|clear| UNC["Uncertainty tier"]
+    UNC --> OUT["Score + sub-scores<br/>+ binary check explanations"]

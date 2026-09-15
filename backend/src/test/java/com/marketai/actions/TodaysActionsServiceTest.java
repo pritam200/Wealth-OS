@@ -32,6 +32,8 @@ class TodaysActionsServiceTest {
     private PortfolioContextService ctxService;
     private RecommendationEngine engine;
     private TechnicalIndicatorService technical;
+    private com.marketai.ledger.repository.CashAccountRepository cashRepo;
+    private com.marketai.redemption.service.RedemptionService redemptionService;
     private TodaysActionsService service;
 
     @BeforeEach
@@ -39,7 +41,13 @@ class TodaysActionsServiceTest {
         ctxService = mock(PortfolioContextService.class);
         engine = mock(RecommendationEngine.class);
         technical = mock(TechnicalIndicatorService.class);
-        service = new TodaysActionsService(ctxService, engine, technical);
+        cashRepo = mock(com.marketai.ledger.repository.CashAccountRepository.class);
+        redemptionService = mock(com.marketai.redemption.service.RedemptionService.class);
+        // No cash accounts by default — sizing must then suggest no rupee amount at all.
+        when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(java.math.BigDecimal.ZERO);
+        when(cashRepo.findByUser_IdAndActiveTrueOrderByNameAsc(anyLong())).thenReturn(java.util.Collections.<com.marketai.ledger.entity.CashAccount>emptyList());
+        when(redemptionService.totalAwaitingRedeployment(anyLong())).thenReturn(java.math.BigDecimal.ZERO);
+        service = new TodaysActionsService(ctxService, engine, technical, cashRepo, redemptionService);
 
         when(ctxService.build(USER)).thenReturn(emptyContext());
         when(ctxService.getAllHoldings(USER)).thenReturn(Collections.<Holding>emptyList());

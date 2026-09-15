@@ -19,6 +19,7 @@ import { wealthApi } from '../../api/wealth';
 import type { PortfolioContext } from '../../api/wealth';
 import type { PortfolioSummary, HoldingDto } from '../../types';
 import { PieChart as RechartsPie, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
+import { tooltipStyle, CHART } from '../../theme/chartTheme';
 
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
@@ -87,12 +88,12 @@ export function PortfolioSection({ onValues, showSignal = false, only }: { onVal
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Briefcase size={14} className="text-brand" />
-          <h3 className="font-semibold text-white text-sm">Investments</h3>
+          <h3 className="font-semibold text-ink text-sm">Investments</h3>
           {cur > 0 && <span className="text-xs text-gray-500 font-mono"><Amount value={fmtINR(cur)} /></span>}
         </div>
         <div className="flex items-center gap-1.5">
           <button onClick={async () => { setRebuilding(true); try { await portfolioApi.rebuild(); await load(); } catch {} setRebuilding(false); }}
-            disabled={rebuilding} className="btn-ghost text-2xs px-2 py-1 text-yellow-400 hover:text-yellow-300"
+            disabled={rebuilding} className="btn-ghost text-2xs px-2 py-1 text-neutral hover:text-neutral"
             title="Recalculate all holdings from transaction history — fixes quantity/P&L mismatches">
             {rebuilding ? 'Rebuilding…' : 'Rebuild'}
           </button>
@@ -207,7 +208,7 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
       <div className="flex items-center justify-between mb-3 cursor-pointer" onClick={() => setOpen(o => !o)}>
         <div className="flex items-center gap-2">
           <Icon size={14} className="text-brand" />
-          <h3 className="font-semibold text-white text-sm">{title}</h3>
+          <h3 className="font-semibold text-ink text-sm">{title}</h3>
           <span className="text-2xs bg-brand/15 text-brand px-1.5 py-0.5 rounded-full">{holdings.length}</span>
           <span className="text-xs text-gray-500 font-mono">{mask(fmtINR(cur))}</span>
         </div>
@@ -242,8 +243,8 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
                 <tr>
                   <td>
                     {isMf
-                      ? <div className="text-white text-xs font-medium truncate max-w-[220px]">{h.name}</div>
-                      : <><div className="font-mono text-white text-xs font-medium">{h.symbol?.replace('.NS', '')}</div><div className="text-2xs text-gray-600 truncate max-w-[140px]">{h.name}</div></>}
+                      ? <div className="text-ink text-xs font-medium truncate max-w-[220px]">{h.name}</div>
+                      : <><div className="font-mono text-ink text-xs font-medium">{h.symbol?.replace('.NS', '')}</div><div className="text-2xs text-gray-600 truncate max-w-[140px]">{h.name}</div></>}
                     <div className="text-2xs text-gray-700">
                       {h.folio && <span>Folio {h.folio}</span>}
                       {h.folio && h.buyDate && <span> · </span>}
@@ -252,8 +253,8 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
                   </td>
                   <td className="text-right num text-gray-300 text-xs">{mask(h.quantity)}</td>
                   <td className="text-right num text-gray-400 text-xs">{mask(fmtINR(h.averageCost))}</td>
-                  <td className="text-right num text-white text-xs">{h.currentPrice ? mask(fmtINR(h.currentPrice)) : <span className="text-gray-700" title={isMf ? 'No live NAV — tap Edit to set it' : 'No live price'}>—</span>}</td>
-                  <td className="text-right num text-white text-xs">{mask(fmtINR(h.currentValue))}</td>
+                  <td className="text-right num text-ink text-xs">{h.currentPrice ? mask(fmtINR(h.currentPrice)) : <span className="text-gray-700" title={isMf ? 'No live NAV — tap Edit to set it' : 'No live price'}>—</span>}</td>
+                  <td className="text-right num text-ink text-xs">{mask(fmtINR(h.currentValue))}</td>
                   <td className="text-right num font-semibold text-xs">{isMf && !h.currentPrice
                     ? <span className="text-gray-600" title="At cost — set the latest NAV via Edit to see returns">at cost</span>
                     : <span className={h.pnlPercent >= 0 ? 'text-bull' : 'text-bear'}>{masked ? '••••••' : `${h.pnlPercent >= 0 ? '+' : ''}${h.pnlPercent?.toFixed(2)}%`}</span>}</td>
@@ -266,7 +267,7 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
                   )}
                   <td className="text-right whitespace-nowrap">
                     <button title="Correct quantity / avg cost / NAV" onClick={() => startEdit(h)}
-                      className="text-2xs px-1.5 py-0.5 rounded border border-surface-border text-gray-400 hover:text-white mr-1">Edit</button>
+                      className="text-2xs px-1.5 py-0.5 rounded border border-surface-border text-gray-400 hover:text-ink mr-1">Edit</button>
                     <button title="Record in your tracker — does not place a real order" onClick={() => { setEditId(null); sell.setSellId(sell.sellId === h.id ? null : h.id); sell.setSellQty(String(h.quantity)); sell.setSellPrice(String(h.currentPrice ?? h.averageCost)); }}
                       className="text-2xs px-1.5 py-0.5 rounded border border-bear/40 text-bear hover:bg-bear/10 mr-1">{isMf ? 'Redeem' : 'Sell'}</button>
                     <button title="Remove this holding and its transaction history — for incorrect or duplicate entries"
@@ -354,12 +355,12 @@ export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | nu
     otherAssetsValue: otherVal, epfValue: epfVal, loansOutstanding: loans,
     totalAssets: total, netWorth: net } = wealth;
   const pieData  = [
-    stockOnly > 0     ? { name: 'Stocks',        value: stockOnly,     fill: '#6d5efc' } : null,
-    mfCurrent > 0     ? { name: 'Mutual Funds',  value: mfCurrent,     fill: '#e84fd9' } : null,
-    fdVal > 0         ? { name: 'FD',            value: fdVal,         fill: '#00d68f' } : null,
-    rdVal > 0         ? { name: 'RD',            value: rdVal,         fill: '#ffb454' } : null,
-    epfVal > 0        ? { name: 'EPF',           value: epfVal,        fill: '#00c2ff' } : null,
-    otherVal > 0      ? { name: 'Other',         value: otherVal,      fill: '#f5c451' } : null,
+    stockOnly > 0     ? { name: 'Stocks',        value: stockOnly,     fill: '#3B82F6' } : null,
+    mfCurrent > 0     ? { name: 'Mutual Funds',  value: mfCurrent,     fill: '#8B5CF6' } : null,
+    fdVal > 0         ? { name: 'FD',            value: fdVal,         fill: '#10B981' } : null,
+    rdVal > 0         ? { name: 'RD',            value: rdVal,         fill: '#F59E0B' } : null,
+    epfVal > 0        ? { name: 'EPF',           value: epfVal,        fill: '#0EA5E9' } : null,
+    otherVal > 0      ? { name: 'Other',         value: otherVal,      fill: '#64748B' } : null,
   ].filter(Boolean) as { name: string; value: number; fill: string }[];
   if (total === 0) return null;
   return (
@@ -368,13 +369,13 @@ export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | nu
         <div className="flex items-center gap-2.5">
           <div className="icon-badge-brand"><Banknote size={15} /></div>
           <div>
-            <h3 className="font-bold text-white text-sm">Net Worth Summary</h3>
+            <h3 className="font-bold text-ink text-sm">Net Worth Summary</h3>
             <p className="text-2xs text-gray-500">Everything you own, minus what you owe</p>
           </div>
         </div>
         <button onClick={toggleMasked} title={masked ? 'Show wealth' : 'Hide wealth'}
           className={`flex items-center gap-1.5 text-2xs font-semibold px-2.5 py-1.5 rounded-lg transition-colors shrink-0 ${
-            masked ? 'text-gray-400 hover:text-white hover:bg-surface-hover' : 'text-brand-light bg-brand/10'
+            masked ? 'text-gray-400 hover:text-ink hover:bg-surface-hover' : 'text-brand-light bg-brand/10'
           }`}>
           {masked ? <Eye size={13} /> : <EyeOff size={13} />}
           {masked ? 'Show' : 'Hide'} wealth
@@ -400,7 +401,7 @@ export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | nu
               <Pie data={pieData} cx="50%" cy="50%" innerRadius={28} outerRadius={50} dataKey="value" nameKey="name" paddingAngle={3}>
                 {pieData.map((d, i) => <Cell key={i} fill={d.fill} stroke="none" />)}
               </Pie>
-              <Tooltip formatter={(v) => (masked ? '••••••' : fmtINR(Number(v ?? 0)))} contentStyle={{ background: '#0e0d16', border: '1px solid #232032', borderRadius: 10, fontSize: 11 }} />
+              <Tooltip formatter={(v) => (masked ? '••••••' : fmtINR(Number(v ?? 0)))} contentStyle={tooltipStyle} itemStyle={{ color: CHART.ink }} />
             </RechartsPie>
           </ResponsiveContainer>
           <div className="space-y-1">
@@ -408,7 +409,7 @@ export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | nu
               <div key={d.name} className="flex items-center gap-2 text-2xs">
                 <div className="w-2 h-2 rounded-full shrink-0" style={{ background: d.fill }} />
                 <span className="text-gray-400">{d.name}</span>
-                <span className="text-white font-mono ml-2">{masked ? '••••••' : fmtINR(d.value)}</span>
+                <span className="text-ink font-mono ml-2">{masked ? '••••••' : fmtINR(d.value)}</span>
                 <span className="text-gray-600">({masked ? '••••••' : ((d.value / total) * 100).toFixed(1)}%)</span>
               </div>
             ))}
@@ -445,16 +446,16 @@ function RiskScoreCard({ wealth }: { wealth: PortfolioContext | null }) {
   riskScore = Math.max(10, Math.min(90, riskScore));
 
   const riskLabel = riskScore > 65 ? 'High Risk' : riskScore > 40 ? 'Moderate' : 'Conservative';
-  const riskColor = riskScore > 65 ? 'text-bear' : riskScore > 40 ? 'text-yellow-400' : 'text-bull';
-  const riskBg    = riskScore > 65 ? 'bg-bear/10 border-bear/20' : riskScore > 40 ? 'bg-yellow-400/10 border-yellow-400/20' : 'bg-bull/10 border-bull/20';
+  const riskColor = riskScore > 65 ? 'text-bear' : riskScore > 40 ? 'text-neutral' : 'text-bull';
+  const riskBg    = riskScore > 65 ? 'bg-bear/10 border-bear/20' : riskScore > 40 ? 'bg-neutral/10 border-neutral/20' : 'bg-bull/10 border-bull/20';
 
   const epfPct = totalAssets > 0 ? (epfVal / totalAssets * 100) : 0;
 
   const allocData = [
-    { name: 'Equity', value: Math.round(equityPct), color: '#2563eb' },
-    { name: 'Debt (FD/RD)', value: Math.round(debtPct), color: '#00c47a' },
-    { name: 'EPF', value: Math.round(epfPct), color: '#00c2ff' },
-    { name: 'Other', value: Math.round(otherPct), color: '#e8a020' },
+    { name: 'Equity', value: Math.round(equityPct), color: CHART.brand },
+    { name: 'Debt (FD/RD)', value: Math.round(debtPct), color: CHART.bull },
+    { name: 'EPF', value: Math.round(epfPct), color: '#0EA5E9' },
+    { name: 'Other', value: Math.round(otherPct), color: CHART.neutral },
   ].filter(d => d.value > 0);
 
   const recommendations: string[] = [];
@@ -470,21 +471,21 @@ function RiskScoreCard({ wealth }: { wealth: PortfolioContext | null }) {
       <div className={`card border ${riskBg}`}>
         <div className="flex items-center gap-2 mb-2">
           <Shield size={14} className={riskColor} />
-          <h3 className="font-semibold text-white text-sm">Risk Score</h3>
+          <h3 className="font-semibold text-ink text-sm">Risk Score</h3>
         </div>
         <div className={`text-4xl font-bold font-mono ${riskColor} mb-1`}>{riskScore}</div>
         <div className={`text-xs font-semibold ${riskColor} mb-3`}>{riskLabel}</div>
         <div className="h-2 bg-surface-hover rounded-full overflow-hidden mb-4">
-          <div className="h-full rounded-full" style={{ width: `${riskScore}%`, background: riskScore > 65 ? '#f03e3e' : riskScore > 40 ? '#fbbf24' : '#00c47a' }} />
+          <div className="h-full rounded-full" style={{ width: `${riskScore}%`, background: riskScore > 65 ? CHART.bear : riskScore > 40 ? CHART.neutral : CHART.bull }} />
         </div>
         <div className="space-y-1.5">
           <div className="flex justify-between text-2xs">
             <span className="text-gray-500">Equity exposure</span>
-            <span className="text-white font-mono">{maskText(`${equityPct.toFixed(1)}%`)}</span>
+            <span className="text-ink font-mono">{maskText(`${equityPct.toFixed(1)}%`)}</span>
           </div>
           <div className="flex justify-between text-2xs">
             <span className="text-gray-500">Debt/Fixed</span>
-            <span className="text-white font-mono">{maskText(`${debtPct.toFixed(1)}%`)}</span>
+            <span className="text-ink font-mono">{maskText(`${debtPct.toFixed(1)}%`)}</span>
           </div>
           <div className="flex justify-between text-2xs">
             <span className="text-gray-500">Loan burden</span>
@@ -497,7 +498,7 @@ function RiskScoreCard({ wealth }: { wealth: PortfolioContext | null }) {
       <div className="card">
         <div className="flex items-center gap-2 mb-3">
           <PieChart size={14} className="text-brand" />
-          <h3 className="font-semibold text-white text-sm">Asset Allocation</h3>
+          <h3 className="font-semibold text-ink text-sm">Asset Allocation</h3>
         </div>
         {allocData.length > 0 ? (
           <ResponsiveContainer width="100%" height={140}>
@@ -505,7 +506,7 @@ function RiskScoreCard({ wealth }: { wealth: PortfolioContext | null }) {
               <Pie data={allocData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={55}>
                 {allocData.map((e, i) => <Cell key={i} fill={e.color} />)}
               </Pie>
-              <Tooltip formatter={(v) => maskText(`${Number(v ?? 0)}%`)} contentStyle={{ background: '#1a1f2e', border: '1px solid #2a3040', fontSize: 11 }} />
+              <Tooltip formatter={(v) => maskText(`${Number(v ?? 0)}%`)} contentStyle={tooltipStyle} itemStyle={{ color: CHART.ink }} />
             </RechartsPie>
           </ResponsiveContainer>
         ) : (
@@ -525,8 +526,8 @@ function RiskScoreCard({ wealth }: { wealth: PortfolioContext | null }) {
       {/* Recommendations */}
       <div className="card">
         <div className="flex items-center gap-2 mb-3">
-          <AlertTriangle size={14} className="text-yellow-400" />
-          <h3 className="font-semibold text-white text-sm">Recommendations</h3>
+          <AlertTriangle size={14} className="text-neutral" />
+          <h3 className="font-semibold text-ink text-sm">Recommendations</h3>
         </div>
         <ul className="space-y-2">
           {recommendations.map((r, i) => (
@@ -577,11 +578,11 @@ export function Tab7RiskMatrix() {
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#00d68f] to-[#00b8d4] flex items-center justify-center text-white shadow-lift shrink-0">
+        <div className="w-11 h-11 rounded-2xl bg-bull/10 border border-bull/25 flex items-center justify-center text-bull shrink-0">
           <Shield size={20} />
         </div>
         <div>
-          <h2 className="text-xl font-bold text-white mb-0.5">Net Worth &amp; Risk</h2>
+          <h2 className="text-xl font-bold text-ink mb-0.5">Net Worth &amp; Risk</h2>
           <p className="text-gray-500 text-xs">Portfolio risk scoring, asset allocation and diversification analysis</p>
         </div>
       </div>
@@ -604,11 +605,11 @@ export function Tab7RiskMatrix() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div>
-          <h3 className="text-white font-semibold text-sm mb-3">Liabilities</h3>
+          <h3 className="text-ink font-semibold text-sm mb-3">Liabilities</h3>
           <LoanSection onRefresh={loadSummary} />
         </div>
         <div>
-          <h3 className="text-white font-semibold text-sm mb-3">Wealth Projections</h3>
+          <h3 className="text-ink font-semibold text-sm mb-3">Wealth Projections</h3>
           <WealthCalculator />
         </div>
       </div>

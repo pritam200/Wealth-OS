@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import com.marketai.common.quality.DataQuality;
 
 /**
  * A financial-analyst-style verdict that blends four transparent factors rather
@@ -39,14 +40,39 @@ public class AnalystService {
 
     // Configurable per the "Financial Intelligence Engine" requirement — tune weighting
     // without a code change. Must sum to 100; defaults match the original hardcoded model.
-    @org.springframework.beans.factory.annotation.Value("${app.recommendation.weights.technical:30}")
+    @org.springframework.beans.factory.annotation.Value("${app.recommendation.weights.technical:25}")
     private int weightTechnical;
-    @org.springframework.beans.factory.annotation.Value("${app.recommendation.weights.momentum:20}")
+    @org.springframework.beans.factory.annotation.Value("${app.recommendation.weights.momentum:15}")
     private int weightMomentum;
-    @org.springframework.beans.factory.annotation.Value("${app.recommendation.weights.valuation:20}")
+    @org.springframework.beans.factory.annotation.Value("${app.recommendation.weights.valuation:40}")
     private int weightValuation;
-    @org.springframework.beans.factory.annotation.Value("${app.recommendation.weights.sentiment:30}")
+    @org.springframework.beans.factory.annotation.Value("${app.recommendation.weights.sentiment:20}")
     private int weightSentiment;
+
+    /**
+     * The weights must sum to 100 or every composite is silently mis-scaled — weights summing
+     * to 90 shrink every score by a tenth, moving stocks across the BUY/HOLD/SELL thresholds
+     * with nothing reporting it. That requirement was previously only a comment in
+     * application.yml, which is documentation, not enforcement.
+     *
+     * Failing at startup is deliberate: a mis-weighted recommendation engine that runs is worse
+     * than one that refuses to, because its output is indistinguishable from a correct one.
+     */
+    @jakarta.annotation.PostConstruct
+    void validateWeights() {
+        int sum = weightTechnical + weightMomentum + weightValuation + weightSentiment;
+        if (sum != 100) {
+            throw new IllegalStateException(String.format(
+                "Recommendation weights must sum to 100 but sum to %d "
+                    + "(technical=%d, momentum=%d, valuation=%d, sentiment=%d). "
+                    + "Every composite score would be scaled by %.2f.",
+                sum, weightTechnical, weightMomentum, weightValuation, weightSentiment,
+                sum / 100.0));
+        }
+        if (weightTechnical < 0 || weightMomentum < 0 || weightValuation < 0 || weightSentiment < 0) {
+            throw new IllegalStateException("Recommendation weights cannot be negative");
+        }
+    }
 
     private static final String[] POS = {"surge","jump","gain","gains","profit","beat","beats","record","high",
         "upgrade","buy","bullish","rally","rallies","growth","wins","win","order","approval","strong","soar","rise","rises","outperform","expansion","acquire"};
@@ -64,7 +90,7 @@ public class AnalystService {
         // No usable price history → no honest composite is possible. Return an explicitly
         // unscored assessment rather than running the factor model over absent/limited inputs
         // and emitting a confident-looking BUY/HOLD/SELL from it.
-        if ("INSUFFICIENT".equals(ta.getDataQuality())) {
+        if (!DataQuality.of(ta.getDataQuality()).isUsable()) {
             List<String> why = new ArrayList<>();
             why.add(String.format("Only %d day(s) of price history stored for %s — indicators (RSI, MACD, moving averages, ATR) cannot be computed.",
                 ta.getBarsAvailable() != null ? ta.getBarsAvailable() : 0, base));
@@ -80,7 +106,7 @@ public class AnalystService {
                 .technicals(null).news(null)
                 .positives(new ArrayList<>()).risks(why)
                 .basis("Insufficient price history to compute technical indicators. Fetch history for this symbol, then re-run.")
-                .dataQuality("INSUFFICIENT").barsAvailable(ta.getBarsAvailable())
+                .dataQuality(DataQuality.INSUFFICIENT.wire()).barsAvailable(ta.getBarsAvailable())
                 .build();
         }
 
@@ -170,7 +196,7 @@ public class AnalystService {
         // State the ACTUAL number of bars behind this, not a fixed "~200 days" claim — the
         // window is whatever happens to be stored for this symbol and is frequently less.
         int bars = ta.getBarsAvailable() != null ? ta.getBarsAvailable() : 0;
-        String historyNote = "PARTIAL".equals(ta.getDataQuality())
+        String historyNote = DataQuality.of(ta.getDataQuality()).needsCaveat()
             ? String.format("%d days of price history (under 200, so the 200-DMA long-term filter was unavailable)", bars)
             : String.format("%d days of price history", bars);
         String basis = String.format(
@@ -224,7 +250,7 @@ public class AnalystService {
         try {
             String url = "https://news.google.com/rss/search?q=" +
                 java.net.URLEncoder.encode(query + " stock NSE", "UTF-8") + "&hl=en-IN&gl=IN&ceid=IN:en";
-            java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+            java.net.HttpURLConnection c = (java.net.HttpURLConnection) java.net.URI.create(url).toURL().openConnection();
             c.setConnectTimeout(5000); c.setReadTimeout(7000);
             c.setRequestProperty("User-Agent", "Mozilla/5.0");
             StringBuilder sb = new StringBuilder();

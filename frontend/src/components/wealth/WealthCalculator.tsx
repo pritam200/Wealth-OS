@@ -23,7 +23,7 @@ export function WealthCalculator() {
     <div className="card">
       <div className="flex items-center gap-2.5 mb-3">
         <div className="icon-badge-brand"><TrendingUp size={15} /></div>
-        <h3 className="font-bold text-white text-sm">Wealth Growth Calculator</h3>
+        <h3 className="font-bold text-ink text-sm">Wealth Growth Calculator</h3>
       </div>
       <div className="space-y-2 mb-4">
         <div><label className="stat-label block mb-1 text-2xs">Lump Sum / Current Investment (₹)</label>
@@ -31,7 +31,7 @@ export function WealthCalculator() {
         <div><label className="stat-label block mb-1 text-2xs">Monthly SIP / Savings (₹)</label>
           <input type="number" value={monthly} onChange={e => setMonthly(e.target.value)} className="input-field" /></div>
         <div>
-          <label className="stat-label block mb-1 text-2xs">Horizon: <span className="text-white font-semibold">{yrs} years</span></label>
+          <label className="stat-label block mb-1 text-2xs">Horizon: <span className="text-ink font-semibold">{yrs} years</span></label>
           <input type="range" min={1} max={30} value={years} onChange={e => setYears(e.target.value)} className="w-full accent-brand" />
           <div className="flex justify-between text-2xs text-gray-600 mt-0.5"><span>1Y</span><span>15Y</span><span>30Y</span></div>
         </div>
@@ -47,7 +47,7 @@ export function WealthCalculator() {
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div><div className="text-gray-500 text-2xs">Projected Corpus</div><div className={`font-bold ${s.color} text-sm`}>{fmtINR(corpus)}</div></div>
-                <div><div className="text-gray-500 text-2xs">Wealth Created</div><div className="font-medium text-white text-sm">{fmtINR(corpus - totalIn)}</div></div>
+                <div><div className="text-gray-500 text-2xs">Wealth Created</div><div className="font-medium text-ink text-sm">{fmtINR(corpus - totalIn)}</div></div>
               </div>
             </div>
           );

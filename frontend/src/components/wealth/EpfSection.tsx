@@ -54,7 +54,7 @@ export function EpfSection({ onRefresh }: { onRefresh?: () => void }) {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Landmark size={14} className="text-brand" />
-          <h3 className="font-semibold text-white text-sm">EPF / Provident Fund</h3>
+          <h3 className="font-semibold text-ink text-sm">EPF / Provident Fund</h3>
           {totalBal > 0 && <span className="text-xs text-gray-500 font-mono">{maskText(fmtINR(totalBal))}</span>}
         </div>
         <button onClick={() => setOpen(o => !o)} className="btn-ghost text-xs flex items-center gap-1"><Plus size={11} /> Add</button>
@@ -83,15 +83,15 @@ export function EpfSection({ onRefresh }: { onRefresh?: () => void }) {
         : items.map(e => (
           <div key={e.id} className="flex items-center justify-between py-1.5 border-b border-surface-border/40 last:border-0">
             <div className="min-w-0">
-              <span className="text-white text-xs font-medium">{e.employer || 'EPF'}</span>
+              <span className="text-ink text-xs font-medium">{e.employer || 'EPF'}</span>
               <span className="text-gray-600 text-xs ml-1.5">{maskText(`${e.rate}%`)} · {maskText(fmtINR(e.monthlyContribution))}/mo</span>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <div className="text-right">
-                <div className="num text-xs text-white">{maskText(fmtINR(e.currentBalance))}</div>
+                <div className="num text-xs text-ink">{maskText(fmtINR(e.currentBalance))}</div>
                 <div className="text-2xs text-gray-600">5Y → <span className="text-bull">{maskText(fmtINR(e.projected5Y))}</span></div>
               </div>
-              <button onClick={() => startEdit(e)} className="btn-icon text-gray-500 hover:text-white p-0.5" title="Edit EPF"><Edit2 size={11} /></button>
+              <button onClick={() => startEdit(e)} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit EPF"><Edit2 size={11} /></button>
               <button onClick={() => del(e.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
             </div>
           </div>

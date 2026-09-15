@@ -1,6 +1,6 @@
 package com.marketai.market.entity;
 
-import javax.persistence.*;
+import jakarta.persistence.*;
 import lombok.*;
 
 import java.math.BigDecimal;
@@ -24,7 +24,9 @@ public class MarketIndex {
     @Column(nullable = false, length = 100)
     private String name;
 
-    @Column(precision = 18, scale = 2)
+    // See OtherAsset: `value` is reserved in H2, so the identifier is quoted via Hibernate's
+    // portable backtick syntax. Column name unchanged.
+    @Column(name = "`value`", precision = 18, scale = 2)
     private BigDecimal value;
 
     @Column(precision = 18, scale = 2)

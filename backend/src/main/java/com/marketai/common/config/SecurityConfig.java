@@ -39,16 +39,20 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .authorizeHttpRequests(auth -> auth
-                        .antMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
-                        .antMatchers(
+                        .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers(
                                 "/api/auth/**",
                                 "/api/gmail/callback",
+                                // Google Cloud Pub/Sub calls this; it cannot carry a user JWT.
+                                // Protected instead by a shared secret in the query string
+                                // (app.gmail.push.verification-token), checked in the handler.
+                                "/api/gmail/push",
                                 "/api-docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
                                 "/actuator/health"
                         ).permitAll()
-                        .antMatchers("/api/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
                 .sessionManagement(session ->
@@ -60,8 +64,10 @@ public class SecurityConfig {
 
     @Bean
     public AuthenticationProvider authenticationProvider() {
-        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
-        provider.setUserDetailsService(userDetailsService);
+        // Spring Security 6.5 deprecated the no-arg constructor plus setUserDetailsService in
+        // favour of supplying the service at construction, so the provider cannot exist in a
+        // half-configured state.
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
         provider.setPasswordEncoder(passwordEncoder());
         return provider;
     }

@@ -1,6 +1,6 @@
 package com.marketai.income.entity;
 
-import javax.persistence.*;
+import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -26,8 +26,10 @@ public class Income {
     @Column(nullable = false, precision = 18, scale = 2)
     private BigDecimal amount;
 
+    // Stored as its display label via IncomeSourceConverter, so pre-enum rows read back
+    // unchanged while new writes are constrained to the canonical taxonomy.
     @Column(nullable = false, length = 50)
-    private String source; // Salary, Freelance, Dividend, Interest, Rental, Business, Other
+    private IncomeSource source;
 
     @Column(name = "income_date", nullable = false)
     private LocalDate incomeDate;

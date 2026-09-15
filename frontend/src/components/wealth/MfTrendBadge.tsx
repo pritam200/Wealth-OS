@@ -19,7 +19,7 @@ const NEXT_ACTION_META: Record<string, { label: string; tone: 'buy' | 'hold' | '
 const TONE: Record<string, { cls: string; Icon: any }> = {
   buy:   { cls: 'text-bull border-bull/40 bg-bull/10', Icon: TrendingUp },
   hold:  { cls: 'text-gray-300 border-surface-border bg-surface-hover', Icon: Minus },
-  watch: { cls: 'text-yellow-400 border-yellow-400/40 bg-yellow-400/10', Icon: AlertTriangle },
+  watch: { cls: 'text-neutral border-neutral/40 bg-neutral/10', Icon: AlertTriangle },
   sell:  { cls: 'text-bear border-bear/40 bg-bear/10', Icon: AlertTriangle },
   // Dashed + unfilled + dimmer than `hold`, so "nothing to do" reads differently from
   // "we couldn't analyse this".

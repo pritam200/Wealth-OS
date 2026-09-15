@@ -4,16 +4,11 @@ import { expenseApi, EXPENSE_CATEGORIES } from '../../api/expense';
 import type { ExpenseResponse, ExpenseSummary } from '../../api/expense';
 import { useMaskedText } from '../shared/Amount';
 import { TransactionDetail } from '../shared/TransactionDetail';
+import { categoryColor } from '../../theme/chartTheme';
 
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
 const today = () => new Date().toISOString().slice(0, 10);
-
-const CAT_COLORS: Record<string, string> = {
-  Food: '#e8a020', Travel: '#2563eb', Utilities: '#8b5cf6',
-  Entertainment: '#f59e0b', Health: '#00c47a', Shopping: '#f03e3e',
-  EMI: '#ef4444', Investment: '#00b8d9', Other: '#6b7280',
-};
 
 export function ExpenseSection() {
   const maskText = useMaskedText();
@@ -83,7 +78,7 @@ export function ExpenseSection() {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <div className="icon-badge-bear"><ShoppingCart size={15} /></div>
-          <h3 className="font-bold text-white text-sm">Expenses</h3>
+          <h3 className="font-bold text-ink text-sm">Expenses</h3>
           {items.length > 0 && <span className="badge-bear">{items.length}</span>}
         </div>
         <div className="flex items-center gap-2">
@@ -139,12 +134,12 @@ export function ExpenseSection() {
             <div className="space-y-1">
               {catEntries.map(([cat, amt]) => {
                 const pct = total > 0 ? (amt / total * 100) : 0;
-                const color = CAT_COLORS[cat] ?? '#6b7280';
+                const color = categoryColor(cat);
                 return (
                   <div key={cat}>
                     <div className="flex justify-between text-2xs mb-0.5">
                       <span className="text-gray-400">{cat}</span>
-                      <span className="text-white font-mono">{maskText(fmtINR(amt))} <span className="text-gray-600">({maskText(`${pct.toFixed(0)}%`)})</span></span>
+                      <span className="text-ink font-mono">{maskText(fmtINR(amt))} <span className="text-gray-600">({maskText(`${pct.toFixed(0)}%`)})</span></span>
                     </div>
                     <div className="h-1 bg-surface-hover rounded-full overflow-hidden">
                       <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
@@ -169,14 +164,14 @@ export function ExpenseSection() {
                      onClick={() => setDetail(e)}>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: CAT_COLORS[e.category] ?? '#6b7280' }} />
-                      <span className="text-white text-xs font-medium truncate">{displayName}</span>
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: categoryColor(e.category) }} />
+                      <span className="text-ink text-xs font-medium truncate">{displayName}</span>
                     </div>
                     <div className="text-2xs text-gray-600 ml-3 truncate">{subtitle}</div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
                     <span className="text-bear text-xs font-mono font-semibold">{maskText(fmtINR(e.amount))}</span>
-                    <button onClick={(ev) => { ev.stopPropagation(); startEdit(e); }} className="btn-icon text-gray-500 hover:text-white p-0.5" title="Edit expense"><Edit2 size={11} /></button>
+                    <button onClick={(ev) => { ev.stopPropagation(); startEdit(e); }} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit expense"><Edit2 size={11} /></button>
                     <button onClick={(ev) => { ev.stopPropagation(); del(e.id); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                   </div>
                 </div>
@@ -191,7 +186,7 @@ export function ExpenseSection() {
           open={!!detail}
           onClose={() => setDetail(null)}
           title={detail.merchant || detail.description}
-          badgeColor="#f03e3e"
+          badgeColor={categoryColor(detail.category)}
           badgeLabel={detail.category}
           amount={detail.amount}
           fields={[

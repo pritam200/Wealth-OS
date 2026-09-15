@@ -8,7 +8,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
-import javax.annotation.PostConstruct;
+import jakarta.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -29,7 +29,11 @@ import java.util.concurrent.atomic.AtomicReference;
 @Slf4j
 public class AmfiNavService {
 
-    private static final String NAV_URL = "https://www.amfiindia.com/spages/NAVAll.txt";
+    // www.amfiindia.com now 302-redirects here. WebClient does not follow redirects by
+    // default, so the old URL silently yielded a 169-byte HTML "Object Moved" stub that
+    // parsed to zero schemes. Pointing at the canonical host directly; redirect following is
+    // also enabled below so a future move degrades to a log line rather than silence.
+    private static final String NAV_URL = "https://portal.amfiindia.com/spages/NAVAll.txt";
     private static final DateTimeFormatter AMFI_DATE = DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH);
 
     private final WebClient.Builder webClientBuilder;
@@ -43,15 +47,30 @@ public class AmfiNavService {
     @Scheduled(cron = "0 30 21 * * *") // AMFI publishes the day's NAV in the evening
     public void refresh() {
         try {
-            String raw = webClientBuilder.build().get().uri(NAV_URL)
+            String raw = webClientBuilder
+                .clientConnector(new org.springframework.http.client.reactive.ReactorClientHttpConnector(
+                    reactor.netty.http.client.HttpClient.create().followRedirect(true)))
+                .build().get().uri(NAV_URL)
                 .header("User-Agent", "Mozilla/5.0")
                 .retrieve().bodyToMono(String.class).block();
-            if (raw == null) return;
-            List<AmfiNavResult> parsed = parse(raw);
-            if (!parsed.isEmpty()) {
-                cache.set(parsed);
-                log.info("AMFI NAV refresh: loaded {} schemes", parsed.size());
+
+            // Every failure path below logs. Previously a null or unparseable body returned
+            // silently, which made "AMFI is down", "the URL moved" and "this never ran" all
+            // look identical in the logs — the feed was broken for an unknown length of time
+            // because nothing said so.
+            if (raw == null) {
+                log.warn("AMFI NAV refresh: empty response from {}", NAV_URL);
+                return;
             }
+            List<AmfiNavResult> parsed = parse(raw);
+            if (parsed.isEmpty()) {
+                log.warn("AMFI NAV refresh: {} bytes returned but no scheme rows parsed — "
+                       + "the feed format or URL has probably changed. First 120 chars: {}",
+                    raw.length(), raw.substring(0, Math.min(120, raw.length())).replaceAll("\\s+", " "));
+                return;
+            }
+            cache.set(parsed);
+            log.info("AMFI NAV refresh: loaded {} schemes", parsed.size());
         } catch (Exception e) {
             log.warn("AMFI NAV fetch failed: {}", e.getMessage());
         }
@@ -75,6 +94,7 @@ public class AmfiNavService {
         String category = null;
         String schemeType = null;
         String amc = null;
+        int idxName = -1, idxNav = -1, idxDate = -1, skipped = 0;
 
         for (String rawLine : raw.split("\n")) {
             String line = rawLine.trim();
@@ -95,22 +115,62 @@ public class AmfiNavService {
             }
 
             String[] f = line.split(";");
-            if (f.length < 6) continue; // malformed row
+
+            // The header row tells us where each column actually is. AMFI has changed this
+            // layout before — it gained "Plan" and "Option" columns, which shifted NAV from
+            // index 4 to 6 and silently broke a parser that hard-coded positions. Binding to
+            // names instead means the next added column is harmless.
+            if (isHeaderRow(f)) {
+                idxName = indexOf(f, "Scheme Name");
+                idxNav  = indexOf(f, "Net Asset Value");
+                idxDate = indexOf(f, "Date");
+                continue;
+            }
+
+            if (f.length < 4) continue; // too short to be a scheme row
+            int navCol  = idxNav  >= 0 ? idxNav  : f.length - 2;   // NAV and Date are the last
+            int dateCol = idxDate >= 0 ? idxDate : f.length - 1;   // two columns in every layout
+            int nameCol = idxName >= 0 ? idxName : 3;
+            if (navCol >= f.length || dateCol >= f.length || nameCol >= f.length) continue;
+
             try {
-                BigDecimal nav = new BigDecimal(f[4].trim());
-                LocalDate date = LocalDate.parse(f[5].trim(), AMFI_DATE);
+                BigDecimal nav = new BigDecimal(f[navCol].trim());
+                LocalDate date = LocalDate.parse(f[dateCol].trim(), AMFI_DATE);
                 out.add(AmfiNavResult.builder()
-                    .schemeCode(f[0].trim()).schemeName(f[3].trim()).nav(nav).asOf(date)
+                    .schemeCode(f[0].trim()).schemeName(f[nameCol].trim()).nav(nav).asOf(date)
                     .category(category)
                     .schemeType(schemeType)
                     .amc(amc)
                     .categoryBucket(MfCategoryBucket.from(category))
                     .build());
-            } catch (Exception ignored) {
-                // not a data row (the column header line, or a malformed row) — skip
+            } catch (Exception e) {
+                skipped++;
             }
         }
+
+        // A handful of skips is normal (blank or in-progress rows). Most rows failing means
+        // the format moved again, and that must be loud — this exact failure previously
+        // showed up as an empty cache and no log line at all.
+        if (skipped > 0 && skipped > out.size()) {
+            log.warn("AMFI parse: skipped {} unparseable rows vs {} parsed — check the feed layout.",
+                skipped, out.size());
+        }
         return out;
+    }
+
+    /** True for the column-header line, identified by its labels rather than its position. */
+    private static boolean isHeaderRow(String[] f) {
+        for (String c : f) {
+            if (c != null && c.trim().equalsIgnoreCase("Net Asset Value")) return true;
+        }
+        return false;
+    }
+
+    private static int indexOf(String[] f, String label) {
+        for (int i = 0; i < f.length; i++) {
+            if (f[i] != null && f[i].trim().equalsIgnoreCase(label)) return i;
+        }
+        return -1;
     }
 
     /**

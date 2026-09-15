@@ -81,17 +81,17 @@ export function Tab14Dividends() {
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-yellow-500 to-amber-600 flex items-center justify-center text-white shadow-lift shrink-0">
+          <div className="w-11 h-11 rounded-2xl bg-neutral/10 border border-neutral/25 flex items-center justify-center text-neutral shrink-0">
             <Coins size={20} />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white mb-0.5">Dividends</h2>
+            <h2 className="text-xl font-bold text-ink mb-0.5">Dividends</h2>
             <p className="text-gray-500 text-sm">Track dividend income from your stock and mutual fund holdings</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setYear(y => y - 1)} className="btn-icon"><ChevronLeft size={14} /></button>
-          <span className="text-sm text-white font-semibold w-14 text-center">{year}</span>
+          <span className="text-sm text-ink font-semibold w-14 text-center">{year}</span>
           <button onClick={() => setYear(y => y + 1)} className="btn-icon"><ChevronRight size={14} /></button>
           <button onClick={() => setOpen(o => !o)} className="btn-primary flex items-center gap-1.5 text-xs ml-2">
             <Plus size={13} /> Add Dividend
@@ -115,7 +115,7 @@ export function Tab14Dividends() {
       {/* Add form */}
       {open && (
         <div className="card space-y-3">
-          <h4 className="text-sm font-semibold text-white">Record a Dividend</h4>
+          <h4 className="text-sm font-semibold text-ink">Record a Dividend</h4>
           <div className="grid grid-cols-3 gap-3">
             <input value={f.description} onChange={e => setF(x => ({ ...x, description: e.target.value }))}
               placeholder="Company name (e.g. TCS)" className="input-field text-sm" />
@@ -137,12 +137,12 @@ export function Tab14Dividends() {
         {/* Dividend list */}
         <div className="lg:col-span-2 card">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="section-title mb-0"><Coins size={15} className="text-yellow-400" /> Dividend History</h3>
+            <h3 className="section-title mb-0"><Coins size={15} className="text-neutral" /> Dividend History</h3>
             <div className="flex gap-1.5">
               {([['all', 'All'], ['quarter', 'This Quarter'], ['month', 'This Month']] as const).map(([key, label]) => (
                 <button key={key} onClick={() => setFilter(key)}
                   className={`px-3 py-1.5 rounded text-xs font-medium transition-all ${
-                    filter === key ? 'bg-yellow-500/20 text-yellow-400' : 'bg-surface-hover text-gray-500 hover:text-gray-300'
+                    filter === key ? 'bg-neutral/20 text-neutral' : 'bg-surface-hover text-gray-500 hover:text-gray-300'
                   }`}>
                   {label}
                 </button>
@@ -173,7 +173,7 @@ export function Tab14Dividends() {
                     return (
                       <tr key={d.id}>
                         <td>
-                          <div className="text-white text-xs font-medium">{company}</div>
+                          <div className="text-ink text-xs font-medium">{company}</div>
                           {d.payer && d.payer !== company && (
                             <div className="text-2xs text-gray-600">{d.payer}</div>
                           )}
@@ -182,7 +182,7 @@ export function Tab14Dividends() {
                           {format(new Date(d.incomeDate), 'dd MMM yyyy')}
                         </td>
                         <td className="text-right">
-                          <span className="text-yellow-400 font-mono font-semibold text-sm">{maskText(fmtINR(d.amount))}</span>
+                          <span className="text-neutral font-mono font-semibold text-sm">{maskText(fmtINR(d.amount))}</span>
                         </td>
                         <td className="text-center">
                           <span className={`badge text-2xs ${isAuto ? 'badge-brand' : 'badge-neutral'}`}>
@@ -206,7 +206,7 @@ export function Tab14Dividends() {
         {/* Sidebar — by company & monthly breakdown */}
         <div className="space-y-4">
           <div className="card">
-            <h3 className="section-title"><Building2 size={15} className="text-yellow-400" /> By Company</h3>
+            <h3 className="section-title"><Building2 size={15} className="text-neutral" /> By Company</h3>
             {companySorted.length === 0 ? (
               <p className="text-gray-600 text-xs text-center py-4">No data yet.</p>
             ) : (
@@ -214,10 +214,10 @@ export function Tab14Dividends() {
                 {companySorted.map(([co, data]) => (
                   <div key={co} className="flex items-center justify-between py-1.5">
                     <div>
-                      <div className="text-white text-xs font-medium">{co}</div>
+                      <div className="text-ink text-xs font-medium">{co}</div>
                       <div className="text-2xs text-gray-600">{data.count} payment{data.count > 1 ? 's' : ''}</div>
                     </div>
-                    <span className="text-yellow-400 font-mono text-xs font-semibold">{maskText(fmtINR(data.total))}</span>
+                    <span className="text-neutral font-mono text-xs font-semibold">{maskText(fmtINR(data.total))}</span>
                   </div>
                 ))}
               </div>
@@ -225,7 +225,7 @@ export function Tab14Dividends() {
           </div>
 
           <div className="card">
-            <h3 className="section-title"><Calendar size={15} className="text-yellow-400" /> Monthly Breakdown</h3>
+            <h3 className="section-title"><Calendar size={15} className="text-neutral" /> Monthly Breakdown</h3>
             {monthSorted.length === 0 ? (
               <p className="text-gray-600 text-xs text-center py-4">No data yet.</p>
             ) : (
@@ -236,10 +236,10 @@ export function Tab14Dividends() {
                     <div key={month}>
                       <div className="flex items-center justify-between text-xs mb-0.5">
                         <span className="text-gray-400">{format(new Date(month + '-01'), 'MMM yyyy')}</span>
-                        <span className="text-yellow-400 font-mono">{maskText(fmtINR(amt))}</span>
+                        <span className="text-neutral font-mono">{maskText(fmtINR(amt))}</span>
                       </div>
                       <div className="h-1.5 bg-surface-hover rounded-full overflow-hidden">
-                        <div className="h-full bg-yellow-500/60 rounded-full" style={{ width: `${Math.max(pct, 2)}%` }} />
+                        <div className="h-full bg-neutral/60 rounded-full" style={{ width: `${Math.max(pct, 2)}%` }} />
                       </div>
                     </div>
                   );

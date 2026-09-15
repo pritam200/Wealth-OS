@@ -1,0 +1,18 @@
+stateDiagram-v2
+    [*] --> DISCOVERED
+    DISCOVERED --> PROCESSING
+    PROCESSING --> PASSWORD_RESOLVED: encrypted PDF unlocked
+    PROCESSING --> FAILED: unrecoverable
+    PASSWORD_RESOLVED --> PARSED
+    PROCESSING --> PARSED
+    PARSED --> VALIDATED: arithmetic + span checks pass
+    PARSED --> AMBIGUOUS: multiple plausible readings
+    PARSED --> REQUIRES_REVIEW: confidence below threshold
+    VALIDATED --> IMPORTED
+    VALIDATED --> DUPLICATE: economic identity known
+    AMBIGUOUS --> REQUIRES_REVIEW
+    REQUIRES_REVIEW --> IMPORTED: human ACCEPT/EDIT
+    REQUIRES_REVIEW --> FAILED: human REJECT
+    FAILED --> DISCOVERED: retry
+    IMPORTED --> [*]
+    DUPLICATE --> [*]

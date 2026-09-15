@@ -1,0 +1,8 @@
+flowchart LR
+    Q["Query: amount at merchant via route"] --> ROUTE{"RouteEligibility"}
+    ROUTE -->|"UPI + non-RuPay"| EXCL["EXCLUDED"]
+    ROUTE -->|"blocked txn type"| EXCL
+    ROUTE -->|eligible| SETS["EligibleSpendSet by PURPOSE"]
+    SETS --> CTR["UtilizationCounter<br/>4 counters, 4 clocks"]
+    CTR --> MV["Marginal value"]
+    MV --> BAND["Confidence band"]

@@ -38,11 +38,11 @@ export function RegisterPage() {
       <div className="w-full max-w-md">
         <div className="flex items-center justify-center gap-3 mb-8">
           <TrendingUp size={28} className="text-brand" />
-          <span className="text-2xl font-bold text-white">MarketAI</span>
+          <span className="text-2xl font-bold text-ink">MarketAI</span>
         </div>
 
         <div className="card">
-          <h1 className="text-xl font-semibold text-white mb-6">Create Account</h1>
+          <h1 className="text-xl font-semibold text-ink mb-6">Create Account</h1>
 
           {error && (
             <div className="bg-bear/10 border border-bear/30 text-bear text-sm px-4 py-3 rounded-lg mb-4">

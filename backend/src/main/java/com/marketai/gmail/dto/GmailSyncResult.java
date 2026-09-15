@@ -13,6 +13,7 @@ public class GmailSyncResult {
     private List<SyncLogEntry> logEntries;
     private String error;
     private ReconciliationReport reconciliation;
+    private GmailSyncSummaryDto stats;
 
     @Data @Builder
     public static class ReconciliationReport {

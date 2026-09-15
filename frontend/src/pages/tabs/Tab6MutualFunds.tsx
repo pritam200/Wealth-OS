@@ -50,7 +50,7 @@ function Benchmark({ label, cagr, color, highlight, sensitive }: { label: string
     <div className={`flex items-center justify-between py-2.5 px-2.5 rounded-lg border-b border-surface-border/50 last:border-0 ${highlight ? 'bg-brand-gradient-soft mb-1' : ''}`}>
       <div className="flex items-center gap-2">
         <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }} />
-        <span className={`text-sm ${highlight ? 'text-white font-medium' : 'text-gray-300'}`}>{label}</span>
+        <span className={`text-sm ${highlight ? 'text-ink font-medium' : 'text-gray-300'}`}>{label}</span>
       </div>
       <span className={`text-sm font-mono font-semibold ${cagr == null ? 'text-gray-600' : isNeg ? 'text-bear' : 'text-bull'}`}>{cagr == null ? 'n/a' : sensitive ? maskText(cagr) : cagr}</span>
     </div>
@@ -98,7 +98,7 @@ function AddMFModal({ portfolioId, onClose, onAdded }: {
       <div className="bg-surface-card border border-surface-border rounded-xl w-full max-w-lg shadow-2xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-border">
           <div>
-            <h3 className="font-semibold text-white">Add Mutual Fund Holding</h3>
+            <h3 className="font-semibold text-ink">Add Mutual Fund Holding</h3>
             <p className="text-2xs text-gray-600 mt-0.5">Log historical lump sum or SIP investment</p>
           </div>
           <button onClick={onClose} className="btn-icon"><X size={16} /></button>
@@ -189,9 +189,9 @@ function AddMFModal({ portfolioId, onClose, onAdded }: {
 
           {totalInvested > 0 && (
             <div className="bg-surface-hover rounded px-3 py-2 text-sm text-gray-400">
-              Total invested: <span className="text-white font-mono">{fmt(totalInvested)}</span>
+              Total invested: <span className="text-ink font-mono">{fmt(totalInvested)}</span>
               {form.units && form.nav && (
-                <span className="ml-3">Units: <span className="text-white font-mono">{Number(form.units).toFixed(3)}</span></span>
+                <span className="ml-3">Units: <span className="text-ink font-mono">{Number(form.units).toFixed(3)}</span></span>
               )}
             </div>
           )}
@@ -243,7 +243,7 @@ function TransactionHistoryModal({ holding, portfolioId, onClose }: {
       <div className="bg-surface-card border border-surface-border rounded-xl w-full max-w-2xl shadow-2xl max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-border shrink-0">
           <div>
-            <h3 className="font-semibold text-white">{holding.name || holding.symbol?.replace('.MF', '')}</h3>
+            <h3 className="font-semibold text-ink">{holding.name || holding.symbol?.replace('.MF', '')}</h3>
             <p className="text-2xs text-gray-500 mt-0.5">
               {holding.folio ? `Folio: ${holding.folio}` : holding.symbol}
               {holding.broker ? ` · ${holding.broker}` : ''}
@@ -256,7 +256,7 @@ function TransactionHistoryModal({ holding, portfolioId, onClose }: {
         <div className="px-6 py-3 border-b border-surface-border grid grid-cols-4 gap-3 text-center shrink-0">
           <div>
             <div className="text-2xs text-gray-500">Transactions</div>
-            <div className="text-sm font-semibold text-white">{filtered.length}</div>
+            <div className="text-sm font-semibold text-ink">{filtered.length}</div>
           </div>
           <div>
             <div className="text-2xs text-gray-500">Total Bought</div>
@@ -268,7 +268,7 @@ function TransactionHistoryModal({ holding, portfolioId, onClose }: {
           </div>
           <div>
             <div className="text-2xs text-gray-500">Units Held</div>
-            <div className="text-sm font-semibold text-white">{fmtUnits(holding.quantity)}</div>
+            <div className="text-sm font-semibold text-ink">{fmtUnits(holding.quantity)}</div>
           </div>
         </div>
 
@@ -313,7 +313,7 @@ function TransactionHistoryModal({ holding, portfolioId, onClose }: {
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className={`text-sm font-mono font-semibold ${t.type === 'BUY' ? 'text-white' : 'text-bear'}`}>
+                    <div className={`text-sm font-mono font-semibold ${t.type === 'BUY' ? 'text-ink' : 'text-bear'}`}>
                       {maskText(fmt(t.totalAmount))}
                     </div>
                     {t.charges ? <div className="text-2xs text-gray-600">Charges: {fmt(t.charges)}</div> : null}
@@ -424,14 +424,14 @@ function RecentPurchases({ onRefresh: externalRefresh }: { onRefresh?: () => voi
               {txns.map(t => (
                 <tr key={t.id}>
                   <td>
-                    <div className="font-mono text-white text-xs">{t.symbol?.replace('.MF', '')}</div>
+                    <div className="font-mono text-ink text-xs">{t.symbol?.replace('.MF', '')}</div>
                     <div className="text-2xs text-gray-500 truncate max-w-[180px]">{t.fundName}</div>
                   </td>
                   <td className="text-gray-300 text-xs whitespace-nowrap">
                     <Calendar size={11} className="inline mr-1 text-gray-500" />
                     {fmtDate(t.transactionDate)}
                   </td>
-                  <td className="text-right num text-white">{maskText(fmt(t.totalAmount))}</td>
+                  <td className="text-right num text-ink">{maskText(fmt(t.totalAmount))}</td>
                   <td className="text-right num text-gray-400">{fmtUnits(t.quantity)}</td>
                   <td className="text-right num text-gray-400">{fmtNav(t.price)}</td>
                   <td className="text-center">
@@ -520,11 +520,11 @@ export function Tab6MutualFunds() {
       {/* Page Header */}
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#e84fd9] to-[#ff8a5b] flex items-center justify-center text-white shadow-lift shrink-0">
+          <div className="w-11 h-11 rounded-2xl bg-bull/10 border border-bull/25 flex items-center justify-center text-bull shrink-0">
             <PieChart size={20} />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white mb-0.5">Mutual Funds</h2>
+            <h2 className="text-xl font-bold text-ink mb-0.5">Mutual Funds</h2>
             <p className="text-gray-500 text-sm">Holdings, recommendations, allocation and benchmark comparison</p>
           </div>
         </div>
@@ -581,7 +581,7 @@ export function Tab6MutualFunds() {
                       <tr key={h.id} onClick={() => setSelectedHolding(h)}
                         className="cursor-pointer hover:bg-surface-hover/80 transition-colors">
                         <td>
-                          <div className="font-mono text-white text-xs">{h.symbol?.replace('.MF', '')}</div>
+                          <div className="font-mono text-ink text-xs">{h.symbol?.replace('.MF', '')}</div>
                           <div className="text-xs text-gray-500 truncate max-w-[200px]">{h.name}</div>
                           {h.broker && <div className="text-2xs text-gray-600">{h.broker}</div>}
                         </td>
@@ -589,7 +589,7 @@ export function Tab6MutualFunds() {
                           {h.buyDate ? fmtDate(h.buyDate) : '—'}
                         </td>
                         <td className="text-right num text-gray-400">{maskText(fmt(h.investedValue))}</td>
-                        <td className="text-right num text-white">{maskText(fmt(h.currentValue))}</td>
+                        <td className="text-right num text-ink">{maskText(fmt(h.currentValue))}</td>
                         <td className={`text-right num font-semibold ${h.pnl >= 0 ? 'text-bull' : 'text-bear'}`}>
                           {maskText(fmtPct(h.pnlPercent))}
                         </td>
@@ -637,10 +637,10 @@ export function Tab6MutualFunds() {
             {/* Performance & Analytics (Benchmark Comparison) */}
             <CollapsibleSection title="Performance &amp; Analytics" icon={<BarChart3 size={15} className="text-brand-light" />}
               onRefresh={loadBenchmarks} loading={benchmarksLoading}>
-              <Benchmark label="Your Portfolio Return" cagr={fmtPct(cagr)} color="#6d5efc" highlight sensitive />
-              <Benchmark label="Nifty 50 (trailing)"    cagr={benchmarks?.nifty50 != null ? fmtPct(benchmarks.nifty50) : null} color="#00d68f" />
-              <Benchmark label="Sensex (trailing)"      cagr={benchmarks?.sensex != null ? fmtPct(benchmarks.sensex) : null} color="#00c2ff" />
-              <Benchmark label="Bank Nifty (trailing)"  cagr={benchmarks?.bankNifty != null ? fmtPct(benchmarks.bankNifty) : null} color="#ffb454" />
+              <Benchmark label="Your Portfolio Return" cagr={fmtPct(cagr)} color="#3B82F6" highlight sensitive />
+              <Benchmark label="Nifty 50 (trailing)"    cagr={benchmarks?.nifty50 != null ? fmtPct(benchmarks.nifty50) : null} color="#10B981" />
+              <Benchmark label="Sensex (trailing)"      cagr={benchmarks?.sensex != null ? fmtPct(benchmarks.sensex) : null} color="#0EA5E9" />
+              <Benchmark label="Bank Nifty (trailing)"  cagr={benchmarks?.bankNifty != null ? fmtPct(benchmarks.bankNifty) : null} color="#F59E0B" />
               <p className="text-xs text-gray-700 mt-3">Trailing return over available price history (~9-10 months of stored data), not a calendar year. Not investment advice.</p>
             </CollapsibleSection>
           </div>
@@ -662,7 +662,7 @@ export function Tab6MutualFunds() {
                   <div key={h.id} className="bg-surface-hover/50 rounded-lg p-3 border border-surface-border/50 hover:border-surface-border transition-colors">
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="min-w-0">
-                        <div className="font-mono text-white text-xs truncate">{h.symbol?.replace('.MF', '')}</div>
+                        <div className="font-mono text-ink text-xs truncate">{h.symbol?.replace('.MF', '')}</div>
                         <div className="text-2xs text-gray-500 truncate">{h.name}</div>
                       </div>
                       <MfTrendBadge symbol={h.symbol} fundName={h.name} investedValue={h.investedValue ?? 0}

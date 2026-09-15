@@ -1,27 +1,69 @@
 package com.marketai.gmail.scheduler;
 
-import com.marketai.gmail.service.GmailSyncService;
+import com.marketai.gmail.entity.GmailToken;
+import com.marketai.gmail.repository.GmailTokenRepository;
+import com.marketai.gmail.service.GmailWatchService;
+import com.marketai.sync.entity.SyncJobType;
+import com.marketai.sync.entity.SyncTrigger;
+import com.marketai.sync.service.SyncJobService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/**
+ * Timers for mail ingestion.
+ *
+ * This no longer runs syncs itself. It enqueues jobs, so the work happens on the worker pool
+ * with retries, progress and a durable record — previously a scheduled sync that failed
+ * halfway left nothing behind to show it had ever run.
+ */
 @Component
 @RequiredArgsConstructor
 public class GmailSyncScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(GmailSyncScheduler.class);
-    private final GmailSyncService syncService;
 
-    // Every 30 minutes
+    private final GmailTokenRepository tokenRepo;
+    private final SyncJobService jobService;
+    private final GmailWatchService watchService;
+
+    /**
+     * Safety-net poll. Gmail caps push notifications at one per second per user and silently
+     * drops the excess, so notifications are lossy by design and a periodic sweep is required
+     * even when push is healthy.
+     *
+     * Enqueues an incremental job; the runner falls back to a full scan by itself when no
+     * usable watermark exists.
+     */
     @Scheduled(fixedDelay = 1_800_000)
     public void scheduledSync() {
-        log.info("Running scheduled Gmail sync...");
+        for (GmailToken token : tokenRepo.findAll()) {
+            try {
+                if (token.getUser() == null) continue;
+                jobService.enqueue(token.getUser(), SyncJobType.GMAIL_INCREMENTAL_SYNC,
+                    SyncTrigger.SCHEDULED, null);
+            } catch (Exception e) {
+                log.error("Could not queue scheduled sync for token {}: {}", token.getId(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Renews Gmail push registrations.
+     *
+     * A watch expires after 7 days and then simply stops delivering, with no error and no
+     * callback — the single most dangerous silent-failure mode in this pipeline. Google
+     * recommends renewing daily, which is what this does; renewing well before expiry means a
+     * few consecutive failures still leave days of margin.
+     */
+    @Scheduled(fixedDelay = 86_400_000, initialDelay = 120_000)
+    public void renewWatches() {
         try {
-            syncService.syncAllUsers();
+            watchService.renewAllDueWatches();
         } catch (Exception e) {
-            log.error("Scheduled Gmail sync error: {}", e.getMessage());
+            log.error("Gmail watch renewal sweep failed: {}", e.getMessage());
         }
     }
 }

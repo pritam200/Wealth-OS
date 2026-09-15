@@ -1,7 +1,7 @@
 package com.marketai.gmail.entity;
 
 import lombok.*;
-import javax.persistence.*;
+import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 /**
@@ -14,7 +14,10 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "pending_pdfs",
        uniqueConstraints = @UniqueConstraint(columnNames = {"user_id", "gmail_message_id", "attachment_id"}),
-       indexes = @Index(name = "idx_ppdf_user_status", columnList = "user_id, status"))
+       indexes = {
+           @Index(name = "idx_ppdf_user_status", columnList = "user_id, status"),
+           @Index(name = "idx_ppdf_user_content", columnList = "user_id, content_hash")
+       })
 @Data @Builder @NoArgsConstructor @AllArgsConstructor
 public class PendingPdf {
 
@@ -47,6 +50,26 @@ public class PendingPdf {
     // the user as "format unknown" rather than silently omitted.
     @Column(length = 300)
     private String passwordHint;
+
+    /**
+     * SHA-256 of the decrypted document bytes — the attachment's content identity.
+     *
+     * <p>The table's unique constraint is (user, gmail_message_id, attachment_id), which only
+     * catches the same attachment on the same message. It does not catch the same statement
+     * arriving as a forward (new message id), re-sent by the provider, or attached to two
+     * threads — and Gmail is documented to return a different attachment_id for the same
+     * physical attachment across fetches, which is why the lookup code had already fallen back
+     * to matching on filename. Filename is no better: providers name statements
+     * "Statement.pdf" every month.
+     *
+     * <p>Content hashing is the only identifier that survives all of those, so a document that
+     * has already been parsed is recognised as DUPLICATE_DOCUMENT rather than re-imported.
+     *
+     * <p>Nullable: rows created before this column existed, and rows still locked (bytes never
+     * successfully decrypted), legitimately have no hash.
+     */
+    @Column(name = "content_hash", length = 64)
+    private String contentHash;
 
     @Builder.Default
     @Column(length = 20)

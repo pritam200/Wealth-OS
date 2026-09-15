@@ -1,3 +1,41 @@
+# ── Build output ──────────────────────────────────────────────────────────
+# Maven compiles into target/. Tracking it means every build produces a diff of
+# hundreds of .class files, which buries real changes and conflicts on every merge.
+backend/target/
+target/
+*.class
 
-# local secrets
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+node_modules/
+dist/
+
+# ── Secrets ───────────────────────────────────────────────────────────────
+# Never commit credentials. See docs/04-devops/ENVIRONMENT_VARIABLES.md for the
+# full list of variables this application expects to be supplied at runtime.
 gmail.env
+.env
+.env.local
+*.p12
+!backend/tools/*.sh
+credentials.json
+token.json
+
+# ── IDE ───────────────────────────────────────────────────────────────────
+# Editor state is per-developer. backend/.idea/compiler.xml in particular records
+# a local JDK path, so tracking it makes one machine's setup everyone's problem.
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# ── OS ────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Logs and scratch ──────────────────────────────────────────────────────
+*.log
+logs/
+docs/_build/

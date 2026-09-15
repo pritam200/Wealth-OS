@@ -66,7 +66,7 @@ export function RDSection({ onRefresh }: { onRefresh: () => void }) {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <div className="icon-badge-brand"><Landmark size={15} /></div>
-          <h3 className="font-bold text-white text-sm">Recurring Deposits</h3>
+          <h3 className="font-bold text-ink text-sm">Recurring Deposits</h3>
           {items.length > 0 && <span className="badge-neutral">{items.length}</span>}
         </div>
         <button onClick={() => setOpen(o => !o)} className="btn-secondary text-xs flex items-center gap-1"><Plus size={11} /> Add RD</button>
@@ -121,21 +121,21 @@ export function RDSection({ onRefresh }: { onRefresh: () => void }) {
           <div key={rd.id} className={`py-2 border-b border-surface-border/40 last:border-0 ${isClosed ? 'opacity-70' : ''}`}>
             <div className="flex items-center justify-between mb-1">
               <div className="min-w-0">
-                <span className="text-white text-xs font-medium">{rd.bank}</span>
+                <span className="text-ink text-xs font-medium">{rd.bank}</span>
                 <span className="text-gray-600 text-xs ml-1.5">{maskText(fmtINR(rd.monthlyAmount))}/mo · {maskText(`${rd.rate}%`)} · {rd.tenureMonths}m</span>
-                {rd.status === 'CLOSED' && <span className="ml-2 text-2xs bg-gray-700 text-gray-400 px-1 rounded">CLOSED</span>}
-                {isMatured && <span className="ml-2 text-2xs bg-yellow-400/15 text-yellow-400 px-1 rounded">Matured — action needed</span>}
+                {rd.status === 'CLOSED' && <span className="ml-2 pill-muted">CLOSED</span>}
+                {isMatured && <span className="ml-2 text-2xs bg-neutral/15 text-neutral px-1 rounded">Matured — action needed</span>}
                 {isRenewed && <span className="ml-2 text-2xs bg-bull/15 text-bull px-1 rounded">Matured ✓ Renewed</span>}
                 {predecessor && <div className="text-2xs text-gray-600 mt-0.5">← Renewed from {predecessor.bank} RD of {maskText(fmtINR(predecessor.monthlyAmount))}/mo</div>}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <div className="text-right">
-                  <div className="num text-xs text-white">{maskText(fmtINR(rd.totalDeposited))} → <span className="text-bull">{maskText(fmtINR(rd.actualMaturityAmount ?? rd.projectedCorpus))}</span></div>
+                  <div className="num text-xs text-ink">{maskText(fmtINR(rd.totalDeposited))} → <span className="text-bull">{maskText(fmtINR(rd.actualMaturityAmount ?? rd.projectedCorpus))}</span></div>
                   <div className="text-2xs text-gray-500">{rd.monthsElapsed}/{rd.tenureMonths} months</div>
                   {rd.status === 'CLOSED' && rd.closedDate && <div className="text-2xs text-gray-600">Closed {rd.closedDate}</div>}
                   {isRenewed && successor && <div className="text-2xs text-bull">→ Renewed into {maskText(fmtINR(successor.monthlyAmount))}/mo RD</div>}
                 </div>
-                {!isClosed && <button onClick={() => startEdit(rd)} className="btn-icon text-gray-500 hover:text-white p-0.5" title="Edit RD"><Edit2 size={11} /></button>}
+                {!isClosed && <button onClick={() => startEdit(rd)} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit RD"><Edit2 size={11} /></button>}
                 {!isClosed && (
                   <button onClick={() => setClosingId(rd.id === closingId ? null : rd.id)}
                     className="btn-icon text-gray-500 hover:text-bull p-0.5 text-2xs" title="Record RD closure in your tracker (no real bank action)">✓</button>

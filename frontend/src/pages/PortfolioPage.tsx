@@ -66,8 +66,8 @@ function AddHoldingModal({ portfolioId, onClose, onAdded }: {
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <div className="bg-surface-card border border-surface-border rounded-2xl w-full max-w-md shadow-2xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-border">
-          <h3 className="font-semibold text-white">Add Holding</h3>
-          <button onClick={onClose} className="text-gray-500 hover:text-white"><X size={18} /></button>
+          <h3 className="font-semibold text-ink">Add Holding</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-ink"><X size={18} /></button>
         </div>
         <div className="p-6 space-y-4">
           {error && <p className="text-bear text-sm bg-bear/10 px-3 py-2 rounded-lg">{error}</p>}
@@ -85,7 +85,7 @@ function AddHoldingModal({ portfolioId, onClose, onAdded }: {
                 {suggestions.map((s: any) => (
                   <button key={s.symbol} onClick={() => pick(s)}
                     className="w-full flex justify-between px-4 py-2.5 hover:bg-surface-hover text-left text-sm">
-                    <span className="font-mono text-white">{s.symbol}</span>
+                    <span className="font-mono text-ink">{s.symbol}</span>
                     <span className="text-gray-500 truncate ml-4">{s.name}</span>
                   </button>
                 ))}
@@ -191,7 +191,7 @@ export function PortfolioPage() {
       )}
 
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold text-white">Portfolio</h1>
+        <h1 className="text-2xl font-bold text-ink">Portfolio</h1>
         <div className="flex gap-2">
           {selected && (
             <button onClick={() => setShowAddHolding(true)} className="btn-primary flex items-center gap-2">
@@ -219,7 +219,7 @@ export function PortfolioPage() {
           {portfolios.map(p => (
             <button key={p.id} onClick={() => setSelected(p.id)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                selected === p.id ? 'bg-brand text-white' : 'bg-surface-card border border-surface-border text-gray-400 hover:text-white'
+                selected === p.id ? 'bg-brand text-white' : 'bg-surface-card border border-surface-border text-gray-400 hover:text-ink'
               }`}>
               {p.name}
             </button>
@@ -231,12 +231,12 @@ export function PortfolioPage() {
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { label: 'Total Invested', value: maskText(fmt(summary.totalInvested)), color: 'text-white' },
-              { label: 'Current Value', value: maskText(fmt(summary.currentValue)), color: 'text-white' },
+              { label: 'Total Invested', value: maskText(fmt(summary.totalInvested)), color: 'text-ink' },
+              { label: 'Current Value', value: maskText(fmt(summary.currentValue)), color: 'text-ink' },
               { label: 'Total P&L', value: maskText(fmt(summary.totalPnl)),
                 color: isPnlPositive ? 'text-bull' : 'text-bear',
                 sub: maskText(`${isPnlPositive ? '+' : ''}${summary.totalPnlPercent?.toFixed(2)}%`) },
-              { label: 'Holdings', value: String(summary.holdings?.length ?? 0), color: 'text-white' },
+              { label: 'Holdings', value: String(summary.holdings?.length ?? 0), color: 'text-ink' },
             ].map(s => (
               <div key={s.label} className="card">
                 <div className="stat-label">{s.label}</div>
@@ -248,7 +248,7 @@ export function PortfolioPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 card">
-              <h2 className="font-semibold text-white mb-4">Holdings</h2>
+              <h2 className="font-semibold text-ink mb-4">Holdings</h2>
               {loading ? (
                 <div className="animate-pulse space-y-2">
                   {[...Array(5)].map((_, i) => <div key={i} className="h-10 bg-surface-hover rounded" />)}
@@ -258,7 +258,7 @@ export function PortfolioPage() {
               )}
             </div>
             <div className="card">
-              <h2 className="font-semibold text-white mb-4">Allocation</h2>
+              <h2 className="font-semibold text-ink mb-4">Allocation</h2>
               {summary.allocation && summary.allocation.length > 0
                 ? <AllocationChart allocation={summary.allocation} />
                 : <div className="text-gray-600 text-sm text-center py-8">No holdings yet</div>

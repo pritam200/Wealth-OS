@@ -32,9 +32,9 @@ export function TransactionDetail({ open, onClose, title, badgeColor, badgeLabel
             <span className="px-2 py-0.5 rounded text-2xs font-semibold" style={{ backgroundColor: badgeColor + '22', color: badgeColor }}>
               {badgeLabel}
             </span>
-            <h3 className="text-white font-bold text-sm">{title}</h3>
+            <h3 className="text-ink font-bold text-sm">{title}</h3>
           </div>
-          <button onClick={onClose} className="btn-icon text-gray-500 hover:text-white"><X size={16} /></button>
+          <button onClick={onClose} className="btn-icon text-gray-500 hover:text-ink"><X size={16} /></button>
         </div>
 
         <div className="p-4">
@@ -49,7 +49,7 @@ export function TransactionDetail({ open, onClose, title, badgeColor, badgeLabel
             {fields.filter(f => f.value).map(f => (
               <div key={f.label} className="flex justify-between items-start gap-4 py-1.5 border-b border-surface-border/30 last:border-0">
                 <span className="text-2xs text-gray-500 shrink-0 w-28">{f.label}</span>
-                <span className="text-xs text-white text-right break-words">{f.value}</span>
+                <span className="text-xs text-ink text-right break-words">{f.value}</span>
               </div>
             ))}
           </div>

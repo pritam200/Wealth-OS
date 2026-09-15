@@ -19,9 +19,9 @@ const RATING: Record<string, { cls: string; Icon: any }> = {
 const NEXT_ACTION_TONE: Record<string, string> = {
   ACCUMULATE: 'text-bull border-bull/40 bg-bull/10', CONTINUE: 'text-bull border-bull/40 bg-bull/10',
   CONTINUE_SIP: 'text-bull border-bull/40 bg-bull/10', INCREASE_SIP: 'text-bull border-bull/40 bg-bull/10',
-  BOOK_PROFIT: 'text-yellow-400 border-yellow-400/40 bg-yellow-400/10', PARTIAL_PROFIT_BOOKING: 'text-yellow-400 border-yellow-400/40 bg-yellow-400/10',
+  BOOK_PROFIT: 'text-neutral border-neutral/40 bg-neutral/10', PARTIAL_PROFIT_BOOKING: 'text-neutral border-neutral/40 bg-neutral/10',
   EXIT: 'text-bear border-bear/40 bg-bear/10', FULL_REDEMPTION: 'text-bear border-bear/40 bg-bear/10', SWITCH_FUND: 'text-bear border-bear/40 bg-bear/10',
-  REVIEW: 'text-orange-400 border-orange-400/40 bg-orange-400/10', REBALANCE: 'text-orange-400 border-orange-400/40 bg-orange-400/10', PAUSE_SIP: 'text-orange-400 border-orange-400/40 bg-orange-400/10',
+  REVIEW: 'text-neutral border-neutral/40 bg-neutral/10', REBALANCE: 'text-neutral border-neutral/40 bg-neutral/10', PAUSE_SIP: 'text-neutral border-neutral/40 bg-neutral/10',
   HOLD: 'text-gray-300 border-surface-border bg-surface-hover',
 };
 const nextActionLabel = (a: string) => a.replace(/_/g, ' ').replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
@@ -53,7 +53,7 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <Gauge size={15} className="text-brand" />
-          <h3 className="font-semibold text-white text-sm">Analyst View — {a.displayName}</h3>
+          <h3 className="font-semibold text-ink text-sm">Analyst View — {a.displayName}</h3>
         </div>
         {insufficient ? (
           <span className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-lg border border-dashed border-gray-700 text-gray-500">
@@ -117,7 +117,7 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
           ].map(([l, v]) => (
             <div key={l as string} className="bg-surface-hover rounded p-2">
               <div className="text-2xs text-gray-600">{l}</div>
-              <div className="font-mono text-white text-xs font-semibold truncate">{v}</div>
+              <div className="font-mono text-ink text-xs font-semibold truncate">{v}</div>
             </div>
           ))}
         </div>
@@ -140,7 +140,7 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
             ].map(([l, v]) => (
               <div key={l as string} className="bg-surface-hover rounded p-2">
                 <div className="text-2xs text-gray-600">{l}</div>
-                <div className="font-mono text-white text-xs font-semibold">{v}</div>
+                <div className="font-mono text-ink text-xs font-semibold">{v}</div>
               </div>
             ))}
           </div>

@@ -8,7 +8,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>2.7.18</version>
+        <version>3.5.3</version>
     </parent>
 
     <groupId>com.marketai</groupId>
@@ -18,13 +18,16 @@
     <description>AI-powered stock market intelligence and portfolio analytics for Indian investors</description>
 
     <properties>
-        <java.version>8</java.version>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
-        <jjwt.version>0.11.5</jjwt.version>
-        <springdoc.version>1.7.0</springdoc.version>
-        <mapstruct.version>1.5.5.Final</mapstruct.version>
-        <lombok.version>1.18.30</lombok.version>
+        <java.version>25</java.version>
+        <!-- `release` rather than source/target: it also checks that no API newer than the
+             target is used, which source/target silently allow. -->
+        <maven.compiler.release>25</maven.compiler.release>
+        <jjwt.version>0.12.6</jjwt.version>
+        <!-- springdoc 2.x is the Spring Boot 3 / jakarta line; 1.x is Boot 2 only. -->
+        <springdoc.version>2.8.9</springdoc.version>
+        <mapstruct.version>1.6.3</mapstruct.version>
+        <!-- Lombok needs a recent build to parse JDK 25 class files. -->
+        <lombok.version>1.18.38</lombok.version>
     </properties>
 
     <dependencies>
@@ -84,7 +87,7 @@
         <!-- OpenAPI / Swagger -->
         <dependency>
             <groupId>org.springdoc</groupId>
-            <artifactId>springdoc-openapi-ui</artifactId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>${springdoc.version}</version>
         </dependency>
 
@@ -114,6 +117,15 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webflux</artifactId>
         </dependency>
+        <!-- Actuator: /actuator/health is referenced by SecurityConfig's permitAll allowlist and
+             by docs/04-devops/MONITORING_AND_LOGGING.md as the docker-compose healthcheck, but
+             the dependency was never added — the endpoint has never actually existed. Every
+             health check (Docker's 30s-interval probe, manual onboarding curl) was silently
+             hitting a 404-turned-500 (see GlobalExceptionHandler fix in the same commit). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
 
         <!-- Testing -->
         <dependency>
@@ -124,6 +136,15 @@
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Bytecode-level architecture rules. Used to enforce the ledger single-writer
+             invariant (see HoldingLedgerInvariantTest) — source-text grepping cannot tell
+             Holding.setQuantity from a request DTO's setQuantity, bytecode can. -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.4.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -158,12 +179,12 @@
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
-            <version>2.0.30</version>
+            <version>3.0.3</version>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
-            <artifactId>bcprov-jdk15on</artifactId>
-            <version>1.70</version>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.79</version>
         </dependency>
 
     </dependencies>
@@ -187,7 +208,21 @@
                             <artifactId>lombok</artifactId>
                         </exclude>
                     </excludes>
-                    <jvmArguments>-Djavax.net.ssl.trustStore=${project.basedir}/truststore.jks -Djavax.net.ssl.trustStorePassword=changeit</jvmArguments>
+                    <!-- Outbound HTTPS here is intercepted by a corporate TLS proxy
+                         ("Gainsight, Inc. Forward Trust CA"), so upstream certs are re-signed
+                         by a root that lives in the macOS keychain and NOT in any JDK cacerts
+                         bundle. The previous fix was a hand-built truststore.jks; reading the
+                         keychain directly is equivalent and doesn't go stale as the corporate
+                         CA rotates.
+
+                         KeychainStore alone is not enough: reactor-netty (WebClient) builds
+                         its own SslContext and ignores trustStoreType, so half the outbound
+                         calls still failed. A real truststore file is honoured by every client.
+
+                         truststore.p12 = JDK 25's own cacerts + the corporate roots, so public
+                         CAs keep working. Regenerate with tools/regen-truststore.sh when the
+                         JDK is upgraded or the corporate CA rotates. -->
+                    <jvmArguments>-Djavax.net.ssl.trustStore=${project.basedir}/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12</jvmArguments>
                 </configuration>
             </plugin>
             <plugin>
@@ -195,8 +230,11 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.14.0</version>
                 <configuration>
-                    <source>8</source>
-                    <target>8</target>
+                    <compilerArgs>
+                        <arg>-Xlint:deprecation</arg>
+                        <arg>-Xlint:unchecked</arg>
+                    </compilerArgs>
+                    <release>25</release>
                     <compilerArgs>
                         <arg>-parameters</arg>
                     </compilerArgs>

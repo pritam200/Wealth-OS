@@ -35,17 +35,17 @@ interface Action {
 const ACTION_META: Record<ActionKind, { label: string; cls: string; Icon: any }> = {
   ACCUMULATE:  { label: 'Accumulate',  cls: 'text-bull bg-bull/10 border-bull/30',       Icon: ArrowUpRight },
   CONTINUE:    { label: 'Continue',    cls: 'text-bull bg-bull/10 border-bull/30',       Icon: TrendingUp },
-  BOOK_PROFIT: { label: 'Book Profit', cls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30', Icon: TrendingDown },
+  BOOK_PROFIT: { label: 'Book Profit', cls: 'text-neutral bg-neutral/10 border-neutral/30', Icon: TrendingDown },
   EXIT:        { label: 'Exit',        cls: 'text-bear bg-bear/10 border-bear/30',       Icon: ArrowDownRight },
-  REVIEW:      { label: 'Review',      cls: 'text-orange-400 bg-orange-400/10 border-orange-400/30', Icon: Activity },
+  REVIEW:      { label: 'Review',      cls: 'text-neutral bg-neutral/10 border-neutral/30', Icon: Activity },
   HOLD:        { label: 'Hold',        cls: 'text-gray-400 bg-surface-hover border-surface-border', Icon: Minus },
   // MF-specific next actions (from RecommendationEngine.recommendMf)
   CONTINUE_SIP:           { label: 'Continue SIP',  cls: 'text-bull bg-bull/10 border-bull/30',       Icon: TrendingUp },
   INCREASE_SIP:           { label: 'Increase SIP',  cls: 'text-bull bg-bull/10 border-bull/30',       Icon: ArrowUpRight },
-  PAUSE_SIP:              { label: 'Pause SIP',     cls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30', Icon: Activity },
-  PARTIAL_PROFIT_BOOKING: { label: 'Book Partial Profit', cls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30', Icon: TrendingDown },
+  PAUSE_SIP:              { label: 'Pause SIP',     cls: 'text-neutral bg-neutral/10 border-neutral/30', Icon: Activity },
+  PARTIAL_PROFIT_BOOKING: { label: 'Book Partial Profit', cls: 'text-neutral bg-neutral/10 border-neutral/30', Icon: TrendingDown },
   FULL_REDEMPTION:        { label: 'Redeem',        cls: 'text-bear bg-bear/10 border-bear/30',       Icon: ArrowDownRight },
-  REBALANCE:              { label: 'Rebalance',     cls: 'text-orange-400 bg-orange-400/10 border-orange-400/30', Icon: Activity },
+  REBALANCE:              { label: 'Rebalance',     cls: 'text-neutral bg-neutral/10 border-neutral/30', Icon: Activity },
   SWITCH_FUND:            { label: 'Switch Fund',   cls: 'text-bear bg-bear/10 border-bear/30',       Icon: ArrowDownRight },
   // Not an action — the engine had nothing verifiable to work from, or the call failed.
   // Styled unlike Hold (dashed, unfilled, dimmer) so it can't be read as "nothing to do".
@@ -173,11 +173,11 @@ export function Tab9AiAdvisor() {
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#6d5efc] to-[#00c2ff] flex items-center justify-center text-white shadow-lift shrink-0">
+          <div className="w-11 h-11 rounded-2xl bg-brand/10 border border-brand/25 flex items-center justify-center text-brand-light shrink-0">
             <Brain size={20} />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white mb-0.5">AI Advisor</h2>
+            <h2 className="text-xl font-bold text-ink mb-0.5">AI Advisor</h2>
             <p className="text-gray-500 text-xs">Your action for today — continue, accumulate, or exit each position</p>
           </div>
         </div>
@@ -194,7 +194,7 @@ export function Tab9AiAdvisor() {
           ].map(([label, idx]: any) => idx && (
             <div key={label} className="card py-2 px-3 flex items-center gap-3">
               <span className="text-2xs text-gray-500 uppercase tracking-wider">{label}</span>
-              <span className="text-sm font-mono text-white">{idx.value?.toLocaleString('en-IN')}</span>
+              <span className="text-sm font-mono text-ink">{idx.value?.toLocaleString('en-IN')}</span>
               <span className={`text-xs font-mono ${idx.changePercent >= 0 ? 'text-bull' : 'text-bear'}`}>
                 {idx.changePercent >= 0 ? '+' : ''}{idx.changePercent?.toFixed(2)}%
               </span>
@@ -229,7 +229,7 @@ export function Tab9AiAdvisor() {
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2.5">
                 <div className="icon-badge-brand"><Sparkles size={15} /></div>
-                <h3 className="font-bold text-white text-sm">AI Portfolio Review</h3>
+                <h3 className="font-bold text-ink text-sm">AI Portfolio Review</h3>
               </div>
               {!aiReview && (
                 <button onClick={runAiReview} disabled={aiLoading} className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5">
@@ -272,7 +272,7 @@ export function Tab9AiAdvisor() {
                     <div className={isStock ? 'cursor-pointer' : ''} onClick={() => isStock && setExpanded(open ? null : a.holding.id)}>
                       <div className="flex items-start justify-between mb-1.5">
                         <div className="min-w-0">
-                          <div className="font-mono text-white text-sm font-semibold">{a.holding.symbol.replace('.NS', '').replace('.MF', '')}</div>
+                          <div className="font-mono text-ink text-sm font-semibold">{a.holding.symbol.replace('.NS', '').replace('.MF', '')}</div>
                           <div className="text-2xs text-gray-600 truncate max-w-[180px]">{a.holding.name}</div>
                         </div>
                         <span className={`text-2xs font-semibold px-2 py-0.5 rounded border flex items-center gap-1 shrink-0 ${meta.cls}`}>
@@ -288,8 +288,8 @@ export function Tab9AiAdvisor() {
                         {a.trend && <span className="text-gray-600">{a.trend.replace(/_/g, ' ').toLowerCase()}</span>}
                         {a.rsi != null && <span className="text-gray-600">RSI {a.rsi.toFixed(0)}</span>}
                       </div>
-                      <p className="text-xs text-gray-400 leading-snug"><span className="text-white font-medium">{a.headline}.</span> {a.reason}</p>
-                      {a.taxImpact && <p className="text-2xs text-yellow-400/90 mt-1">{a.taxImpact}</p>}
+                      <p className="text-xs text-gray-400 leading-snug"><span className="text-ink font-medium">{a.headline}.</span> {a.reason}</p>
+                      {a.taxImpact && <p className="text-2xs text-neutral/90 mt-1">{a.taxImpact}</p>}
                       {isStock && (
                         <div className="text-2xs text-brand mt-1.5 flex items-center gap-1">
                           {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}

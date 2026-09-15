@@ -50,10 +50,19 @@ public class TodaysActionsService {
     private final PortfolioContextService portfolioContextService;
     private final RecommendationEngine recommendationEngine;
     private final TechnicalIndicatorService technicalIndicatorService;
+    private final com.marketai.ledger.repository.CashAccountRepository cashAccountRepository;
+    private final com.marketai.redemption.service.RedemptionService redemptionService;
 
     @Transactional(readOnly = true)
     public TodaysActionsResponse build(Long userId) {
         PortfolioContext ctx = portfolioContextService.build(userId);
+
+        // Cash the advisory may size against. Tracked balances are authoritative; redemption
+        // proceeds are an earmark on part of that same cash, never an addition to it.
+        BigDecimal trackedCash = nzc(cashAccountRepository.sumBalanceByUser(userId));
+        boolean cashTracked = !cashAccountRepository.findByUser_IdAndActiveTrueOrderByNameAsc(userId).isEmpty();
+        BigDecimal earmarked = nzc(redemptionService.totalAwaitingRedeployment(userId));
+        BigDecimal deployableCash = cashTracked ? trackedCash : null;
         List<Holding> holdings = portfolioContextService.getAllHoldings(userId);
 
         List<BuyAction> buy = new ArrayList<>();
@@ -93,13 +102,38 @@ public class TodaysActionsService {
                         BigDecimal ceiling = equityBase.multiply(BigDecimal.valueOf(SINGLE_STOCK_GUIDELINE_PCT / 100.0));
                         maxAdd = ceiling.subtract(cur).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
                     }
+                    // Concentration headroom capped by cash that actually exists. Without a
+                    // tracked cash balance no amount is produced at all — a sized figure with
+                    // no funding behind it would be invented.
+                    BigDecimal suggested = null;
+                    String sizingBasis;
+                    if (!cashTracked) {
+                        sizingBasis = "No cash account is tracked, so no rupee amount is suggested — "
+                            + "the figure shown is only the concentration headroom.";
+                    } else if (deployableCash.compareTo(BigDecimal.ZERO) <= 0) {
+                        sizingBasis = "Tracked cash is zero, so there is nothing to deploy right now.";
+                    } else if (maxAdd == null) {
+                        suggested = deployableCash;
+                        sizingBasis = "Limited by available cash of " + deployableCash
+                            + "; no concentration ceiling applies yet.";
+                    } else {
+                        suggested = maxAdd.min(deployableCash);
+                        sizingBasis = maxAdd.compareTo(deployableCash) <= 0
+                            ? "Limited by the " + SINGLE_STOCK_GUIDELINE_PCT + "% single-position guideline."
+                            : "Limited by available cash of " + deployableCash + ".";
+                    }
+
                     buy.add(BuyAction.builder()
                         .symbol(symbol).name(name).assetType(assetType)
                         .currentValue(cur).currentPercentOfEquity(pctOfEquity)
                         .maxAddWithoutBreachingGuideline(maxAdd)
+                        .suggestedAmount(suggested)
+                        .sizingBasis(sizingBasis)
                         .why(a.getNextActionReason())
                         .risk(topRisk(a))
                         .confidence(a.getConfidenceScore())
+                        .dataTimestamp(java.time.LocalDateTime.now())
+                        .expectedOutcome(expectedOutcome(a))
                         .build());
                     break;
                 }
@@ -165,13 +199,55 @@ public class TodaysActionsService {
             }
         }
 
+        String scopeNote = cashTracked
+            ? "Covers securities you already hold. Buy amounts are sized against your tracked cash "
+              + "balance and the " + SINGLE_STOCK_GUIDELINE_PCT + "% single-position guideline, whichever binds first. "
+              + "New-buy ideas outside your portfolio are still not surfaced here."
+            : "Covers securities you already hold. No rupee amounts are suggested because no cash "
+              + "account is tracked — add one under Ledger to have positions sized against real "
+              + "available cash instead of showing only a concentration ceiling.";
+
+        String cashNote = !cashTracked
+            ? "No cash accounts tracked."
+            : earmarked.compareTo(BigDecimal.ZERO) > 0
+                ? "Of your tracked cash, " + earmarked + " came from mutual-fund redemptions and "
+                  + "has not been redeployed yet. This is part of the cash total, not extra cash."
+                : "All tracked cash is unallocated.";
+
         return TodaysActionsResponse.builder()
             .generatedAt(LocalDateTime.now())
-            .scopeNote("Covers securities you already hold. New-buy ideas outside your portfolio are not surfaced here — sizing a rupee amount for a new purchase would require your available cash balance, which this app does not track, and any figure would otherwise be invented.")
+            .scopeNote(scopeNote)
             .portfolioContext(ctx)
+            .cash(TodaysActionsResponse.CashPosition.builder()
+                .trackedCash(trackedCash)
+                .earmarkedFromRedemptions(earmarked)
+                .cashTracked(cashTracked)
+                .note(cashNote)
+                .build())
             .buy(buy).sellReduce(sellReduce).bookProfit(bookProfit).hold(hold).watch(watch)
             .notAnalysed(notAnalysed)
             .build();
+    }
+
+
+    private static BigDecimal nzc(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
+
+    /**
+     * A plain statement of what the engine's rating implies, so an action isn't just a verb.
+     * Deliberately qualitative — projecting a rupee or percentage outcome would be inventing a
+     * forecast the model does not produce.
+     */
+    private String expectedOutcome(AnalystAssessment a) {
+        if (a == null || a.getRating() == null) return null;
+        String rating = a.getRating().toUpperCase();
+        if (rating.contains("STRONG BUY") || rating.contains("BUY")) {
+            return "Adding here raises exposure to a holding the model scores positively; "
+                 + "the stated risk is what would invalidate that view.";
+        }
+        if (rating.contains("SELL") || rating.contains("REDUCE")) {
+            return "Trimming reduces exposure to a holding the model scores negatively and frees cash to redeploy.";
+        }
+        return "No change expected in the near term — the position is held pending a clearer signal.";
     }
 
     private AnalystAssessment assessStock(Holding h, PortfolioContext ctx) {

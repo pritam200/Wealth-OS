@@ -16,6 +16,7 @@ import com.marketai.gmail.repository.SavedPdfPasswordRepository;
 import com.marketai.gmail.security.PasswordCipher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.http.HttpStatus;
@@ -65,6 +66,8 @@ public class PdfImportService {
     ));
 
     private final PendingPdfRepository pendingPdfRepo;
+    private final com.marketai.identity.service.PasswordCandidateResolver passwordCandidateResolver;
+    private final com.marketai.identity.service.FinancialIdentityService financialIdentityService;
     private final SavedPdfPasswordRepository savedPasswordRepo;
     private final GmailTokenRepository tokenRepo;
     private final UserRepository userRepo;
@@ -231,17 +234,33 @@ public class PdfImportService {
             }
         }
 
-        if (saved == null) return;
-
         GmailToken token = tokenRepo.findByUserId(userId).orElse(null);
         User user = userRepo.findById(userId).orElse(null);
         if (token == null || user == null) return;
 
         List<SavedPdfPassword> toTry = new ArrayList<>();
-        toTry.add(saved);
-        for (SavedPdfPassword pc : panCandidates) {
-            if (!pc.getId().equals(saved.getId())) toTry.add(pc);
+        if (saved != null) {
+            toTry.add(saved);
+            for (SavedPdfPassword pc : panCandidates) {
+                if (!pc.getId().equals(saved.getId())) toTry.add(pc);
+            }
         }
+
+        // Passwords derived from the user's own PAN/date of birth, using the provider's
+        // published convention and any instruction in the email body.
+        //
+        // This is what the method previously lacked entirely: it returned early whenever no
+        // saved password existed, so a first-time user — who by definition has saved nothing —
+        // could never auto-unlock a single statement, even though the email said in plain words
+        // that the password was their PAN. Every locked document required manual entry once,
+        // per provider, forever.
+        //
+        // The candidate list is bounded and rule-driven, never a brute-force search: see
+        // PasswordCandidateResolver.MAX_ATTEMPTS.
+        String savedPlaintextForResolver = null;
+        List<com.marketai.identity.service.PasswordCandidate> derived =
+            passwordCandidateResolver.resolve(userId, pdf.getProviderKey(),
+                pdf.getPasswordHint(), savedPlaintextForResolver);
 
         try {
             Gmail gmail = gmailClient.buildGmailService(token.getAccessToken(), token.getRefreshToken());
@@ -277,7 +296,38 @@ public class PdfImportService {
                     return;
                 }
             }
-            String reason = "None of " + toTry.size() + " saved password(s) worked for " + pdf.getProviderKey();
+            // Saved credentials exhausted (or none existed) — try the derived candidates.
+            for (com.marketai.identity.service.PasswordCandidate candidate : derived) {
+                PdfUnlockResult result = attemptUnlock(userId, pdf, user, gmail, candidate.value(), true);
+                if (result.unlocked) {
+                    financialIdentityService.recordSuccessfulUse(userId);
+
+                    // Persist the working credential so the next statement from this provider
+                    // opens without re-deriving. Stored encrypted; the plaintext never leaves
+                    // this method.
+                    if (savedPasswordRepo.findByUserIdAndProviderKey(userId, pdf.getProviderKey()).isEmpty()) {
+                        savedPasswordRepo.save(SavedPdfPassword.builder()
+                            .userId(userId).providerKey(pdf.getProviderKey())
+                            .encryptedPassword(passwordCipher.encrypt(candidate.value()))
+                            .passwordHint(candidate.strategy().describe())
+                            .lastUsedAt(LocalDateTime.now())
+                            .build());
+                    }
+
+                    // Records the strategy that worked, never the password itself.
+                    pdf.setResultSummary(truncate("Auto-unlocked using " + candidate.strategy().describe()
+                        + " — " + (pdf.getResultSummary() != null ? pdf.getResultSummary() : "")));
+                    pendingPdfRepo.save(pdf);
+                    log.info("Auto-unlocked pending PDF {} for user {} via strategy {}",
+                        pdf.getId(), userId, candidate.strategy());
+                    return;
+                }
+            }
+
+            // Nothing worked. The message states what is missing and what would fix it, and
+            // never mentions a value.
+            String reason = passwordCandidateResolver.explainFailure(userId, pdf.getProviderKey());
+            pdf.setStatus("PASSWORD_FAILED");
             pdf.setResultSummary(truncate(reason));
             pendingPdfRepo.save(pdf);
         } catch (Exception e) {
@@ -287,6 +337,21 @@ public class PdfImportService {
 
     @Transactional
     public PdfUnlockResult unlock(Long userId, Long pendingId, String password) {
+        // Null preserves the historical behaviour of saving on success, so existing callers
+        // are unaffected. A caller that passes FALSE is declining explicitly.
+        return unlock(userId, pendingId, password, null);
+    }
+
+    /**
+     * @param savePassword TRUE to store the working password for this provider, FALSE to use it
+     *        once and discard it, null to keep the legacy save-on-success behaviour.
+     *
+     *        <p>This previously had no parameter at all: a password the user typed was encrypted
+     *        and persisted unconditionally, without ever being asked. Encrypted-at-rest is not
+     *        the same as consented-to, and a shared or one-off credential should be usable
+     *        without being kept.
+     */
+    public PdfUnlockResult unlock(Long userId, Long pendingId, String password, Boolean savePassword) {
         PendingPdf pdf = pendingPdfRepo.findByIdAndUserId(pendingId, userId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
         GmailToken token = tokenRepo.findByUserId(userId)
@@ -300,7 +365,11 @@ public class PdfImportService {
 
         PdfUnlockResult result = attemptUnlock(userId, pdf, user, gmail, password, false);
 
-        if (result.unlocked && pdf.getProviderKey() != null) {
+        // Honour an explicit decline. The unlock itself still succeeded and the statement is
+        // still imported — only the credential is not retained.
+        boolean mayStore = !Boolean.FALSE.equals(savePassword);
+
+        if (result.unlocked && pdf.getProviderKey() != null && mayStore) {
             String encrypted = passwordCipher.encrypt(password);
             SavedPdfPassword saved = savedPasswordRepo.findByUserIdAndProviderKey(userId, pdf.getProviderKey())
                 .orElse(SavedPdfPassword.builder().userId(userId).providerKey(pdf.getProviderKey()).build());
@@ -352,6 +421,23 @@ public class PdfImportService {
     // (tryAutoUnlock) paths. isAutoAttempt controls what happens on a wrong password: the
     // manual path leaves the item as-is for the user to retry; the automatic path marks it
     // PASSWORD_FAILED so the "Locked statements" list surfaces that the saved password broke.
+    /** SHA-256 of the raw document bytes — the attachment's content identity. */
+    static String sha256(byte[] bytes) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) {
+                String h = Integer.toHexString(0xff & b);
+                if (h.length() == 1) hex.append('0');
+                hex.append(h);
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // Mandated on every JVM by the JCA spec — unreachable in practice.
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
     private PdfUnlockResult attemptUnlock(Long userId, PendingPdf pdf, User user, Gmail gmail, String password, boolean isAutoAttempt) {
         List<String> steps = new ArrayList<>();
         steps.add(step("email_detected", "OK", "Email: " + truncate(pdf.getSubject(), 80)));
@@ -365,7 +451,37 @@ public class PdfImportService {
         try {
             byte[] bytes = gmailClient.downloadAttachment(gmail, pdf.getGmailMessageId(), pdf.getAttachmentId());
             steps.add(step("pdf_downloaded", "OK", bytes.length + " bytes"));
-            try (PDDocument doc = PDDocument.load(bytes, password)) {
+
+            // Content identity, computed before parsing. The table's unique constraint only
+            // covers (user, message id, attachment id), which misses the same statement arriving
+            // as a forward, re-sent by the provider, or on a second thread — and Gmail can return
+            // a different attachment id for the same physical file across fetches. Hashing the
+            // bytes is the only identifier that survives all of those.
+            String contentHash = sha256(bytes);
+            pdf.setContentHash(contentHash);
+
+            PendingPdf alreadyImported = pendingPdfRepo
+                .findFirstByUserIdAndContentHashAndStatus(userId, contentHash, "IMPORTED")
+                .filter(other -> !other.getId().equals(pdf.getId()))
+                .orElse(null);
+
+            if (alreadyImported != null) {
+                // Same bytes, already parsed and imported. Re-parsing would push identical
+                // transactions back through the importer; they would be caught by the
+                // transaction fingerprint, but marking it here keeps the reason visible and
+                // saves the work.
+                steps.add(step("duplicate_document", "OK",
+                    "Identical to already-imported document #" + alreadyImported.getId()));
+                pdf.setPipelineSteps(toJson(steps));
+                pdf.setStatus("DUPLICATE_DOCUMENT");
+                pdf.setResultSummary(truncate("Duplicate of a statement already imported ("
+                    + (alreadyImported.getFilename() != null ? alreadyImported.getFilename() : "earlier document")
+                    + ") — not imported again."));
+                pendingPdfRepo.save(pdf);
+                return new PdfUnlockResult(false, "This statement has already been imported.");
+            }
+
+            try (PDDocument doc = Loader.loadPDF(bytes, password)) {
                 text = new PDFTextStripper().getText(doc);
             }
             steps.add(step("pdf_unlocked", "OK", text.length() + " chars extracted"));
@@ -656,7 +772,7 @@ public class PdfImportService {
             result.put("pdfBytes", bytes.length);
 
             String text;
-            try (PDDocument doc = PDDocument.load(bytes, password)) {
+            try (PDDocument doc = Loader.loadPDF(bytes, password)) {
                 text = new PDFTextStripper().getText(doc);
             }
             result.put("textLength", text.length());

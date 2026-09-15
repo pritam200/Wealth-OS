@@ -128,7 +128,7 @@ function AddStockModal({ portfolioId, onClose, onAdded }: {
       <div className="bg-surface-card border border-surface-border rounded-xl w-full max-w-md shadow-2xl">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-border">
           <div>
-            <h3 className="font-semibold text-white">Add Stock Holding</h3>
+            <h3 className="font-semibold text-ink">Add Stock Holding</h3>
             <p className="text-2xs text-gray-600 mt-0.5">Log a historical or new purchase</p>
           </div>
           <button onClick={onClose} className="btn-icon"><X size={16} /></button>
@@ -145,7 +145,7 @@ function AddStockModal({ portfolioId, onClose, onAdded }: {
                 {suggestions.map(s => (
                   <button key={s.symbol} onClick={() => { setForm(f => ({ ...f, symbol: s.symbol, name: s.name })); setSuggestions([]); }}
                     className="w-full flex justify-between px-3 py-2 hover:bg-surface-hover text-sm text-left transition-colors">
-                    <span className="font-mono text-white">{s.symbol}</span>
+                    <span className="font-mono text-ink">{s.symbol}</span>
                     <span className="text-gray-500 text-xs truncate max-w-[200px]">{s.name}</span>
                   </button>
                 ))}
@@ -187,7 +187,7 @@ function AddStockModal({ portfolioId, onClose, onAdded }: {
 
           {form.quantity && form.price && (
             <div className="bg-surface-hover rounded px-3 py-2 text-sm text-gray-400">
-              Total cost: <span className="text-white font-mono">{fmtINR(Number(form.quantity) * Number(form.price))}</span>
+              Total cost: <span className="text-ink font-mono">{fmtINR(Number(form.quantity) * Number(form.price))}</span>
               {form.charges && <span className="ml-2">+ {fmtINR(Number(form.charges))} charges</span>}
             </div>
           )}
@@ -247,7 +247,7 @@ function MyPortfolioSection() {
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="font-semibold text-white">My Stock Portfolio</h3>
+          <h3 className="font-semibold text-ink">My Stock Portfolio</h3>
           <p className="text-2xs text-gray-600 mt-0.5">
             {holdings.length} holding{holdings.length !== 1 ? 's' : ''} &nbsp;·&nbsp;
             Invested {maskText(fmtINR(totalInvested))} &nbsp;·&nbsp; Current {maskText(fmtINR(currentValue))}
@@ -295,14 +295,14 @@ function MyPortfolioSection() {
               {holdings.map((h: any) => (
                 <tr key={h.id} onClick={() => navigate(`/stock/${h.symbol}`)}>
                   <td>
-                    <div className="font-mono text-white font-medium">{h.symbol?.replace('.NS', '')}</div>
+                    <div className="font-mono text-ink font-medium">{h.symbol?.replace('.NS', '')}</div>
                     <div className="text-2xs text-gray-600 truncate max-w-[120px]">{h.name}</div>
                   </td>
                   <td className="text-right num text-gray-300">{maskText(h.quantity)}</td>
                   <td className="text-right num text-gray-400">{maskText(fmtINR(h.avgPrice))}</td>
-                  <td className="text-right num text-white">{maskText(fmtINR(h.currentPrice))}</td>
+                  <td className="text-right num text-ink">{maskText(fmtINR(h.currentPrice))}</td>
                   <td className="text-right num text-gray-400">{maskText(fmtINR(h.investedValue))}</td>
-                  <td className="text-right num text-white">{maskText(fmtINR(h.currentValue))}</td>
+                  <td className="text-right num text-ink">{maskText(fmtINR(h.currentValue))}</td>
                   <td className={`text-right num font-semibold ${h.pnlPercent >= 0 ? 'text-bull' : 'text-bear'}`}>
                     {maskText(`${h.pnlPercent >= 0 ? '+' : ''}${h.pnlPercent?.toFixed(2)}%`)}
                   </td>
@@ -354,7 +354,7 @@ function WatchlistSection() {
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold text-white">Market Watchlist — Technical Indicators</h3>
+        <h3 className="font-semibold text-ink">Market Watchlist — Technical Indicators</h3>
         <div className="flex items-center gap-2">
           <input value={addInput} onChange={e => setAddInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addSymbol()}
@@ -387,8 +387,8 @@ function WatchlistSection() {
                 const d = data[sym];
                 return (
                   <tr key={sym} onClick={() => navigate(`/stock/${sym}`)}>
-                    <td><span className="font-mono text-white font-medium">{sym.replace('.NS', '')}</span></td>
-                    <td className="text-right num text-white">{fmt(d?.price)}</td>
+                    <td><span className="font-mono text-ink font-medium">{sym.replace('.NS', '')}</span></td>
+                    <td className="text-right num text-ink">{fmt(d?.price)}</td>
                     <td className={`text-right num ${d?.rsi == null ? 'text-gray-600' : d.rsi > 70 ? 'text-bear' : d.rsi < 30 ? 'text-bull' : 'text-gray-300'}`}>
                       {d?.rsi?.toFixed(1) ?? '—'}
                     </td>
@@ -419,11 +419,11 @@ export function Tab2StockAnalysis() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#6d5efc] to-[#9b5cf9] flex items-center justify-center text-white shadow-lift shrink-0">
+        <div className="w-11 h-11 rounded-2xl bg-brand/10 border border-brand/25 flex items-center justify-center text-brand-light shrink-0">
           <LineChart size={20} />
         </div>
         <div>
-          <h2 className="text-xl font-bold text-white mb-0.5">Stock Insights</h2>
+          <h2 className="text-xl font-bold text-ink mb-0.5">Stock Insights</h2>
           <p className="text-gray-500 text-sm">Your stock portfolio + market watchlist with technical indicators</p>
         </div>
       </div>

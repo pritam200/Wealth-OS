@@ -78,7 +78,7 @@ export function FDSection({ onRefresh }: { onRefresh: () => void }) {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <div className="icon-badge-brand"><Landmark size={15} /></div>
-          <h3 className="font-bold text-white text-sm">Fixed Deposits</h3>
+          <h3 className="font-bold text-ink text-sm">Fixed Deposits</h3>
           {items.length > 0 && <span className="badge-neutral">{items.length}</span>}
         </div>
         <button onClick={() => setOpen(o => !o)} className="btn-secondary text-xs flex items-center gap-1"><Plus size={11} /> Add FD</button>
@@ -146,22 +146,22 @@ export function FDSection({ onRefresh }: { onRefresh: () => void }) {
             <div key={fd.id} className={`py-1.5 border-b border-surface-border/40 last:border-0 ${isClosed ? 'opacity-70' : ''}`}>
               <div className="flex items-center justify-between">
                 <div className="min-w-0">
-                  <span className="text-white text-xs font-medium">{fd.bank}</span>
+                  <span className="text-ink text-xs font-medium">{fd.bank}</span>
                   <span className="text-gray-600 text-xs ml-1.5">{maskText(`${fd.rate}%`)} {fd.compounding}{fd.autoRenew ? ' · auto-renew' : ''}</span>
-                  {fd.status === 'CLOSED' && <span className="ml-2 text-2xs bg-gray-700 text-gray-400 px-1 rounded">CLOSED</span>}
-                  {fd.status === 'MATURED' && <span className="ml-2 text-2xs bg-yellow-400/15 text-yellow-400 px-1 rounded">Matured — action needed</span>}
+                  {fd.status === 'CLOSED' && <span className="ml-2 pill-muted">CLOSED</span>}
+                  {fd.status === 'MATURED' && <span className="ml-2 text-2xs bg-neutral/15 text-neutral px-1 rounded">Matured — action needed</span>}
                   {isRenewed && <span className="ml-2 text-2xs bg-bull/15 text-bull px-1 rounded">Matured ✓ Renewed</span>}
                   {predecessor && <div className="text-2xs text-gray-600 mt-0.5">← Renewed from {predecessor.bank} FD of {maskText(fmtINR(predecessor.principal))}</div>}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="text-right">
-                    <div className="num text-xs text-white">{maskText(fmtINR(fd.principal))} → <span className="text-bull">{maskText(fmtINR(fd.actualMaturityAmount ?? fd.maturityValue))}</span></div>
+                    <div className="num text-xs text-ink">{maskText(fmtINR(fd.principal))} → <span className="text-bull">{maskText(fmtINR(fd.actualMaturityAmount ?? fd.maturityValue))}</span></div>
                     {!isClosed && fd.daysToMaturity != null && <div className={`text-2xs ${urgency}`}>{fd.daysToMaturity < 0 ? 'Matured ✓' : `${fd.daysToMaturity}d left`}</div>}
                     {fd.status === 'CLOSED' && fd.closedDate && <div className="text-2xs text-gray-600">Closed {fd.closedDate}</div>}
                     {isRenewed && successor && <div className="text-2xs text-bull">→ Renewed into {maskText(fmtINR(successor.principal))} FD</div>}
                   </div>
                   {!isClosed && (
-                    <button onClick={() => startEdit(fd)} className="btn-icon text-gray-500 hover:text-white p-0.5" title="Edit FD"><Edit2 size={11} /></button>
+                    <button onClick={() => startEdit(fd)} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit FD"><Edit2 size={11} /></button>
                   )}
                   {!isClosed && (
                     <button onClick={() => setClosingId(fd.id === closingId ? null : fd.id)}

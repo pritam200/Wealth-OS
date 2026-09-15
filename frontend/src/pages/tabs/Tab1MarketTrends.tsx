@@ -1,36 +1,118 @@
 import { useEffect, useState } from 'react';
 import { marketApi } from '../../api/market';
-import { IndexTicker } from '../../components/shared/IndexTicker';
-import type { MarketOverview } from '../../types';
+import type { MarketOverview, IndexQuote } from '../../types';
 import { TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react';
 
-const fmtPct = (n: number) => `${n >= 0 ? '+' : ''}${n?.toFixed(2)}%`;
+const fmtPct = (n: number | null | undefined) =>
+  n == null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+const fmtNum = (n: number | null | undefined) =>
+  n == null ? '—' : new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n);
 
-function SentimentMeter({ sectors }: { sectors: { changePercent: number }[] }) {
-  if (!sectors.length) return null;
-  const avg = sectors.reduce((s, x) => s + x.changePercent, 0) / sectors.length;
-  const label = avg > 0.5 ? 'Bullish' : avg < -0.5 ? 'Bearish' : 'Sideways';
-  const color = avg > 0.5 ? 'text-bull' : avg < -0.5 ? 'text-bear' : 'text-neutral';
-  const Icon = avg > 0.5 ? TrendingUp : avg < -0.5 ? TrendingDown : Minus;
-  const pct = Math.min(Math.max((avg + 2) / 4, 0), 1) * 100;
+/* ── Ticker ribbon ──────────────────────────────────────────────────────────────────────
+   Index metrics across the top, terminal-style: one row, monospaced figures, direction shown
+   by text colour on a uniform surface rather than by tinting each cell.                   */
+function TickerRibbon({ indices }: { indices: { label: string; index?: IndexQuote }[] }) {
+  const present = indices.filter(i => i.index);
+  if (present.length === 0) return null;
 
   return (
-    <div className="card flex flex-col items-center py-8">
-      <div className="stat-label mb-3">Market Sentiment</div>
-      <div className={`flex items-center gap-2 text-3xl font-bold mb-4 ${color}`}>
-        <Icon size={28} />
-        {label}
+    <div className="rounded-xl border border-surface-border bg-surface-card overflow-hidden">
+      <div className="flex divide-x divide-surface-border overflow-x-auto">
+        {present.map(({ label, index }) => {
+          const pct = index!.changePercent;
+          const pos = (pct ?? 0) >= 0;
+          return (
+            <div key={label} className="flex-1 min-w-[150px] px-4 py-3">
+              <div className="stat-label mb-1 truncate">{label}</div>
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-base font-mono tabular-nums font-bold text-ink">
+                  {fmtNum(index!.value)}
+                </span>
+                <span className={`text-xs font-mono tabular-nums font-semibold ${pos ? 'text-bull' : 'text-bear'}`}>
+                  {fmtPct(pct)}
+                </span>
+              </div>
+            </div>
+          );
+        })}
       </div>
-      <div className="w-full bg-surface-hover rounded-full h-3 overflow-hidden">
-        <div className="h-full rounded-full bg-gradient-to-r from-bear via-neutral to-bull" />
+    </div>
+  );
+}
+
+/* ── Sentiment meter ────────────────────────────────────────────────────────────────────
+   The needle now sits ON the gradient track. Previously it lived in a separate element
+   below the bar, so it never actually pointed at a position on the scale.                 */
+function SentimentMeter({ sectors }: { sectors: { changePercent: number }[] }) {
+  if (!sectors.length) {
+    return (
+      <div className="card">
+        <div className="stat-label mb-2">Market Sentiment</div>
+        <p className="text-gray-600 text-xs py-10 text-center">No sector data available.</p>
       </div>
-      <div className="relative w-full mt-1">
-        <div className="absolute h-4 w-0.5 bg-white rounded-full top-0" style={{ left: `${pct}%`, transform: 'translateX(-50%)' }} />
+    );
+  }
+
+  const avg = sectors.reduce((s, x) => s + x.changePercent, 0) / sectors.length;
+  const label = avg > 0.5 ? 'Bullish' : avg < -0.5 ? 'Bearish' : 'Sideways';
+  const pill = avg > 0.5 ? 'pill-bull' : avg < -0.5 ? 'pill-bear' : 'pill-neutral';
+  const color = avg > 0.5 ? 'text-bull' : avg < -0.5 ? 'text-bear' : 'text-neutral';
+  const Icon = avg > 0.5 ? TrendingUp : avg < -0.5 ? TrendingDown : Minus;
+
+  // Clamped to a ±2% scale — beyond that the needle simply pins to the end.
+  const pct = Math.min(Math.max((avg + 2) / 4, 0), 1) * 100;
+  const advancing = sectors.filter(s => s.changePercent > 0).length;
+
+  return (
+    <div className="card">
+      <div className="flex items-start justify-between mb-4">
+        <div className="stat-label">Market Sentiment</div>
+        <span className={pill}>{label}</span>
       </div>
-      <div className="flex justify-between w-full mt-3 text-xs text-gray-600">
-        <span>Bearish</span><span>Sideways</span><span>Bullish</span>
+
+      <div className={`flex items-center gap-2 mb-1 ${color}`}>
+        <Icon size={22} />
+        <span className="text-2xl font-bold">{label}</span>
       </div>
-      <div className={`mt-4 text-sm font-medium ${color}`}>Avg sector: {fmtPct(avg)}</div>
+      <div className="text-2xs text-gray-500 mb-5">
+        Across <span className="font-mono tabular-nums">{sectors.length}</span> sectors ·{' '}
+        <span className="font-mono tabular-nums text-bull">{advancing}</span> advancing,{' '}
+        <span className="font-mono tabular-nums text-bear">{sectors.length - advancing}</span> declining
+      </div>
+
+      <div className="relative">
+        <div className="w-full h-2 rounded-full bg-gradient-to-r from-bear via-neutral to-bull opacity-80" />
+        <div
+          className="absolute -top-1 w-1 h-4 bg-ink rounded-full ring-2 ring-surface-card"
+          style={{ left: `${pct}%`, transform: 'translateX(-50%)' }}
+          aria-hidden
+        />
+      </div>
+      <div className="flex justify-between w-full mt-2.5 text-2xs text-gray-600 font-mono tabular-nums">
+        <span>-2%</span><span>0%</span><span>+2%</span>
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-surface-border flex items-baseline justify-between">
+        <span className="stat-label">Avg sector move</span>
+        <span className={`text-lg font-mono tabular-nums font-bold ${color}`}>{fmtPct(avg)}</span>
+      </div>
+    </div>
+  );
+}
+
+/* Sector row — uniform surface, direction via colour, magnitude via a proportional bar. */
+function SectorRow({ sector, changePercent, max }: { sector: string; changePercent: number; max: number }) {
+  const pos = changePercent >= 0;
+  const width = max > 0 ? Math.min(Math.abs(changePercent) / max, 1) * 100 : 0;
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-xs text-gray-300 truncate flex-1 min-w-0" title={sector}>{sector}</span>
+      <div className="w-16 h-1.5 rounded-full bg-surface-hover overflow-hidden shrink-0">
+        <div className={`h-full rounded-full ${pos ? 'bg-bull' : 'bg-bear'}`} style={{ width: `${width}%` }} />
+      </div>
+      <span className={`text-xs font-mono tabular-nums font-semibold w-16 text-right shrink-0 ${pos ? 'text-bull' : 'text-bear'}`}>
+        {fmtPct(changePercent)}
+      </span>
     </div>
   );
 }
@@ -46,93 +128,81 @@ export function Tab1MarketTrends() {
   }, []);
 
   if (loading) return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      {[...Array(4)].map((_, i) => <div key={i} className="card animate-pulse h-24 bg-surface-hover" />)}
+    <div className="space-y-4">
+      <div className="card animate-pulse h-20 bg-surface-hover" />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {[...Array(3)].map((_, i) => <div key={i} className="card animate-pulse h-56 bg-surface-hover" />)}
+      </div>
     </div>
   );
 
   const sectors = overview?.sectors ?? [];
-  const topGain = [...sectors].sort((a, b) => b.changePercent - a.changePercent).slice(0, 5);
-  const topLose = [...sectors].sort((a, b) => a.changePercent - b.changePercent).slice(0, 5);
+  const sorted = [...sectors].sort((a, b) => b.changePercent - a.changePercent);
+  const topGain = sorted.slice(0, 5);
+  const topLose = [...sorted].reverse().slice(0, 5);
+  const maxAbs = sectors.reduce((m, s) => Math.max(m, Math.abs(s.changePercent)), 0);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      <TickerRibbon indices={[
+        { label: 'NIFTY 50', index: overview?.nifty50 },
+        { label: 'BANK NIFTY', index: overview?.bankNifty },
+        { label: 'SENSEX', index: overview?.sensex },
+        { label: 'NIFTY MIDCAP', index: overview?.niftyMidcap },
+      ]} />
+
       <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#6d5efc] to-[#9b5cf9] flex items-center justify-center text-white shadow-lift shrink-0">
+        <div className="w-11 h-11 rounded-2xl bg-brand/10 border border-brand/25 flex items-center justify-center text-brand-light shrink-0">
           <Activity size={20} />
         </div>
         <div>
-          <h2 className="text-xl font-bold text-white mb-0.5">Market Trends</h2>
-          <p className="text-gray-500 text-sm">Live index metrics and market sentiment</p>
+          <h2 className="text-xl font-bold text-ink mb-0.5">Market Trends</h2>
+          <p className="text-gray-500 text-sm">Where the market is leaning today, and which sectors are driving it</p>
         </div>
       </div>
 
-      {/* Sentiment meter + gainers/losers — the chart-like visuals lead the page */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Sentiment meter */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <SentimentMeter sectors={sectors} />
 
-        {/* Top gainers */}
         <div className="card">
-          <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
-            <TrendingUp size={16} className="text-bull" /> Top Sector Gainers
-          </h3>
-          <div className="space-y-3">
-            {topGain.map(s => (
-              <div key={s.sector} className="flex items-center justify-between">
-                <span className="text-sm text-gray-300 truncate">{s.sector}</span>
-                <span className="text-bull text-sm font-medium ml-4">{fmtPct(s.changePercent)}</span>
-              </div>
-            ))}
-            {topGain.length === 0 && <p className="text-gray-600 text-sm text-center py-4">No data</p>}
+          <h3 className="section-title"><TrendingUp size={15} className="text-bull" /> Leading Sectors</h3>
+          <div className="space-y-2.5">
+            {topGain.map(s => <SectorRow key={s.sector} sector={s.sector} changePercent={s.changePercent} max={maxAbs} />)}
+            {topGain.length === 0 && <p className="text-gray-600 text-xs text-center py-6">No data</p>}
           </div>
         </div>
 
-        {/* Top losers */}
         <div className="card">
-          <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
-            <TrendingDown size={16} className="text-bear" /> Top Sector Losers
-          </h3>
-          <div className="space-y-3">
-            {topLose.map(s => (
-              <div key={s.sector} className="flex items-center justify-between">
-                <span className="text-sm text-gray-300 truncate">{s.sector}</span>
-                <span className="text-bear text-sm font-medium ml-4">{fmtPct(s.changePercent)}</span>
-              </div>
-            ))}
-            {topLose.length === 0 && <p className="text-gray-600 text-sm text-center py-4">No data</p>}
+          <h3 className="section-title"><TrendingDown size={15} className="text-bear" /> Lagging Sectors</h3>
+          <div className="space-y-2.5">
+            {topLose.map(s => <SectorRow key={s.sector} sector={s.sector} changePercent={s.changePercent} max={maxAbs} />)}
+            {topLose.length === 0 && <p className="text-gray-600 text-xs text-center py-6">No data</p>}
           </div>
         </div>
       </div>
 
-      {/* All sectors heatmap */}
       {sectors.length > 0 && (
         <div className="card">
-          <h3 className="font-semibold text-white mb-4">All Sectors</h3>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {sectors.map(s => {
+          <h3 className="section-title">All Sectors</h3>
+          {/* Every card sits on the same neutral surface. Direction is carried by a
+              high-contrast pill, not by tinting the container — the previous per-card
+              red/green washes read as muddy blocks and hurt figure legibility. */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
+            {sorted.map(s => {
               const pos = s.changePercent >= 0;
-              const intensity = Math.min(Math.abs(s.changePercent) / 3, 1);
               return (
                 <div key={s.sector}
-                  style={{ backgroundColor: pos ? `rgba(34,197,94,${0.08 + intensity * 0.2})` : `rgba(239,68,68,${0.08 + intensity * 0.2})` }}
-                  className={`rounded-lg p-3 border ${pos ? 'border-bull/20' : 'border-bear/20'}`}>
-                  <div className="text-xs text-gray-400 truncate mb-1">{s.sector}</div>
-                  <div className={`text-sm font-bold ${pos ? 'text-bull' : 'text-bear'}`}>{fmtPct(s.changePercent)}</div>
+                     className="rounded-xl border border-surface-border bg-surface-hover/40 p-3 hover:bg-surface-hover transition-colors">
+                  <div className="text-2xs text-gray-400 truncate mb-1.5" title={s.sector}>{s.sector}</div>
+                  <span className={pos ? 'pill-bull' : 'pill-bear'}>
+                    <span className="font-mono tabular-nums">{fmtPct(s.changePercent)}</span>
+                  </span>
                 </div>
               );
             })}
           </div>
         </div>
       )}
-
-      {/* Index cards — summary stat tiles, after the chart-like visuals above */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {overview?.nifty50 && <IndexTicker index={overview.nifty50} size="lg" />}
-        {overview?.bankNifty && <IndexTicker index={overview.bankNifty} size="lg" />}
-        {overview?.sensex && <IndexTicker index={overview.sensex} size="lg" />}
-        {overview?.niftyMidcap && <IndexTicker index={overview.niftyMidcap} size="lg" />}
-      </div>
     </div>
   );
 }

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import com.marketai.common.quality.DataQuality;
 
 /**
  * Reference-based forecast. Rather than fixed guessed percentages, the expected
@@ -41,7 +42,7 @@ public class ForecastService {
         // history there is neither, and the previous `price * 0.015` ATR fallback silently
         // manufactured a volatility band that looked identical to a measured one. Return an
         // explicit no-forecast instead.
-        if ("INSUFFICIENT".equals(ta.getDataQuality()) || ta.getAtr() == null) {
+        if (!DataQuality.of(ta.getDataQuality()).isUsable() || ta.getAtr() == null) {
             int bars = ta.getBarsAvailable() != null ? ta.getBarsAvailable() : 0;
             return ForecastResponse.builder()
                 .symbol(symbol)
@@ -89,7 +90,7 @@ public class ForecastService {
         String basis = String.format(
             "Built from %d days of price history%s. 14-day ATR = %.2f (daily volatility); expected 1σ move over %s ≈ ±%.2f (±%.1f%%), scaled by √%d. Trend %s, RSI %.0f set the direction odds.",
             bars,
-            "PARTIAL".equals(ta.getDataQuality()) ? " (under 200 — no 200-DMA trend confirmation)" : "",
+            DataQuality.of(ta.getDataQuality()).needsCaveat() ? " (under 200 — no 200-DMA trend confirmation)" : "",
             atr, horizon, sigma, movePct, days,
             trend.toLowerCase().replace('_', ' '), rsi);
 

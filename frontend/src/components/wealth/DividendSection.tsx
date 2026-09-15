@@ -52,9 +52,9 @@ export function DividendSection() {
     <div className="card">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <Coins size={14} className="text-yellow-400" />
-          <h3 className="font-semibold text-white text-sm">Dividends</h3>
-          {items.length > 0 && <span className="text-2xs bg-yellow-400/20 text-yellow-400 px-1.5 py-0.5 rounded-full">{items.length}</span>}
+          <Coins size={14} className="text-neutral" />
+          <h3 className="font-semibold text-ink text-sm">Dividends</h3>
+          {items.length > 0 && <span className="text-2xs bg-neutral/20 text-neutral px-1.5 py-0.5 rounded-full">{items.length}</span>}
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setYear(y => y - 1)} className="btn-icon"><ChevronLeft size={12} /></button>
@@ -88,13 +88,13 @@ export function DividendSection() {
         <div className="mb-3">
           <div className="flex items-center justify-between mb-2">
             <span className="text-2xs text-gray-500">Total received in {year}</span>
-            <span className="font-bold text-yellow-400 font-mono text-sm">{maskText(fmtINR(total))}</span>
+            <span className="font-bold text-neutral font-mono text-sm">{maskText(fmtINR(total))}</span>
           </div>
           {topCompanies.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {topCompanies.map(([co, amt]) => (
                 <span key={co} className="text-2xs bg-surface-hover px-2 py-0.5 rounded-full text-gray-300">
-                  {co} <span className="text-yellow-400 font-mono">{maskText(fmtINR(amt))}</span>
+                  {co} <span className="text-neutral font-mono">{maskText(fmtINR(amt))}</span>
                 </span>
               ))}
             </div>
@@ -109,11 +109,11 @@ export function DividendSection() {
             {items.map(d => (
               <div key={d.id} className="flex items-center justify-between py-1.5">
                 <div className="min-w-0 flex-1">
-                  <span className="text-white text-xs font-medium truncate">{d.description.replace(/^Dividend\s*[—-]\s*/, '')}</span>
+                  <span className="text-ink text-xs font-medium truncate">{d.description.replace(/^Dividend\s*[—-]\s*/, '')}</span>
                   <div className="text-2xs text-gray-600">{d.incomeDate}</div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0 ml-2">
-                  <span className="text-yellow-400 text-xs font-mono font-semibold">{maskText(fmtINR(d.amount))}</span>
+                  <span className="text-neutral text-xs font-mono font-semibold">{maskText(fmtINR(d.amount))}</span>
                   <button onClick={() => del(d.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                 </div>
               </div>

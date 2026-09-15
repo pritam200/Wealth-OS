@@ -89,11 +89,11 @@ function ReconciliationBanner({ issues }: { issues: ReconciliationIssue[] }) {
   if (!issues.length) return null;
   const highSeverity = issues.filter(i => i.severity === 'HIGH').length;
   return (
-    <div className="card border border-yellow-400/30 bg-yellow-400/5">
+    <div className="card border border-neutral/30 bg-neutral/5">
       <div className="flex items-start gap-3">
-        <AlertTriangle size={18} className="text-yellow-400 shrink-0 mt-0.5" />
+        <AlertTriangle size={18} className="text-neutral shrink-0 mt-0.5" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-yellow-400 mb-1.5">
+          <p className="text-sm font-semibold text-neutral mb-1.5">
             {issues.length} reconciliation issue{issues.length !== 1 ? 's' : ''} found
             {highSeverity > 0 ? ` (${highSeverity} high priority)` : ''}
           </p>
@@ -101,7 +101,7 @@ function ReconciliationBanner({ issues }: { issues: ReconciliationIssue[] }) {
             {issues.map((issue, i) => (
               <div key={`${issue.domain}-${issue.type}-${issue.referenceId}-${i}`}
                 className="text-2xs bg-surface-hover/60 rounded px-2 py-1.5 text-gray-300">
-                <span className={issue.severity === 'HIGH' ? 'text-bear font-medium' : 'text-yellow-400 font-medium'}>
+                <span className={issue.severity === 'HIGH' ? 'text-bear font-medium' : 'text-neutral font-medium'}>
                   {issue.domain}
                 </span>
                 {' — '}{issue.description}
@@ -120,12 +120,12 @@ const fmtINR = (n: number) =>
 interface LinkCard { id: number; label: string; desc: string; Icon: typeof TrendingUp; tone: string }
 
 const LINK_CARDS: LinkCard[] = [
-  { id: 13, label: 'Stocks',         desc: 'Holdings, BUY/SELL/HOLD signals & technicals', Icon: TrendingUp,  tone: 'from-[#6d5efc] to-[#9b5cf9]' },
-  { id: 6,  label: 'Mutual Funds',   desc: 'SIP guidance, redemptions & benchmarks',       Icon: PieChart,    tone: 'from-[#e84fd9] to-[#ff8a5b]' },
-  { id: 7,  label: 'Wealth Tools',   desc: 'FDs, loans, other assets & calculators',       Icon: Landmark,    tone: 'from-[#00d68f] to-[#00b8d4]' },
-  { id: 12, label: 'Planning',       desc: 'Goals, reminders & tax view',                  Icon: Target,      tone: 'from-[#ffb454] to-[#ff8a5b]' },
-  { id: 10, label: 'Income & Expenses', desc: 'Cash flow and monthly spend',               Icon: Receipt,     tone: 'from-[#00c2ff] to-[#6d5efc]' },
-  { id: 11, label: 'Cards & Rewards',   desc: 'Credit cards and benefit tracking',         Icon: CreditCard,  tone: 'from-[#f5c451] to-[#ffb454]' },
+  { id: 13, label: 'Stocks',         desc: 'Holdings, BUY/SELL/HOLD signals & technicals', Icon: TrendingUp,  tone: 'bg-brand/10 border border-brand/25 text-brand-light' },
+  { id: 6,  label: 'Mutual Funds',   desc: 'SIP guidance, redemptions & benchmarks',       Icon: PieChart,    tone: 'bg-bull/10 border border-bull/25 text-bull' },
+  { id: 7,  label: 'Wealth Tools',   desc: 'FDs, loans, other assets & calculators',       Icon: Landmark,    tone: 'bg-bull/10 border border-bull/25 text-bull' },
+  { id: 12, label: 'Planning',       desc: 'Goals, reminders & tax view',                  Icon: Target,      tone: 'bg-neutral/10 border border-neutral/25 text-neutral' },
+  { id: 10, label: 'Income & Expenses', desc: 'Cash flow and monthly spend',               Icon: Receipt,     tone: 'bg-brand/10 border border-brand/25 text-brand-light' },
+  { id: 11, label: 'Cards & Rewards',   desc: 'Credit cards and benefit tracking',         Icon: CreditCard,  tone: 'bg-neutral/10 border border-neutral/25 text-neutral' },
 ];
 
 // Landing page — net worth + allocation + quick links only, no recommendations of its own.
@@ -211,17 +211,17 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
 
       {/* ── Quick links — every module one tap away, no recommendation content duplicated here ── */}
       <div>
-        <h3 className="text-white font-semibold text-sm mb-3">Jump to</h3>
+        <h3 className="text-ink font-semibold text-sm mb-3">Jump to</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {LINK_CARDS.map(({ id, label, desc, Icon, tone }) => (
             <button key={id} onClick={() => onNavigate(id)} className="card text-left group">
               <div className="flex items-center justify-between mb-3">
-                <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${tone} flex items-center justify-center text-white shadow-lift`}>
+                <div className={`w-9 h-9 rounded-xl ${tone} flex items-center justify-center shrink-0`}>
                   <Icon size={16} />
                 </div>
                 <ArrowRight size={14} className="text-gray-600 group-hover:text-brand-light group-hover:translate-x-0.5 transition-all" />
               </div>
-              <div className="font-semibold text-white text-sm mb-0.5">{label}</div>
+              <div className="font-semibold text-ink text-sm mb-0.5">{label}</div>
               <p className="text-xs text-gray-500">{desc}</p>
             </button>
           ))}

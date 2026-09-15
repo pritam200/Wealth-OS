@@ -31,7 +31,7 @@ export function StatTile({ label, value, Icon, tone = 'brand', sub, sensitive = 
       </div>
       <div className="min-w-0">
         <div className="stat-label">{label}</div>
-        <div className="font-bold font-mono text-sm text-white truncate">{hide ? MASK : value}</div>
+        <div className="font-bold font-mono text-sm text-ink truncate">{hide ? MASK : value}</div>
         {sub && <div className="text-2xs text-gray-600 mt-0.5">{hide ? MASK : sub}</div>}
       </div>
     </div>

@@ -1,7 +1,7 @@
 package com.marketai.tracking.dto;
 
 import lombok.Data;
-import javax.validation.constraints.*;
+import jakarta.validation.constraints.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 

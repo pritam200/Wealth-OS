@@ -229,7 +229,7 @@ export function BulkImportModal({ onClose, onDone }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-surface-border">
           <div>
-            <h2 className="font-bold text-white">Bulk Import</h2>
+            <h2 className="font-bold text-ink">Bulk Import</h2>
             <p className="text-xs text-gray-500 mt-0.5">Paste CSV data to import multiple entries at once</p>
           </div>
           <button onClick={onClose} className="btn-icon"><X size={16} /></button>
@@ -239,7 +239,7 @@ export function BulkImportModal({ onClose, onDone }: Props) {
         <div className="flex gap-1 p-3 border-b border-surface-border overflow-x-auto">
           {TABS.map(t => (
             <button key={t.key} onClick={() => { setTab(t.key); setText(''); setResults(null); }}
-              className={`px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-all ${tab === t.key ? `bg-surface-hover ${t.color} border border-surface-border` : 'text-gray-500 hover:text-white'}`}>
+              className={`px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-all ${tab === t.key ? `bg-surface-hover ${t.color} border border-surface-border` : 'text-gray-500 hover:text-ink'}`}>
               {t.label}
             </button>
           ))}

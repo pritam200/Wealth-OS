@@ -19,7 +19,7 @@ export function Topbar({ sectionLabel, userName, marketOpen, onLogout, liveTicke
   return (
     <header className="flex items-stretch h-14 bg-surface-card/80 backdrop-blur-md border-b border-surface-border shrink-0">
       <div className="flex items-center px-5 shrink-0">
-        <h1 className="text-base font-bold text-white whitespace-nowrap tracking-tight">{sectionLabel}</h1>
+        <h1 className="text-base font-bold text-ink whitespace-nowrap tracking-tight">{sectionLabel}</h1>
       </div>
 
       <div className="flex items-center px-3">
@@ -43,7 +43,7 @@ export function Topbar({ sectionLabel, userName, marketOpen, onLogout, liveTicke
           {initials || 'U'}
         </div>
         <button onClick={toggle} title={masked ? 'Show amounts' : 'Hide amounts'}
-          className={`p-1.5 rounded-lg transition-colors ${masked ? 'text-gray-500 hover:text-white hover:bg-surface-hover' : 'text-brand-light bg-brand/10'}`}>
+          className={`p-1.5 rounded-lg transition-colors ${masked ? 'text-gray-500 hover:text-ink hover:bg-surface-hover' : 'text-brand-light bg-brand/10'}`}>
           {masked ? <EyeOff size={15} /> : <Eye size={15} />}
         </button>
         <button onClick={onLogout} title="Sign out" className="text-gray-600 hover:text-bear transition-colors p-1.5 rounded-lg hover:bg-bear/10">

@@ -26,6 +26,7 @@ public class PortfolioContext {
     private BigDecimal rdValue;
     private BigDecimal epfValue;
     private BigDecimal otherAssetsValue;
+    private BigDecimal cashValue;      // tracked bank/cash balances
     private BigDecimal loansOutstanding;
     private BigDecimal totalAssets;
     private BigDecimal netWorth;

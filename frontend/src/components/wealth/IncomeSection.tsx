@@ -4,15 +4,11 @@ import { incomeApi, INCOME_SOURCES } from '../../api/income';
 import type { IncomeResponse, IncomeSummary } from '../../api/income';
 import { useMaskedText } from '../shared/Amount';
 import { TransactionDetail } from '../shared/TransactionDetail';
+import { categoryColor } from '../../theme/chartTheme';
 
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
 const today = () => new Date().toISOString().slice(0, 10);
-
-const SRC_COLORS: Record<string, string> = {
-  Salary: '#00c47a', Freelance: '#2563eb', Dividend: '#e8a020',
-  Interest: '#f59e0b', Rental: '#8b5cf6', Business: '#00b8d9', Other: '#6b7280',
-};
 
 export function IncomeSection() {
   const maskText = useMaskedText();
@@ -82,7 +78,7 @@ export function IncomeSection() {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <div className="icon-badge-bull"><TrendingUp size={15} /></div>
-          <h3 className="font-bold text-white text-sm">Income</h3>
+          <h3 className="font-bold text-ink text-sm">Income</h3>
           {items.length > 0 && <span className="badge-bull">{items.length}</span>}
         </div>
         <div className="flex items-center gap-2">
@@ -138,12 +134,12 @@ export function IncomeSection() {
             <div className="space-y-1">
               {srcEntries.map(([src, amt]) => {
                 const pct = total > 0 ? (amt / total * 100) : 0;
-                const color = SRC_COLORS[src] ?? '#6b7280';
+                const color = categoryColor(src);
                 return (
                   <div key={src}>
                     <div className="flex justify-between text-2xs mb-0.5">
                       <span className="text-gray-400">{src}</span>
-                      <span className="text-white font-mono">{maskText(fmtINR(amt))} <span className="text-gray-600">({maskText(`${pct.toFixed(0)}%`)})</span></span>
+                      <span className="text-ink font-mono">{maskText(fmtINR(amt))} <span className="text-gray-600">({maskText(`${pct.toFixed(0)}%`)})</span></span>
                     </div>
                     <div className="h-1 bg-surface-hover rounded-full overflow-hidden">
                       <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
@@ -168,14 +164,14 @@ export function IncomeSection() {
                      onClick={() => setDetail(e)}>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: SRC_COLORS[e.source] ?? '#6b7280' }} />
-                      <span className="text-white text-xs font-medium truncate">{displayName}</span>
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: categoryColor(e.source) }} />
+                      <span className="text-ink text-xs font-medium truncate">{displayName}</span>
                     </div>
                     <div className="text-2xs text-gray-600 ml-3 truncate">{subtitle}</div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
                     <span className="text-bull text-xs font-mono font-semibold">{maskText(fmtINR(e.amount))}</span>
-                    <button onClick={(ev) => { ev.stopPropagation(); startEdit(e); }} className="btn-icon text-gray-500 hover:text-white p-0.5" title="Edit income"><Edit2 size={11} /></button>
+                    <button onClick={(ev) => { ev.stopPropagation(); startEdit(e); }} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit income"><Edit2 size={11} /></button>
                     <button onClick={(ev) => { ev.stopPropagation(); del(e.id); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                   </div>
                 </div>
@@ -190,7 +186,7 @@ export function IncomeSection() {
           open={!!detail}
           onClose={() => setDetail(null)}
           title={detail.payer || detail.description}
-          badgeColor="#00c47a"
+          badgeColor={categoryColor(detail.source)}
           badgeLabel={detail.source}
           amount={detail.amount}
           fields={[
@@ -236,7 +232,7 @@ export function SavingsRatioCard() {
     <div className="card-elevated">
       <div className="flex items-center gap-2.5 mb-3">
         <div className="icon-badge-brand"><Wallet size={15} /></div>
-        <h3 className="font-bold text-white text-sm">Savings — {monthLabel}</h3>
+        <h3 className="font-bold text-ink text-sm">Savings — {monthLabel}</h3>
       </div>
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div className="bg-surface-hover rounded p-2">
@@ -255,7 +251,7 @@ export function SavingsRatioCard() {
       <div>
         <div className="flex justify-between text-2xs text-gray-500 mb-1">
           <span>Savings rate</span>
-          <span className={ratio >= 20 ? 'text-bull' : ratio >= 10 ? 'text-yellow-400' : 'text-bear'}>{maskText(`${ratio.toFixed(1)}%`)}</span>
+          <span className={ratio >= 20 ? 'text-bull' : ratio >= 10 ? 'text-neutral' : 'text-bear'}>{maskText(`${ratio.toFixed(1)}%`)}</span>
         </div>
         <div className="h-2 bg-surface-hover rounded-full overflow-hidden">
           <div className="h-full rounded-full bg-brand-gradient transition-all"

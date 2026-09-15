@@ -1,0 +1,8 @@
+flowchart LR
+    E["Extracted event"] --> T1{"Strong external ref?<br/>UTR / RRN / EndToEndId"}
+    T1 -->|yes| EXACT["Exact match"]
+    T1 -->|no| T2{"Composite key + tolerance"}
+    T2 -->|"score >= 95"| AUTO["Auto-match"]
+    T2 -->|"85-94"| FLAG["Auto-match, flagged"]
+    T2 -->|"70-84"| HUMAN["Review queue"]
+    T2 -->|"< 70"| NEW["New event"]

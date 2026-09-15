@@ -123,7 +123,7 @@ function IndexPill({ label, value, change }: { label: string; value: string; cha
     <div className="flex items-center gap-2.5 px-4 border-r border-surface-border last:border-0">
       <div>
         <div className="text-2xs text-gray-600 uppercase tracking-widest mb-0.5">{label}</div>
-        <div className="text-sm font-mono font-semibold text-white leading-none">{value}</div>
+        <div className="text-sm font-mono font-semibold text-ink leading-none">{value}</div>
       </div>
       <span className={`text-xs font-mono font-bold ${pos ? 'text-bull' : 'text-bear'}`}>{change}</span>
     </div>

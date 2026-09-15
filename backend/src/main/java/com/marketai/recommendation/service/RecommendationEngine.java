@@ -17,6 +17,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import com.marketai.common.quality.DataQuality;
 
 /**
  * The single source of truth for BUY/HOLD/SELL and the advisor-style next action.
@@ -76,7 +77,7 @@ public class RecommendationEngine {
         // Not enough verifiable data behind this symbol → refuse to emit an action. Showing
         // HOLD here would be indistinguishable from a real "nothing to do" verdict, so the
         // UI needs to be able to tell the two apart.
-        if ("INSUFFICIENT".equals(a.getDataQuality())) {
+        if (!DataQuality.of(a.getDataQuality()).isUsable()) {
             a.setConfidenceScore(0);
             a.setNextAction("INSUFFICIENT_DATA");
             a.setNextActionReason(String.format(

@@ -31,6 +31,18 @@ export interface ReconciliationReport {
   actionItems: string[];
 }
 
+/** The one shape describing what a sync actually did — previously these figures were split
+ *  across the token's lastSyncAt and the nested reconciliation report. */
+export interface GmailSyncSummary {
+  lastSync: string | null;
+  scanned: number;
+  newlyImported: number;
+  duplicatesSkipped: number;
+  failed: number;
+  extractedTransactions: number;
+  queuedForReview: number;
+}
+
 export interface GmailSyncResult {
   imported: number;
   skipped: number;
@@ -39,6 +51,7 @@ export interface GmailSyncResult {
   logEntries: SyncLogEntry[];
   error: string | null;
   reconciliation: ReconciliationReport | null;
+  stats: GmailSyncSummary | null;
 }
 
 export interface ProcessedEmailEntry {
@@ -46,7 +59,7 @@ export interface ProcessedEmailEntry {
   gmailMessageId: string;
   processedAt: string;
   type: string;
-  status: 'IMPORTED' | 'SKIPPED' | 'FAILED';
+  status: 'IMPORTED' | 'SKIPPED' | 'FAILED' | 'REVIEW_REQUIRED';
   matchedParser: string | null;
   sender: string | null;
   resultSummary: string | null;
@@ -161,4 +174,36 @@ export const gmailApi = {
   // Persistent, queryable reconciliation report — see ReconciliationReportDto for why
   // `duplicates`/`reconciled` are nullable rather than defaulting to 0.
   getReconciliationReport: () => apiClient.get<ReconciliationReportDto>('/api/gmail/reconciliation-report'),
+};
+
+/* ── Async sync jobs ──────────────────────────────────────────────────────────────────────
+   A full scan is minutes of work and outlives an HTTP request, so syncing now queues a job
+   and the UI polls it. The old blocking POST /api/gmail/sync is kept for compatibility but
+   should not be used for large windows.                                                   */
+
+export type SyncJobStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+
+export interface SyncJob {
+  id: number;
+  type: 'GMAIL_FULL_SYNC' | 'GMAIL_INCREMENTAL_SYNC' | 'GMAIL_RETRY_FAILED';
+  status: SyncJobStatus;
+  trigger: 'MANUAL' | 'SCHEDULED' | 'PUSH' | 'RECOVERY';
+  itemsTotal?: number | null;
+  itemsProcessed?: number | null;
+  attempts?: number;
+  resultSummary?: string | null;
+  lastError?: string | null;
+  createdAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
+export const syncJobApi = {
+  /** Queues a sync. Returns 202 with the job; incremental unless `full` is set. */
+  queueGmail: (opts?: { full?: boolean; lookback?: string }) =>
+    apiClient.post<SyncJob>('/api/sync/gmail', {}, {
+      params: { full: opts?.full ?? false, lookback: opts?.lookback },
+    }),
+  get: (id: number) => apiClient.get<SyncJob>(`/api/sync/jobs/${id}`),
+  recent: (limit = 10) => apiClient.get<SyncJob[]>('/api/sync/jobs', { params: { limit } }),
 };

@@ -10,9 +10,9 @@ import type { AnalystAssessment } from '../../api/analyst';
 const NEXT_ACTION_STYLE: Record<string, { cls: string; label: string }> = {
   ACCUMULATE:  { cls: 'text-bull bg-bull/10 border-bull/30', label: 'ACCUMULATE' },
   CONTINUE:    { cls: 'text-bull bg-bull/10 border-bull/30', label: 'CONTINUE' },
-  BOOK_PROFIT: { cls: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30', label: 'BOOK PROFIT' },
+  BOOK_PROFIT: { cls: 'text-neutral bg-neutral/10 border-neutral/30', label: 'BOOK PROFIT' },
   EXIT:        { cls: 'text-bear bg-bear/10 border-bear/30', label: 'EXIT' },
-  REVIEW:      { cls: 'text-orange-400 bg-orange-400/10 border-orange-400/30', label: 'REVIEW' },
+  REVIEW:      { cls: 'text-neutral bg-neutral/10 border-neutral/30', label: 'REVIEW' },
   HOLD:        { cls: 'text-gray-400 bg-surface-hover border-surface-border', label: 'HOLD' },
   // Not a recommendation — the engine declined to give one for lack of verifiable price
   // history. Deliberately styled unlike HOLD (dashed, dimmer, no fill) so "nothing to do"

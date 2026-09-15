@@ -57,8 +57,8 @@ function LockedStatements({ onImport }: { onImport?: () => void }) {
   if (!items || items.length === 0) return null;
 
   return (
-    <div className="mt-3 bg-yellow-400/5 border border-yellow-400/30 rounded-lg p-2.5">
-      <div className="flex items-center gap-1.5 text-2xs text-yellow-400 mb-2">
+    <div className="mt-3 bg-neutral/5 border border-neutral/30 rounded-lg p-2.5">
+      <div className="flex items-center gap-1.5 text-2xs text-neutral mb-2">
         <Lock size={11} /> {items.length} locked statement{items.length > 1 ? 's' : ''} — unlocking saves the password
         (encrypted) so future statements from the same sender import automatically
       </div>
@@ -69,7 +69,7 @@ function LockedStatements({ onImport }: { onImport?: () => void }) {
           <li key={pdf.id} className={`rounded p-2 ${passwordFailed ? 'bg-bear/5 border border-bear/25' : 'bg-surface-hover'}`}>
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
-                <div className="text-xs text-white truncate">{pdf.filename}</div>
+                <div className="text-xs text-ink truncate">{pdf.filename}</div>
                 <div className="text-2xs text-gray-500 truncate">{pdf.sender} · {pdf.subject}</div>
               </div>
               <button onClick={() => dismiss(pdf.id)} className="btn-icon text-gray-600 hover:text-bear shrink-0" title="Dismiss">
@@ -159,12 +159,12 @@ function ManageSavedPasswords() {
                 <li key={sp.id} className="bg-surface-panel rounded px-2 py-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <span className="text-xs text-white font-mono">{sp.providerKey}</span>
+                      <span className="text-xs text-ink font-mono">{sp.providerKey}</span>
                       <span className="text-2xs text-gray-600 ml-2">last used {fmtDate(sp.lastUsedAt)}</span>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <button onClick={() => { setEditId(editId === sp.id ? null : sp.id); setEditValue(''); }}
-                        className="btn-icon text-gray-600 hover:text-white p-0.5" title="Update password"><Edit2 size={11} /></button>
+                        className="btn-icon text-gray-600 hover:text-ink p-0.5" title="Update password"><Edit2 size={11} /></button>
                       <button onClick={() => remove(sp.id)} className="btn-icon text-gray-600 hover:text-bear p-0.5" title="Delete saved password"><Trash2 size={11} /></button>
                     </div>
                   </div>
@@ -238,7 +238,7 @@ function ExcludedSenders() {
               {items.map(es => (
                 <li key={es.id} className="flex items-center justify-between gap-2 bg-surface-panel rounded px-2 py-1">
                   <div className="min-w-0">
-                    <span className="text-xs text-white">{es.pattern}</span>
+                    <span className="text-xs text-ink">{es.pattern}</span>
                     {es.label && <span className="text-2xs text-gray-500"> · {es.label}</span>}
                   </div>
                   <button onClick={() => remove(es.id)} className="btn-icon text-gray-600 hover:text-bear shrink-0" title="Remove">
@@ -315,7 +315,7 @@ function ReconciliationReportPanel() {
   return (
     <div className="mt-3 space-y-2.5">
       <div className="flex items-center justify-between">
-        <h4 className="text-xs font-semibold text-white flex items-center gap-1.5">
+        <h4 className="text-xs font-semibold text-ink flex items-center gap-1.5">
           <ClipboardList size={13} className="text-brand" /> Reconciliation Report
         </h4>
         <div className="flex items-center gap-2">
@@ -432,7 +432,7 @@ function ContractNoteDebug() {
   const stepIcon = (status: string) => {
     if (status === 'OK') return <CheckCircle size={11} className="text-bull shrink-0" />;
     if (status === 'FAIL' || status === 'ERROR') return <XCircle size={11} className="text-bear shrink-0" />;
-    if (status === 'EMPTY') return <MinusCircle size={11} className="text-yellow-400 shrink-0" />;
+    if (status === 'EMPTY') return <MinusCircle size={11} className="text-neutral shrink-0" />;
     return <MinusCircle size={11} className="text-gray-500 shrink-0" />;
   };
 
@@ -440,8 +440,8 @@ function ContractNoteDebug() {
     const colors: Record<string, string> = {
       IMPORTED: 'bg-bull/15 text-bull',
       FAILED: 'bg-bear/15 text-bear',
-      NEEDS_PASSWORD: 'bg-yellow-500/15 text-yellow-400',
-      PASSWORD_FAILED: 'bg-orange-500/15 text-orange-400',
+      NEEDS_PASSWORD: 'bg-neutral/15 text-neutral',
+      PASSWORD_FAILED: 'bg-neutral/15 text-neutral',
       DISMISSED: 'bg-gray-500/15 text-gray-400',
     };
     return <span className={`px-1.5 py-0.5 rounded text-2xs font-semibold ${colors[s] || 'bg-surface-hover text-gray-400'}`}>{s}</span>;
@@ -450,7 +450,7 @@ function ContractNoteDebug() {
   return (
     <div className="mt-3 space-y-2">
       <div className="flex items-center justify-between">
-        <h4 className="text-xs font-semibold text-white flex items-center gap-1.5">
+        <h4 className="text-xs font-semibold text-ink flex items-center gap-1.5">
           <FileText size={13} className="text-brand" /> Contract Note Debug View
         </h4>
         <div className="flex items-center gap-2">
@@ -507,7 +507,7 @@ function ContractNoteDebug() {
                           <div key={i} className="flex items-start gap-1.5 text-2xs">
                             {stepIcon(s.status)}
                             <span className="text-gray-400 w-28 shrink-0">{STEP_LABELS[s.step] || s.step}</span>
-                            <span className={s.status === 'OK' ? 'text-gray-300' : s.status === 'FAIL' || s.status === 'ERROR' ? 'text-bear' : 'text-yellow-400'}>
+                            <span className={s.status === 'OK' ? 'text-gray-300' : s.status === 'FAIL' || s.status === 'ERROR' ? 'text-bear' : 'text-neutral'}>
                               {s.detail}
                             </span>
                           </div>
@@ -657,7 +657,7 @@ export function GmailConnect({ onImport }: Props) {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-white text-sm">Data Sync</span>
+              <span className="font-semibold text-ink text-sm">Data Sync</span>
               {status.connected && (
                 <span className="flex items-center gap-1 text-2xs text-bull bg-bull/10 px-1.5 py-0.5 rounded-full">
                   <CheckCircle size={9} /> Connected
@@ -685,12 +685,12 @@ export function GmailConnect({ onImport }: Props) {
                 {syncing ? 'Syncing…' : 'Sync now'}
               </button>
               <button onClick={() => handleSync('retry')} disabled={syncing}
-                className="btn-ghost text-xs flex items-center gap-1.5 px-2 py-1.5 text-orange-400 hover:text-orange-300"
+                className="btn-ghost text-xs flex items-center gap-1.5 px-2 py-1.5 text-neutral hover:text-neutral"
                 title="Re-process emails that previously failed or were skipped">
                 <RefreshCw size={12} /> Retry failed
               </button>
               <button onClick={() => handleSync('full')} disabled={syncing}
-                className="btn-ghost text-xs flex items-center gap-1.5 px-2 py-1.5 text-yellow-400 hover:text-yellow-300"
+                className="btn-ghost text-xs flex items-center gap-1.5 px-2 py-1.5 text-neutral hover:text-neutral"
                 title="Delete all sync history and re-process every email from the past year">
                 <RefreshCw size={12} /> Full resync
               </button>
@@ -737,28 +737,28 @@ export function GmailConnect({ onImport }: Props) {
           {lastResult.reconciliation && (
             <div className={`rounded-lg border p-3 text-xs ${
               lastResult.reconciliation.status === 'OK'
-                ? 'bg-bull/5 border-bull/20' : 'bg-yellow-500/5 border-yellow-500/20'}`}>
+                ? 'bg-bull/5 border-bull/20' : 'bg-neutral/5 border-neutral/20'}`}>
               <div className="flex items-center gap-2 mb-2">
                 {lastResult.reconciliation.status === 'OK'
                   ? <CheckCircle size={13} className="text-bull" />
-                  : <AlertTriangle size={13} className="text-yellow-400" />}
-                <span className="font-semibold text-white">
+                  : <AlertTriangle size={13} className="text-neutral" />}
+                <span className="font-semibold text-ink">
                   Reconciliation: {lastResult.reconciliation.status === 'OK' ? 'All records accounted for' : 'Action Required'}
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-2xs">
-                <div><span className="text-gray-500">Emails scanned</span><div className="text-white font-medium">{lastResult.reconciliation.emailsProcessed}</div></div>
-                <div><span className="text-gray-500">Attachments</span><div className="text-white font-medium">{lastResult.reconciliation.attachmentsProcessed}</div></div>
-                <div><span className="text-gray-500">Transactions found</span><div className="text-white font-medium">{lastResult.reconciliation.transactionsFound}</div></div>
+                <div><span className="text-gray-500">Emails scanned</span><div className="text-ink font-medium">{lastResult.reconciliation.emailsProcessed}</div></div>
+                <div><span className="text-gray-500">Attachments</span><div className="text-ink font-medium">{lastResult.reconciliation.attachmentsProcessed}</div></div>
+                <div><span className="text-gray-500">Transactions found</span><div className="text-ink font-medium">{lastResult.reconciliation.transactionsFound}</div></div>
                 <div><span className="text-gray-500">Imported</span><div className="text-bull font-medium">{lastResult.reconciliation.transactionsImported}</div></div>
                 <div><span className="text-gray-500">Duplicates skipped</span><div className="text-gray-400 font-medium">{lastResult.reconciliation.duplicatesSkipped}</div></div>
                 <div><span className="text-gray-500">Failed</span><div className={`font-medium ${lastResult.reconciliation.failedImports > 0 ? 'text-bear' : 'text-gray-400'}`}>{lastResult.reconciliation.failedImports}</div></div>
-                <div><span className="text-gray-500">PDFs pending</span><div className={`font-medium ${lastResult.reconciliation.pdfsPending > 0 ? 'text-yellow-400' : 'text-gray-400'}`}>{lastResult.reconciliation.pdfsPending}</div></div>
+                <div><span className="text-gray-500">PDFs pending</span><div className={`font-medium ${lastResult.reconciliation.pdfsPending > 0 ? 'text-neutral' : 'text-gray-400'}`}>{lastResult.reconciliation.pdfsPending}</div></div>
               </div>
               {lastResult.reconciliation.actionItems.length > 0 && (
                 <div className="mt-2 space-y-1">
                   {lastResult.reconciliation.actionItems.map((item, i) => (
-                    <div key={i} className="flex items-start gap-1.5 text-2xs text-yellow-400">
+                    <div key={i} className="flex items-start gap-1.5 text-2xs text-neutral">
                       <AlertTriangle size={10} className="shrink-0 mt-0.5" />
                       <span>{item}</span>
                     </div>
@@ -781,7 +781,7 @@ export function GmailConnect({ onImport }: Props) {
                     : MinusCircle;
                   const color = entry.status === 'IMPORTED' ? 'text-bull'
                     : entry.status === 'FAILED' ? 'text-bear'
-                    : entry.status === 'PDF_QUEUED' ? 'text-yellow-400'
+                    : entry.status === 'PDF_QUEUED' ? 'text-neutral'
                     : 'text-gray-500';
                   const isExpanded = expandedEntry === i;
                   return (

@@ -34,6 +34,24 @@ public class TodaysActionsResponse {
     /** Holdings the engine could not analyse (insufficient price/NAV history) — never silently dropped. */
     private List<NotAnalysed> notAnalysed;
 
+    /** Cash the advisory is allowed to size positions against. */
+    private CashPosition cash;
+
+    @Data
+    @Builder
+    public static class CashPosition {
+        /** Authoritative total across tracked bank/cash accounts. */
+        private BigDecimal trackedCash;
+        /**
+         * Of that cash, how much arrived from MF redemptions and hasn't been redeployed.
+         * A label on part of trackedCash — never added to it, which would double-count.
+         */
+        private BigDecimal earmarkedFromRedemptions;
+        /** True when at least one cash account exists, i.e. sizing is possible at all. */
+        private boolean cashTracked;
+        private String note;
+    }
+
     @Data
     @Builder
     public static class BuyAction {
@@ -42,12 +60,20 @@ public class TodaysActionsResponse {
         private String assetType; // STOCK | MF
         private BigDecimal currentValue;
         private Double currentPercentOfEquity;
-        /** Upper bound only — how much MORE could be added before breaching the single-position
-         *  concentration guideline. Not a target amount; there is no cash-balance data to size one. */
+        /** Upper bound from concentration alone — how much MORE could be added before
+         *  breaching the single-position guideline, ignoring whether the cash exists. */
         private BigDecimal maxAddWithoutBreachingGuideline;
+        /** What to actually deploy: the concentration headroom capped by tracked deployable
+         *  cash. Null when no cash accounts are tracked, in which case no amount is invented. */
+        private BigDecimal suggestedAmount;
+        /** How suggestedAmount was arrived at, or why it is absent. */
+        private String sizingBasis;
         private String why;
         private String risk;
         private int confidence;
+        /** As-of time of the price/NAV data behind this recommendation. */
+        private LocalDateTime dataTimestamp;
+        private String expectedOutcome;
     }
 
     @Data

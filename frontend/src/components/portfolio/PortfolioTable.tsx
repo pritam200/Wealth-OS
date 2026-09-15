@@ -36,7 +36,7 @@ export function PortfolioTable({ holdings, onRemove }: Props) {
             return (
               <tr key={h.id} className="border-b border-surface-border/50 hover:bg-surface-hover transition-colors">
                 <td className="py-3 pr-4">
-                  <div className="font-semibold text-white font-mono">{h.symbol}</div>
+                  <div className="font-semibold text-ink font-mono">{h.symbol}</div>
                   <div className="text-xs text-gray-500 truncate max-w-[120px]">{h.name}</div>
                 </td>
                 <td className="py-3 pr-4 text-xs text-gray-400 whitespace-nowrap">
@@ -44,9 +44,9 @@ export function PortfolioTable({ holdings, onRemove }: Props) {
                 </td>
                 <td className="py-3 pr-4 text-right text-gray-300">{maskText(String(h.quantity))}</td>
                 <td className="py-3 pr-4 text-right text-gray-300">{maskText(fmt(h.averageCost))}</td>
-                <td className="py-3 pr-4 text-right text-white font-medium">{maskText(fmt(h.currentPrice ?? h.averageCost))}</td>
+                <td className="py-3 pr-4 text-right text-ink font-medium">{maskText(fmt(h.currentPrice ?? h.averageCost))}</td>
                 <td className="py-3 pr-4 text-right text-gray-300">{maskText(fmt(h.investedValue))}</td>
-                <td className="py-3 pr-4 text-right text-white">{maskText(fmt(h.currentValue))}</td>
+                <td className="py-3 pr-4 text-right text-ink">{maskText(fmt(h.currentValue))}</td>
                 <td className="py-3 pr-4 text-right">
                   <div className={isPnlPositive ? 'value-bull' : 'value-bear'}>
                     {maskText(`${isPnlPositive ? '+' : ''}${fmt(h.pnl)}`)}

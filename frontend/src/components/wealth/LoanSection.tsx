@@ -51,7 +51,7 @@ export function LoanSection({ onRefresh }: { onRefresh: () => void }) {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <div className="icon-badge-bear"><CreditCard size={15} /></div>
-          <h3 className="font-bold text-white text-sm">Loans &amp; EMIs</h3>
+          <h3 className="font-bold text-ink text-sm">Loans &amp; EMIs</h3>
           {items.length > 0 && <span className="text-xs text-bear font-mono">{maskText(fmtINR(items.reduce((s, x) => s + x.emi, 0)))}/mo</span>}
         </div>
         <button onClick={() => setOpen(o => !o)} className="btn-secondary text-xs flex items-center gap-1"><Plus size={11} /> Add Loan</button>
@@ -106,7 +106,7 @@ export function LoanSection({ onRefresh }: { onRefresh: () => void }) {
             <div className="flex items-center justify-between mb-1">
               <div>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-white text-xs font-medium">{l.name}</span>
+                  <span className="text-ink text-xs font-medium">{l.name}</span>
                   <span className="text-2xs text-gray-600 bg-surface-hover px-1 rounded">{l.type}</span>
                 </div>
                 <div className="text-2xs text-gray-600">{maskText(`${l.rate}%`)} p.a. · {l.remainingMonths}m left · Interest: {maskText(fmtINR(l.totalInterestPayable))}</div>
@@ -116,7 +116,7 @@ export function LoanSection({ onRefresh }: { onRefresh: () => void }) {
                   <div className="text-bear num text-xs">EMI {maskText(fmtINR(l.emi))}/mo</div>
                   <div className="text-gray-500 num text-2xs">Bal {maskText(fmtINR(l.outstanding))}</div>
                 </div>
-                <button onClick={() => startEdit(l)} className="btn-icon text-gray-500 hover:text-white p-0.5" title="Edit loan"><Edit2 size={11} /></button>
+                <button onClick={() => startEdit(l)} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit loan"><Edit2 size={11} /></button>
                 <button onClick={() => del(l.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
               </div>
             </div>

@@ -1,6 +1,6 @@
 package com.marketai.news.entity;
 
-import javax.persistence.*;
+import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.LocalDateTime;

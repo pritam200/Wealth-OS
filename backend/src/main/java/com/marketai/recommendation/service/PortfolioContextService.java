@@ -9,6 +9,7 @@ import com.marketai.portfolio.repository.PortfolioRepository;
 import com.marketai.recommendation.dto.PortfolioContext;
 import com.marketai.tracking.dto.TrackingSummaryResponse;
 import com.marketai.tracking.service.TrackingService;
+import com.marketai.ledger.repository.CashAccountRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import com.marketai.common.quality.DataQuality;
 
 /**
  * Builds the whole-portfolio picture that per-security analysis needs in order to answer
@@ -50,6 +52,7 @@ public class PortfolioContextService {
     private final HoldingRepository holdingRepository;
     private final StockRepository stockRepository;
     private final TrackingService trackingService;
+    private final CashAccountRepository cashAccountRepository;
 
     /**
      * Every holding across EVERY portfolio the user owns. A user can accumulate several
@@ -106,7 +109,12 @@ public class PortfolioContextService {
         BigDecimal other = t != null ? nz(t.getTotalOtherAssets()) : BigDecimal.ZERO;
         BigDecimal loans = t != null ? nz(t.getTotalLoanOutstanding()) : BigDecimal.ZERO;
 
-        BigDecimal totalAssets = stocksValue.add(mfValue).add(fd).add(rd).add(epf).add(other);
+        // Cash is part of total assets. Without it an internal transfer (bank -> MF) raised
+        // net worth by the full amount transferred, because the destination asset grew while
+        // the funding side was invisible.
+        BigDecimal cash = nz(cashAccountRepository.sumBalanceByUser(userId));
+
+        BigDecimal totalAssets = stocksValue.add(mfValue).add(fd).add(rd).add(epf).add(other).add(cash);
         BigDecimal netWorth = totalAssets.subtract(loans);
         BigDecimal equityValue = stocksValue.add(mfValue);
 
@@ -225,12 +233,12 @@ public class PortfolioContextService {
                 mfCount, mfCount == 1 ? "" : "s"));
         }
 
-        String dataQuality = gaps.isEmpty() ? "FULL" : "PARTIAL";
+        String dataQuality = (gaps.isEmpty() ? DataQuality.FULL : DataQuality.PARTIAL).wire();
 
         return PortfolioContext.builder()
             .stocksValue(scale(stocksValue)).mfValue(scale(mfValue))
             .fdValue(scale(fd)).rdValue(scale(rd)).epfValue(scale(epf))
-            .otherAssetsValue(scale(other)).loansOutstanding(scale(loans))
+            .otherAssetsValue(scale(other)).cashValue(scale(cash)).loansOutstanding(scale(loans))
             .totalAssets(scale(totalAssets)).netWorth(scale(netWorth))
             .equityPercent(round1(equityPct)).debtPercent(round1(debtPct)).otherPercent(round1(otherPct))
             .equityInvested(scale(equityInvested)).equityCurrent(scale(equityCurrent))

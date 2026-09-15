@@ -16,6 +16,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import com.marketai.common.quality.DataQuality;
 
 @Service
 @RequiredArgsConstructor
@@ -96,7 +97,7 @@ public class TechnicalIndicatorService {
                 .trend(trend)
                 .signal(signal)
                 .signalStrength(calculateSignalStrength(rsi14, macd, currentPrice, sma20))
-                .dataQuality(sma200OrNull != null ? "FULL" : "PARTIAL")
+                .dataQuality((sma200OrNull != null ? DataQuality.FULL : DataQuality.PARTIAL).wire())
                 .barsAvailable(history.size())
                 .build();
     }
@@ -326,7 +327,7 @@ public class TechnicalIndicatorService {
                 .trend("UNKNOWN")
                 .signal("INSUFFICIENT_DATA")
                 .signalStrength(null)
-                .dataQuality("INSUFFICIENT")
+                .dataQuality(DataQuality.INSUFFICIENT.wire())
                 .barsAvailable(bars)
                 .build();
     }

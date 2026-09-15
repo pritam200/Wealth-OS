@@ -42,6 +42,7 @@ public class TrackingService {
             .maturityDate(req.getMaturityDate())
             .build();
         fd = fdRepo.save(fd);
+        markMaturedIfAlreadyPast(fd);
         // Renewal detection previously ran only on the Gmail-import path (ParsedEmailImporter)
         // — a manually-entered renewal FD was never linked to its predecessor and could
         // double-count. Every FD creation path must go through the same detection.
@@ -142,7 +143,7 @@ public class TrackingService {
             .userId(userId)
             .description("FD interest — " + fd.getBank())
             .amount(interestEarned)
-            .source("Interest")
+            .source(com.marketai.income.entity.IncomeSource.INTEREST)
             .incomeDate(LocalDate.now())
             .note("FD closed. Principal: ₹" + fd.getPrincipal() + ", Maturity: ₹" + received + ", Rate: " + fd.getRate() + "%")
             .build();
@@ -226,6 +227,7 @@ public class TrackingService {
             .tenureMonths(req.getTenureMonths())
             .build();
         rd = rdRepo.save(rd);
+        markMaturedIfAlreadyPast(rd);
         return detectAndLinkRdRenewal(userId, rd.getId());
     }
 
@@ -314,7 +316,7 @@ public class TrackingService {
             .userId(userId)
             .description("RD interest — " + rd.getBank())
             .amount(interestEarned)
-            .source("Interest")
+            .source(com.marketai.income.entity.IncomeSource.INTEREST)
             .incomeDate(LocalDate.now())
             .note("RD closed. Total deposited: ₹" + totalDeposited + ", Maturity: ₹" + received + ", Rate: " + rd.getRate() + "%")
             .build();
@@ -572,6 +574,37 @@ public class TrackingService {
      * instead of silently sitting frozen at its maturity value forever with no signal. Never
      * touches CLOSED/MATURED_RENEWED/already-MATURED rows.
      */
+    /**
+     * Applies the ACTIVE-\u2192MATURED transition to a single just-created deposit, immediately.
+     *
+     * <p>Found by live QA: {@link #markMaturedDeposits} only runs once a day via
+     * {@link com.marketai.tracking.scheduler.DepositMaturityScheduler}. A deposit entered — or,
+     * far more commonly, imported from a historical Gmail statement — with a maturity date
+     * already in the past was created with the entity's default status of ACTIVE and stayed
+     * that way until the next scheduled sweep, up to 24 hours later. In the meantime it reads
+     * as an active, still-growing deposit rather than one that needs a withdraw/renew decision,
+     * which is exactly the state {@code MATURED} exists to distinguish.
+     *
+     * <p>The daily sweep still runs and still matters — for deposits that mature <em>after</em>
+     * being created, which is the common case for a fresh FD. This only closes the gap for a
+     * deposit that arrives already overdue.
+     */
+    private void markMaturedIfAlreadyPast(FixedDeposit fd) {
+        if ("ACTIVE".equals(fd.getStatus()) && fd.getMaturityDate() != null
+                && !LocalDate.now().isBefore(fd.getMaturityDate())) {
+            fd.setStatus("MATURED");
+            fdRepo.save(fd);
+        }
+    }
+
+    private void markMaturedIfAlreadyPast(RecurringDeposit rd) {
+        if ("ACTIVE".equals(rd.getStatus()) && rd.getMaturityDate() != null
+                && !LocalDate.now().isBefore(rd.getMaturityDate())) {
+            rd.setStatus("MATURED");
+            rdRepo.save(rd);
+        }
+    }
+
     @Transactional
     public void markMaturedDeposits() {
         LocalDate today = LocalDate.now();

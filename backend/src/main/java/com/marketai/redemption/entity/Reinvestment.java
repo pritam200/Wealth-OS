@@ -2,7 +2,7 @@ package com.marketai.redemption.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
-import javax.persistence.*;
+import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
@@ -13,7 +13,9 @@ import java.time.LocalDate;
 public class Reinvestment {
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+
+    @EqualsAndHashCode.Include
+    @ToString.Include    private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "redemption_id", nullable = false)

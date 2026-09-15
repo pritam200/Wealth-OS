@@ -18,7 +18,7 @@ function NewsCard({ item }: { item: NewsItem }) {
       className="block card hover:border-brand/30 transition-all group">
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <h3 className="text-sm font-medium text-gray-200 group-hover:text-white leading-snug mb-2 line-clamp-3">
+          <h3 className="text-sm font-medium text-gray-200 group-hover:text-ink leading-snug mb-2 line-clamp-3">
             {item.title}
           </h3>
           {item.description && (
@@ -67,11 +67,11 @@ export function Tab5NewsAndCatalysts() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#ffb454] to-[#ff8a5b] flex items-center justify-center text-white shadow-lift shrink-0">
+          <div className="w-11 h-11 rounded-2xl bg-neutral/10 border border-neutral/25 flex items-center justify-center text-neutral shrink-0">
             <Newspaper size={20} />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white mb-0.5">News &amp; Catalysts</h2>
+            <h2 className="text-xl font-bold text-ink mb-0.5">News &amp; Catalysts</h2>
             <p className="text-gray-500 text-sm">Weekly micro/macro events with sentiment tagging</p>
           </div>
         </div>
@@ -101,7 +101,7 @@ export function Tab5NewsAndCatalysts() {
         {(['ALL', 'POSITIVE', 'NEGATIVE', 'NEUTRAL'] as const).map(f => (
           <button key={f} onClick={() => setFilter(f)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              filter === f ? 'bg-brand text-white' : 'bg-surface-card border border-surface-border text-gray-400 hover:text-white'
+              filter === f ? 'bg-brand text-white' : 'bg-surface-card border border-surface-border text-gray-400 hover:text-ink'
             }`}>
             {f === 'POSITIVE' ? 'Bullish' : f === 'NEGATIVE' ? 'Bearish' : f === 'NEUTRAL' ? 'Neutral' : 'All'}
           </button>

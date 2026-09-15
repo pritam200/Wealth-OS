@@ -70,7 +70,7 @@ export function CreditCardSection() {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <CardIcon size={14} className="text-brand" />
-            <h3 className="font-semibold text-white text-sm">My Cards</h3>
+            <h3 className="font-semibold text-ink text-sm">My Cards</h3>
             {cards.length > 0 && <span className="text-2xs bg-brand/20 text-brand px-1.5 py-0.5 rounded-full">{cards.length}</span>}
           </div>
           <button onClick={() => setShowAdd(s => !s)} className="btn-ghost text-xs flex items-center gap-1">
@@ -107,10 +107,10 @@ export function CreditCardSection() {
 function RewardsPanel({ tips }: { tips: PointsTip[] }) {
   const maskText = useMaskedText();
   return (
-    <div className="card border border-yellow-400/20">
+    <div className="card border border-neutral/20">
       <div className="flex items-center gap-2 mb-3">
-        <Gift size={14} className="text-yellow-400" />
-        <h3 className="font-semibold text-white text-sm">Rewards &amp; Points</h3>
+        <Gift size={14} className="text-neutral" />
+        <h3 className="font-semibold text-ink text-sm">Rewards &amp; Points</h3>
       </div>
 
       {tips.length > 0 ? (
@@ -118,14 +118,14 @@ function RewardsPanel({ tips }: { tips: PointsTip[] }) {
           {tips.map(t => (
             <div key={t.cardId} className="bg-surface-hover rounded-lg p-3">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-white text-xs font-medium">{t.cardName}</span>
+                <span className="text-ink text-xs font-medium">{t.cardName}</span>
                 <span className="text-2xs text-gray-500">{t.pointsBalance.toLocaleString('en-IN')} pts</span>
               </div>
               <div className="flex items-center gap-4 mb-1.5">
                 <div><span className="text-2xs text-gray-600">Cashback: </span><span className="text-xs font-mono text-gray-300">{maskText(fmtINR(t.cashValue))}</span></div>
                 <div><span className="text-2xs text-gray-600">Best (transfer): </span><span className="text-xs font-mono text-bull">{maskText(fmtINR(t.bestValue))}</span></div>
               </div>
-              <p className="text-2xs text-gray-400 flex gap-1.5"><Sparkles size={10} className="text-yellow-400 shrink-0 mt-0.5" />{t.recommendation}</p>
+              <p className="text-2xs text-gray-400 flex gap-1.5"><Sparkles size={10} className="text-neutral shrink-0 mt-0.5" />{t.recommendation}</p>
             </div>
           ))}
         </div>
@@ -139,8 +139,8 @@ function RewardsPanel({ tips }: { tips: PointsTip[] }) {
             ['Hit milestone bonuses', 'Many cards give bonus points at quarterly spend targets — plan big spends around them.'],
           ].map(([h, d]) => (
             <div key={h} className="flex gap-2 text-2xs">
-              <Sparkles size={11} className="text-yellow-400 shrink-0 mt-0.5" />
-              <span><span className="text-white font-medium">{h}.</span> <span className="text-gray-400">{d}</span></span>
+              <Sparkles size={11} className="text-neutral shrink-0 mt-0.5" />
+              <span><span className="text-ink font-medium">{h}.</span> <span className="text-gray-400">{d}</span></span>
             </div>
           ))}
         </div>
@@ -175,7 +175,7 @@ function CardBenefitsExplorer({ catalog, ownedNames, onAdd }:
     <div className="card">
       <div className="flex items-center gap-2 mb-3">
         <CardIcon size={14} className="text-brand" />
-        <h3 className="font-semibold text-white text-sm">Card Benefits Guide</h3>
+        <h3 className="font-semibold text-ink text-sm">Card Benefits Guide</h3>
         <span className="text-2xs text-gray-600">{catalog.length} popular cards</span>
       </div>
 
@@ -209,7 +209,7 @@ function CardBenefitsExplorer({ catalog, ownedNames, onAdd }:
                         className="w-full flex items-center justify-between p-2.5 text-left">
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <span className="text-white text-xs font-medium">{c.name}</span>
+                            <span className="text-ink text-xs font-medium">{c.name}</span>
                             {owned && <span className="text-2xs bg-bull/20 text-bull px-1 rounded">owned</span>}
                           </div>
                           <p className="text-2xs text-gray-500 truncate max-w-[240px]">Best for: {c.bestFor}</p>
@@ -272,14 +272,14 @@ function SpendAdvisor({ categories, hasCards }: { categories: string[]; hasCards
     } catch {} finally { setLoading(false); }
   };
 
-  const RANK_COLORS = ['text-yellow-400', 'text-gray-300', 'text-amber-600'];
-  const RANK_BG     = ['bg-yellow-400/15 border-yellow-400/30', 'bg-gray-400/10 border-gray-400/20', 'bg-amber-600/10 border-amber-600/20'];
+  const RANK_COLORS = ['text-neutral', 'text-gray-300', 'text-neutral'];
+  const RANK_BG     = ['bg-neutral/15 border-neutral/30', 'bg-gray-400/10 border-gray-400/20', 'bg-neutral/10 border-neutral/20'];
 
   return (
     <div className="card bg-gradient-to-br from-brand/5 to-transparent border border-brand/20">
       <div className="flex items-center gap-2 mb-3">
         <Wand2 size={14} className="text-brand" />
-        <h3 className="font-semibold text-white text-sm">Which card should I use?</h3>
+        <h3 className="font-semibold text-ink text-sm">Which card should I use?</h3>
       </div>
       {!hasCards ? (
         <p className="text-gray-500 text-xs">Add your cards below, then type a purchase here to see which card earns the most.</p>
@@ -339,7 +339,7 @@ function SpendAdvisor({ categories, hasCards }: { categories: string[]; hasCards
                     <div key={r.cardId ?? r.cardName}
                       className={`rounded-lg overflow-hidden ${
                         isFirst
-                          ? 'bg-gradient-to-r from-yellow-400/10 via-yellow-400/5 to-transparent border border-yellow-400/30 ring-1 ring-yellow-400/20'
+                          ? 'bg-gradient-to-r from-yellow-400/10 via-yellow-400/5 to-transparent border border-neutral/30 ring-1 ring-yellow-400/20'
                           : isTop3
                             ? `border ${RANK_BG[Math.min(i, 2)]}`
                             : 'bg-surface-hover'
@@ -356,11 +356,11 @@ function SpendAdvisor({ categories, hasCards }: { categories: string[]; hasCards
                         )}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-0.5">
-                            <span className={`text-xs font-semibold ${isFirst ? 'text-yellow-400' : 'text-white'}`}>{r.cardName}</span>
+                            <span className={`text-xs font-semibold ${isFirst ? 'text-neutral' : 'text-ink'}`}>{r.cardName}</span>
                             <span className="text-2xs text-gray-600">{r.issuer}</span>
                             {r.network && <span className="text-2xs text-gray-700">{r.network}</span>}
                             {isFirst && (
-                              <span className="text-2xs bg-yellow-400/20 text-yellow-400 px-1.5 py-0.5 rounded font-medium flex items-center gap-1">
+                              <span className="text-2xs bg-neutral/20 text-neutral px-1.5 py-0.5 rounded font-medium flex items-center gap-1">
                                 <Sparkles size={10} /> TOP PICK
                               </span>
                             )}
@@ -368,7 +368,7 @@ function SpendAdvisor({ categories, hasCards }: { categories: string[]; hasCards
                           <p className="text-2xs text-gray-400 whitespace-pre-line">{r.reason}</p>
                         </div>
                         <div className="text-right shrink-0 ml-2">
-                          <div className={`font-bold font-mono ${isFirst ? 'text-lg text-yellow-400' : isTop3 ? 'text-base text-white' : 'text-sm text-gray-300'}`}>
+                          <div className={`font-bold font-mono ${isFirst ? 'text-lg text-neutral' : isTop3 ? 'text-base text-ink' : 'text-sm text-gray-300'}`}>
                             {maskText(fmtINR(r.expectedReward))}
                           </div>
                           <div className="text-2xs text-gray-600">{r.rewardRate}% back</div>
@@ -434,14 +434,14 @@ function CardTile({ card, onDelete, onPoints }: { card: CardResponse; onDelete: 
       <div className={`bg-gradient-to-br ${grad} p-4 relative`}>
         <div className="flex justify-between items-start">
           <div>
-            <div className="text-white/70 text-2xs uppercase tracking-wider">{card.issuer}</div>
-            <div className="text-white font-semibold text-sm">{card.name}</div>
+            <div className="text-ink/70 text-2xs uppercase tracking-wider">{card.issuer}</div>
+            <div className="text-ink font-semibold text-sm">{card.name}</div>
           </div>
-          <button onClick={onDelete} className="text-white/50 hover:text-white"><Trash2 size={13} /></button>
+          <button onClick={onDelete} className="text-ink/50 hover:text-ink"><Trash2 size={13} /></button>
         </div>
         <div className="mt-4 flex justify-between items-end">
-          <div className="text-white/90 font-mono text-sm tracking-widest">•••• {card.lastFour || '••••'}</div>
-          <div className="text-white/70 text-2xs">{card.network}</div>
+          <div className="text-ink/90 font-mono text-sm tracking-widest">•••• {card.lastFour || '••••'}</div>
+          <div className="text-ink/70 text-2xs">{card.network}</div>
         </div>
       </div>
       {/* Details */}
@@ -469,7 +469,7 @@ function CardTile({ card, onDelete, onPoints }: { card: CardResponse; onDelete: 
         )}
         <div className="flex items-center justify-between text-2xs">
           <div className="flex items-center gap-1.5">
-            <Gift size={11} className="text-yellow-400" />
+            <Gift size={11} className="text-neutral" />
             {editPts ? (
               <span className="flex items-center gap-1">
                 <input type="number" value={pts} onChange={e => setPts(e.target.value)} className="input-field text-2xs w-20 py-0.5" />
@@ -477,7 +477,7 @@ function CardTile({ card, onDelete, onPoints }: { card: CardResponse; onDelete: 
                 <button onClick={() => { setEditPts(false); setPts(String(card.pointsBalance)); }} className="text-gray-500">✕</button>
               </span>
             ) : (
-              <button onClick={() => setEditPts(true)} className="text-gray-400 hover:text-white">
+              <button onClick={() => setEditPts(true)} className="text-gray-400 hover:text-ink">
                 {maskText(card.pointsBalance.toLocaleString('en-IN'))} pts · <span className="text-gray-300">{maskText(fmtINR(card.pointsCashValue))}</span>
               </button>
             )}

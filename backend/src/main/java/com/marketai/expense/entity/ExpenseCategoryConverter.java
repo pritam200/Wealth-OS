@@ -1,7 +1,7 @@
 package com.marketai.expense.entity;
 
-import javax.persistence.AttributeConverter;
-import javax.persistence.Converter;
+import jakarta.persistence.AttributeConverter;
+import jakarta.persistence.Converter;
 
 /**
  * Converts to/from the same display-label strings the column already contained

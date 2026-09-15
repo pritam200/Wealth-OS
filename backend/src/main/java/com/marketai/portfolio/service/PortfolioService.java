@@ -902,7 +902,7 @@ public class PortfolioService {
                 .userId(userId)
                 .description(desc)
                 .amount(pnl.abs())
-                .source("Capital Gain")
+                .source(com.marketai.income.entity.IncomeSource.CAPITAL_GAIN)
                 .incomeDate(java.time.LocalDate.now())
                 .note("Sold " + qtySold.stripTrailingZeros().toPlainString() + " units @ ₹" + salePrice + ". PnL: ₹" + pnl)
                 .build();

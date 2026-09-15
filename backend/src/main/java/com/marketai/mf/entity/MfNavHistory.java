@@ -1,6 +1,6 @@
 package com.marketai.mf.entity;
 
-import javax.persistence.*;
+import jakarta.persistence.*;
 import lombok.*;
 
 import java.math.BigDecimal;

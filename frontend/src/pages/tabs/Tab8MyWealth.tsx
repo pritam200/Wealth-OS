@@ -9,6 +9,8 @@ import { RDSection } from '../../components/wealth/RDSection';
 import { LoanSection } from '../../components/wealth/LoanSection';
 import { OtherAssetsSection } from '../../components/wealth/OtherAssetsSection';
 import { WealthCalculator } from '../../components/wealth/WealthCalculator';
+import { CashAccountsSection } from '../../components/wealth/CashAccountsSection';
+import { ChunkRebalancingTracker } from '../../components/wealth/ChunkRebalancingTracker';
 import { trackingApi } from '../../api/tracking';
 import type { TrackingSummary } from '../../api/tracking';
 import { wealthApi } from '../../api/wealth';
@@ -42,12 +44,12 @@ export function Tab8MyWealth() {
       )}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#00d68f] to-[#00b8d4] flex items-center justify-center text-white shadow-lift shrink-0">
+          <div className="w-11 h-11 rounded-2xl bg-bull/10 border border-bull/25 flex items-center justify-center text-bull shrink-0">
             <Wallet size={20} />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-white mb-0.5">My Wealth</h2>
-            <p className="text-gray-500 text-xs">Complete financial picture — assets, income, expenses, FDs, loans and more</p>
+            <h2 className="text-xl font-bold text-ink mb-0.5">My Wealth</h2>
+            <p className="text-gray-500 text-xs">What you own and owe, by asset class — cash, equity, funds, deposits and liabilities</p>
           </div>
         </div>
         <button
@@ -62,10 +64,23 @@ export function Tab8MyWealth() {
 
       {totalAssets > 0 && <NetWorthTrend />}
 
-      <PortfolioSection onValues={() => {}} />
+      {/* Asset breakdown — what you own, by class. Kept separate from the transaction
+          ledger below it, which is the record of how it got that way. */}
+      <div>
+        <h3 className="text-ink font-semibold text-sm mb-3">Liquid Assets</h3>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <CashAccountsSection />
+          <ChunkRebalancingTracker />
+        </div>
+      </div>
 
       <div>
-        <h3 className="text-white font-semibold text-sm mb-3">Fixed Income &amp; Retirement</h3>
+        <h3 className="text-ink font-semibold text-sm mb-3">Equity &amp; Funds</h3>
+        <PortfolioSection onValues={() => {}} />
+      </div>
+
+      <div>
+        <h3 className="text-ink font-semibold text-sm mb-3">Fixed Income &amp; Retirement</h3>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <FDSection onRefresh={loadSummary} />
           <RDSection onRefresh={loadSummary} />
@@ -74,7 +89,7 @@ export function Tab8MyWealth() {
       </div>
 
       <div>
-        <h3 className="text-white font-semibold text-sm mb-3">Other Assets &amp; Liabilities</h3>
+        <h3 className="text-ink font-semibold text-sm mb-3">Other Assets &amp; Liabilities</h3>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <OtherAssetsSection onRefresh={loadSummary} />
           <LoanSection onRefresh={loadSummary} />
@@ -82,12 +97,12 @@ export function Tab8MyWealth() {
       </div>
 
       <div>
-        <h3 className="text-white font-semibold text-sm mb-3">Passive Income</h3>
+        <h3 className="text-ink font-semibold text-sm mb-3">Passive Income</h3>
         <DividendSection />
       </div>
 
       <div>
-        <h3 className="text-white font-semibold text-sm mb-3">Wealth Projections</h3>
+        <h3 className="text-ink font-semibold text-sm mb-3">Wealth Projections</h3>
         <WealthCalculator />
       </div>
     </div>

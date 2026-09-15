@@ -7,55 +7,47 @@
 @layer base {
   * { box-sizing: border-box; }
   body {
-    @apply bg-surface bg-mesh-glow text-gray-100 font-sans antialiased m-0;
+    @apply bg-surface text-ink font-sans antialiased m-0;
     font-feature-settings: 'tnum' 1, 'kern' 1;
     line-height: 1.5;
     letter-spacing: 0.1px;
-    background-attachment: fixed;
     min-height: 100vh;
   }
   h1,h2,h3,h4 { letter-spacing: -0.4px; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { @apply bg-surface-border rounded-full; }
+  ::-webkit-scrollbar-thumb { background: #CFD8E3; border-radius: 9999px; }
   ::-webkit-scrollbar-thumb:hover { @apply bg-brand; }
 }
 
 @layer components {
   /* ── Panels & Cards ── */
-  /* Glass panel with a hairline gradient top-edge — the recurring visual signature used
-     everywhere instead of a flat bordered rectangle. */
+  /* Flat opaque surface with a crisp border. Deliberately no gradient top-edge and no
+     backdrop blur: on a dense numeric dashboard those read as a colour cast over every
+     panel, which is what made containers look muddy. Separation comes from the border. */
   .card {
-    @apply bg-surface-card/90 backdrop-blur-sm border border-surface-border/80 p-4 relative overflow-hidden transition-all duration-200 ease-snap;
+    @apply bg-surface-card border border-surface-border p-4 relative transition-colors duration-150 ease-snap;
     border-radius: 16px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.5);
   }
-  .card::before {
-    content: '';
-    position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    background: linear-gradient(90deg, rgba(109,94,252,0.7), rgba(232,79,217,0.5), transparent 80%);
-    opacity: 0.6;
-  }
-  .card:hover { @apply border-brand/30; box-shadow: 0 8px 28px rgba(0,0,0,0.5), 0 0 0 1px rgba(109,94,252,0.12); transform: translateY(-1px); }
+  .card:hover { border-color: #CFD8E3; }
 
+  /* Emphasis without colour: a slightly lifted surface and a stronger border, so a
+     "featured" panel still belongs to the same neutral family as everything around it. */
   .card-elevated {
-    @apply relative p-5 overflow-hidden;
+    @apply relative p-5 bg-surface-card border border-surface-border;
     border-radius: 20px;
-    background: linear-gradient(155deg, rgba(109,94,252,0.16), rgba(232,79,217,0.05) 55%, rgba(14,13,22,0.9)) padding-box,
-                linear-gradient(155deg, rgba(155,138,255,0.55), rgba(232,79,217,0.3)) border-box;
-    border: 1px solid transparent;
-    box-shadow: 0 16px 48px rgba(0,0,0,0.55);
+    box-shadow: 0 4px 16px rgba(15,23,42,0.07);
   }
-  .card-flat { @apply bg-surface-hover/60 rounded-xl p-3; }
+  .card-flat { @apply bg-surface-hover rounded-xl p-3; }
 
   .panel {
-    @apply bg-surface-panel/95 backdrop-blur border border-surface-border;
+    @apply bg-surface-panel border border-surface-border;
     border-radius: 18px;
-    box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+    box-shadow: 0 8px 28px rgba(15,23,42,0.10);
   }
 
   /* ── Section headers ── */
-  .section-title { @apply flex items-center gap-2 text-white font-semibold text-sm mb-3; }
+  .section-title { @apply flex items-center gap-2 text-ink font-semibold text-sm mb-3; }
 
   /* ── Icon badges — the small gradient/tinted square used next to KPIs, section headers,
      table row leads, nav items. Keeps icon treatment consistent app-wide. ── */
@@ -63,7 +55,7 @@
     @apply inline-flex items-center justify-center rounded-lg shrink-0;
     width: 30px; height: 30px;
   }
-  .icon-badge-brand { @apply icon-badge bg-brand-gradient text-white; box-shadow: 0 2px 10px rgba(109,94,252,0.35); }
+  .icon-badge-brand { @apply icon-badge bg-brand/10 text-brand-light border border-brand/25; }
   .icon-badge-bull   { @apply icon-badge bg-bull/10 text-bull border border-bull/25; }
   .icon-badge-bear   { @apply icon-badge bg-bear/10 text-bear border border-bear/25; }
   .icon-badge-neutral{ @apply icon-badge bg-neutral/10 text-neutral border border-neutral/25; }
@@ -76,24 +68,33 @@
 
   /* ── Buttons ── */
   .btn-primary {
-    @apply bg-brand-gradient hover:brightness-110 text-white px-4 py-2 text-sm font-semibold transition-all cursor-pointer inline-flex items-center justify-center gap-1.5;
+    @apply bg-brand hover:bg-brand-dark text-white px-4 py-2 text-sm font-semibold transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5;
     border-radius: 10px;
-    box-shadow: 0 2px 14px rgba(109,94,252,0.4);
   }
-  .btn-primary:hover { box-shadow: 0 6px 22px rgba(109,94,252,0.55); transform: translateY(-1px); }
-  .btn-primary:active { transform: translateY(0); }
   .btn-secondary {
     @apply bg-surface-hover border border-surface-border hover:border-brand/40 text-gray-200 px-3.5 py-2 text-sm font-medium transition-all cursor-pointer inline-flex items-center justify-center gap-1.5;
     border-radius: 10px;
   }
   .btn-ghost {
-    @apply text-gray-400 hover:text-white hover:bg-surface-hover px-3 py-1.5 text-sm transition-colors cursor-pointer inline-flex items-center gap-1.5;
+    @apply text-gray-400 hover:text-ink hover:bg-surface-hover px-3 py-1.5 text-sm transition-colors cursor-pointer inline-flex items-center gap-1.5;
     border-radius: 9px;
   }
   .btn-icon {
-    @apply text-gray-500 hover:text-white hover:bg-surface-hover p-1.5 transition-colors cursor-pointer inline-flex items-center justify-center;
+    @apply text-gray-500 hover:text-ink hover:bg-surface-hover p-1.5 transition-colors cursor-pointer inline-flex items-center justify-center;
     border-radius: 8px;
   }
+
+  /* ── Status pills — high-contrast tinted tag on a neutral surface. Use these for state
+     (sector direction, signal, sync outcome) so status never relies on tinting the whole
+     container it sits in. ── */
+  .pill {
+    @apply inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap;
+  }
+  .pill-bull    { @apply pill bg-bull/10 text-bull border-bull/20; }
+  .pill-bear    { @apply pill bg-bear/10 text-bear border-bear/20; }
+  .pill-neutral { @apply pill bg-neutral/10 text-neutral border-neutral/20; }
+  .pill-info    { @apply pill bg-brand/10 text-brand-light border-brand/20; }
+  .pill-muted   { @apply pill bg-surface-hover text-gray-400 border-surface-border; }
 
   /* ── Badges ── */
   .badge-bull    { @apply inline-flex items-center gap-1 text-bull bg-bull/10 border border-bull/25 text-xs font-semibold px-2 py-0.5 rounded-full font-mono; }
@@ -103,9 +104,11 @@
 
   /* ── Typography ── */
   .stat-label   { @apply text-2xs text-gray-500 uppercase tracking-wider font-semibold; }
-  .stat-value   { @apply text-2xl font-bold text-white font-mono; }
-  .stat-value-gradient { @apply text-2xl font-bold font-mono bg-brand-gradient bg-clip-text text-transparent; }
-  .stat-value-hero { @apply text-4xl font-extrabold font-mono bg-brand-gradient bg-clip-text text-transparent tracking-tight; }
+  .stat-value   { @apply text-2xl font-bold text-ink font-mono tabular-nums; }
+  /* Solid white, not gradient-clipped: a headline figure has to stay readable, and
+     gradient text loses contrast at the thin strokes of tabular digits. */
+  .stat-value-gradient { @apply text-2xl font-bold font-mono tabular-nums text-ink; }
+  .stat-value-hero { @apply text-4xl font-extrabold font-mono tabular-nums text-ink tracking-tight; }
   .num          { @apply font-mono tabular-nums; }
   .value-bull   { @apply text-bull font-semibold font-mono; }
   .value-bear   { @apply text-bear font-semibold font-mono; }
@@ -118,7 +121,7 @@
     border-radius: 10px;
     min-height: 36px;
   }
-  .input-field:focus { @apply border-brand/60; box-shadow: 0 0 0 3px rgba(109,94,252,0.18); }
+  .input-field:focus { @apply border-brand/60; box-shadow: 0 0 0 3px rgba(59,130,246,0.18); }
 
   /* ── Table ── */
   .data-table { @apply w-full text-sm border-collapse; }
@@ -128,7 +131,7 @@
     @apply border-b border-surface-border/40 transition-all cursor-pointer;
     box-shadow: inset 3px 0 0 0 transparent;
   }
-  .data-table tbody tr:hover { @apply bg-surface-hover/70; box-shadow: inset 3px 0 0 0 rgba(109,94,252,0.7); }
+  .data-table tbody tr:hover { @apply bg-surface-hover; box-shadow: inset 3px 0 0 0 rgba(59,130,246,0.7); }
   .data-table tbody td { @apply py-2.5 px-3 align-middle; }
   .data-table thead th:first-child, .data-table tbody td:first-child { @apply pl-1; }
   .data-table thead th:last-child, .data-table tbody td:last-child { @apply pr-1; }

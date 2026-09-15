@@ -1,6 +1,6 @@
 package com.marketai.auth.entity;
 
-import javax.persistence.*;
+import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 

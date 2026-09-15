@@ -1,6 +1,6 @@
 package com.marketai.portfolio.dto;
 
-import javax.validation.constraints.*;
+import jakarta.validation.constraints.*;
 import lombok.Data;
 
 import java.math.BigDecimal;

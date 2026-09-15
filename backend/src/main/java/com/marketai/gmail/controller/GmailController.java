@@ -24,7 +24,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -45,6 +45,7 @@ public class GmailController {
     private final PdfImportService pdfImportService;
     private final ExcludedSenderRepository excludedSenderRepo;
     private final ReconciliationReportService reconciliationReportService;
+    private final com.marketai.gmail.repository.ImportedTransactionFingerprintRepository fingerprintRepo;
 
     @Value("${gmail.frontend-url:http://localhost:5174}")
     private String frontendUrl;
@@ -160,7 +161,14 @@ public class GmailController {
     @PostMapping("/pending-pdfs/{id}/unlock")
     public ResponseEntity<Map<String, Object>> unlockPdf(
             @AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody Map<String, String> body) {
-        PdfImportService.PdfUnlockResult result = pdfImportService.unlock(user.getId(), id, body.get("password"));
+        // "savePassword" is the user's answer to "save this securely for future statements from
+        // this provider?" — absent means the legacy save-on-success behaviour.
+        Boolean savePassword = null;
+        Object saveFlag = body.get("savePassword");
+        if (saveFlag != null) savePassword = Boolean.parseBoolean(String.valueOf(saveFlag));
+
+        PdfImportService.PdfUnlockResult result =
+            pdfImportService.unlock(user.getId(), id, body.get("password"), savePassword);
         Map<String, Object> resp = new HashMap<>();
         resp.put("unlocked", result.unlocked);
         resp.put("message", result.message);
@@ -277,6 +285,11 @@ public class GmailController {
         // This means: if the user deleted a dividend and runs Full Resync, it will be re-imported
         // from Gmail because the dedup check won't find a matching domain record.
         processedRepo.deleteByUserId(user.getId());
+        // Also clear the SHA-256 content fingerprints, otherwise they would (correctly) refuse
+        // every re-import and a full resync would find nothing to do. Dropping them restores the
+        // documented Full Resync behaviour above: re-import is gated on whether the actual
+        // domain record still exists, not on whether it was ever imported before.
+        fingerprintRepo.deleteByUserId(user.getId());
 
         // Reset importedCount for a clean baseline
         tokenRepo.findByUserId(user.getId()).ifPresent(token -> {

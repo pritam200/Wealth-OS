@@ -67,7 +67,7 @@ export function OtherAssetsSection({ onRefresh }: { onRefresh: () => void }) {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <div className="icon-badge-neutral"><Briefcase size={15} /></div>
-          <h3 className="font-bold text-white text-sm">Other Assets</h3>
+          <h3 className="font-bold text-ink text-sm">Other Assets</h3>
           {items.length > 0 && <span className="text-xs text-gray-500 font-mono">{maskText(fmtINR(items.reduce((s, x) => s + x.value, 0)))}</span>}
         </div>
         <button onClick={() => setOpen(o => !o)} className="btn-secondary text-xs flex items-center gap-1"><Plus size={11} /> Add Asset</button>
@@ -113,7 +113,7 @@ export function OtherAssetsSection({ onRefresh }: { onRefresh: () => void }) {
                   {cat.entries.map(entry => (
                     <div key={entry.id} className="flex items-center justify-between pl-3 py-1 border-b border-surface-border/30 last:border-0">
                       <div className="min-w-0">
-                        <span className="text-white text-xs">{entry.name}</span>
+                        <span className="text-ink text-xs">{entry.name}</span>
                         {entry.note && <span className="text-gray-600 text-xs ml-1">· {entry.note}</span>}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
@@ -125,8 +125,8 @@ export function OtherAssetsSection({ onRefresh }: { onRefresh: () => void }) {
                           </>
                         ) : (
                           <>
-                            <span className="num text-xs text-white">{maskText(fmtINR(entry.value))}</span>
-                            <button onClick={() => { setEditId(entry.id); setEditVal(String(entry.value)); }} className="btn-icon text-gray-600 hover:text-white p-0.5"><Edit2 size={10} /></button>
+                            <span className="num text-xs text-ink">{maskText(fmtINR(entry.value))}</span>
+                            <button onClick={() => { setEditId(entry.id); setEditVal(String(entry.value)); }} className="btn-icon text-gray-600 hover:text-ink p-0.5"><Edit2 size={10} /></button>
                             <button onClick={() => del(entry.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                           </>
                         )}

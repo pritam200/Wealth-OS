@@ -56,7 +56,7 @@ export function StockSearch() {
               className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-surface-hover transition-colors text-left"
             >
               <div>
-                <span className="text-sm font-semibold text-white font-mono">{s.symbol}</span>
+                <span className="text-sm font-semibold text-ink font-mono">{s.symbol}</span>
                 <p className="text-xs text-gray-500">{s.name}</p>
               </div>
               <span className="text-xs text-gray-600 bg-surface-hover px-1.5 py-0.5 rounded-full">{s.exchange}</span>

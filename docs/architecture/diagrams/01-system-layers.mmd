@@ -1,0 +1,45 @@
+flowchart TB
+    subgraph ACQ["Acquisition — untrusted input"]
+        GM["Gmail watch + historyId"]
+        CAS["CAS mailback"]
+        MKT["Market data"]
+        AMC["AMC monthly portfolios"]
+        MAN["Manual entry"]
+    end
+    subgraph DOC["Document Intelligence — NEW"]
+        CLS["Classifier cascade"]
+        EXT["Extractor registry"]
+        CONF["Multi-signal confidence"]
+        SPAN["Grounding spans"]
+    end
+    subgraph ID["Identity & Reconciliation — NEW"]
+        ING["Ingest identity"]
+        ECON["Economic identity"]
+        RECON["Reconciliation engine"]
+    end
+    subgraph LED["Financial Ledger — EXISTING"]
+        TXN["Transaction (append-only)"]
+        REPLAY["recomputeFromLedger"]
+        CASH["CashAccount + LedgerTransfer"]
+        HOLD["Holding (derived)"]
+    end
+    subgraph DER["Derivation — read-only"]
+        NW["Net worth + attribution"]
+        SCORE["Stock scoring"]
+        MF["MF overlap"]
+        CARD["Card marginal value"]
+        TAX["Tax engine"]
+    end
+    GM --> CLS
+    CAS --> CLS
+    MAN --> ECON
+    CLS --> EXT --> CONF --> SPAN --> ING --> ECON
+    ECON -->|confident| TXN
+    ECON -->|uncertain| RQ["Review queue"]
+    RQ -->|human| TXN
+    TXN --> REPLAY --> HOLD
+    CASH --> REPLAY
+    MKT --> DER
+    AMC --> MF
+    HOLD --> DER
+    RECON -.audits.-> TXN

@@ -2,7 +2,7 @@ package com.marketai.tracking.entity;
 
 import com.marketai.auth.entity.User;
 import lombok.*;
-import javax.persistence.*;
+import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -13,7 +13,9 @@ import java.time.LocalDateTime;
 public class RecurringDeposit {
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+
+    @EqualsAndHashCode.Include
+    @ToString.Include    private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)

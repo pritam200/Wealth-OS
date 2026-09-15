@@ -26,15 +26,47 @@ public class ExpenseService {
 
     @Transactional
     public ExpenseResponse addExpense(Long userId, ExpenseRequest req) {
+        LocalDate date = req.getExpenseDate() != null ? req.getExpenseDate() : LocalDate.now();
+        // Normalise the merchant the same way the email-import path does, so a hand-typed
+        // "SWIGGY*BLR" and an imported "Swiggy" group together in analytics instead of
+        // splitting one merchant's spend across two labels.
+        String merchant = com.marketai.gmail.parser.SpendCategorizer.extractMerchant(req.getDescription());
+
+        Expense duplicate = findExistingDuplicate(userId, req.getAmount(), date, req.getDescription(), merchant);
+        if (duplicate != null) {
+            // Same transaction already recorded (typically already imported from the bank's
+            // email alert). Return the existing row rather than silently creating a second one —
+            // the user's spend total must not double just because they also entered it by hand.
+            return toResponse(duplicate);
+        }
+
         Expense expense = Expense.builder()
                 .userId(userId)
                 .description(req.getDescription())
                 .amount(req.getAmount())
                 .category(ExpenseCategory.fromLabel(req.getCategory()))
-                .expenseDate(req.getExpenseDate() != null ? req.getExpenseDate() : LocalDate.now())
+                .expenseDate(date)
+                .merchant(merchant)
                 .note(req.getNote())
                 .build();
         return toResponse(expenseRepository.save(expense));
+    }
+
+    /**
+     * Cross-source duplicate check: same amount, same date, and a matching merchant or
+     * description already on file. Deliberately same-day + exact-amount only — a looser window
+     * would start suppressing genuine repeat spends (two coffees, same price, same shop), which
+     * would understate real expenses.
+     */
+    private Expense findExistingDuplicate(Long userId, BigDecimal amount, LocalDate date,
+                                          String description, String merchant) {
+        if (amount == null || date == null) return null;
+        for (Expense e : expenseRepository.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(userId, date, date)) {
+            if (e.getAmount() == null || e.getAmount().compareTo(amount) != 0) continue;
+            if (merchant != null && merchant.equalsIgnoreCase(e.getMerchant())) return e;
+            if (description != null && description.equalsIgnoreCase(e.getDescription())) return e;
+        }
+        return null;
     }
 
     public List<ExpenseResponse> listExpenses(Long userId) {

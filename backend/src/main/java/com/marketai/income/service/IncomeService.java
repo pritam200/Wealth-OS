@@ -3,6 +3,7 @@ package com.marketai.income.service;
 import com.marketai.income.dto.IncomeRequest;
 import com.marketai.income.dto.IncomeResponse;
 import com.marketai.income.entity.Income;
+import com.marketai.income.entity.IncomeSource;
 import com.marketai.income.repository.IncomeRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -24,7 +25,7 @@ public class IncomeService {
             .userId(userId)
             .description(req.getDescription())
             .amount(req.getAmount())
-            .source(req.getSource() != null ? req.getSource() : "Other")
+            .source(IncomeSource.fromLabel(req.getSource()))
             .incomeDate(req.getIncomeDate() != null ? req.getIncomeDate() : LocalDate.now())
             .note(req.getNote())
             .build();
@@ -41,7 +42,7 @@ public class IncomeService {
     public List<IncomeResponse> listBySource(Long userId, String source, int year) {
         LocalDate from = LocalDate.of(year, 1, 1);
         LocalDate to   = LocalDate.of(year, 12, 31);
-        return repo.findByUserIdAndSourceAndIncomeDateBetweenOrderByIncomeDateDesc(userId, source, from, to)
+        return repo.findByUserIdAndSourceAndIncomeDateBetweenOrderByIncomeDateDesc(userId, IncomeSource.fromLabel(source), from, to)
                    .stream().map(this::toDto).collect(Collectors.toList());
     }
 
@@ -50,7 +51,7 @@ public class IncomeService {
             .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND));
         if (req.getDescription() != null) i.setDescription(req.getDescription());
         if (req.getAmount() != null) i.setAmount(req.getAmount());
-        if (req.getSource() != null) i.setSource(req.getSource());
+        if (req.getSource() != null) i.setSource(IncomeSource.fromLabel(req.getSource()));
         if (req.getIncomeDate() != null) i.setIncomeDate(req.getIncomeDate());
         i.setNote(req.getNote());
         return toDto(repo.save(i));
@@ -78,7 +79,7 @@ public class IncomeService {
     private IncomeResponse toDto(Income i) {
         return IncomeResponse.builder()
             .id(i.getId()).description(i.getDescription()).amount(i.getAmount())
-            .source(i.getSource()).incomeDate(i.getIncomeDate())
+            .source(i.getSource() != null ? i.getSource().getLabel() : null).incomeDate(i.getIncomeDate())
             .payer(i.getPayer()).paymentMethod(i.getPaymentMethod())
             .sourceEmailId(i.getSourceEmailId())
             .note(i.getNote()).createdAt(i.getCreatedAt()).build();

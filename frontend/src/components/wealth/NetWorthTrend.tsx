@@ -4,6 +4,7 @@ import { TrendingUp } from 'lucide-react';
 import { netWorthApi } from '../../api/planning';
 import type { NetWorthSnapshot } from '../../api/planning';
 import { useMaskedText } from '../shared/Amount';
+import { CHART, tooltipStyle } from '../../theme/chartTheme';
 
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
@@ -42,7 +43,7 @@ export function NetWorthTrend() {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <TrendingUp size={14} className="text-brand" />
-          <h3 className="font-semibold text-white text-sm">Net Worth Trend</h3>
+          <h3 className="font-semibold text-ink text-sm">Net Worth Trend</h3>
         </div>
         {series.length > 1 && (
           <span className={`text-xs font-mono ${change >= 0 ? 'text-bull' : 'text-bear'}`}>
@@ -57,12 +58,12 @@ export function NetWorthTrend() {
       ) : (
         <ResponsiveContainer width="100%" height={200}>
           <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#232c3f" />
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#6b7280' }} />
-            <YAxis tickFormatter={(v: number) => maskText(fmtShort(v))} tick={{ fontSize: 10, fill: '#6b7280' }} width={48} />
-            <Tooltip formatter={(v) => maskText(fmtINR(Number(v ?? 0)))} contentStyle={{ background: '#121826', border: '1px solid #232c3f', borderRadius: 6, fontSize: 11 }} />
-            <Line type="monotone" dataKey="netWorth" stroke="#00c47a" strokeWidth={2} dot={false} name="Net worth" />
-            <Line type="monotone" dataKey="totalAssets" stroke="#2563eb" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="Total assets" />
+            <CartesianGrid strokeDasharray="3 3" stroke={CHART.grid} vertical={false} />
+            <XAxis dataKey="date" tick={{ fontSize: 10, fill: CHART.text }} tickLine={false} stroke={CHART.grid} />
+            <YAxis tickFormatter={(v: number) => maskText(fmtShort(v))} tick={{ fontSize: 10, fill: CHART.text }} tickLine={false} stroke={CHART.grid} width={48} />
+            <Tooltip formatter={(v) => maskText(fmtINR(Number(v ?? 0)))} contentStyle={tooltipStyle} labelStyle={{ color: CHART.muted }} itemStyle={{ color: CHART.ink }} />
+            <Line type="monotone" dataKey="netWorth" stroke={CHART.bull} strokeWidth={2} dot={false} name="Net worth" />
+            <Line type="monotone" dataKey="totalAssets" stroke={CHART.brand} strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="Total assets" />
           </LineChart>
         </ResponsiveContainer>
       )}

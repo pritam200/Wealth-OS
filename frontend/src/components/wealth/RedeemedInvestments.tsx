@@ -26,7 +26,7 @@ function DeploymentPlanCard({ redemptionId }: { redemptionId: number }) {
         {plan.tranches.map((t, i) => (
           <div key={i} className="flex items-start justify-between gap-2 text-2xs">
             <div>
-              <span className="text-white font-medium">{t.label}</span>
+              <span className="text-ink font-medium">{t.label}</span>
               <span className="text-gray-500"> ({maskText(`${t.percentOfTotal.toFixed(0)}%`)})</span>
               <div className="text-gray-600">{t.trigger}</div>
             </div>
@@ -63,10 +63,10 @@ function RedemptionCard({ r, onReinvested }: { r: MfRedemption; onReinvested: ()
     <div className="border-b border-surface-border/40 last:border-0 py-2.5">
       <div className="flex items-center justify-between cursor-pointer" onClick={() => setOpen(o => !o)}>
         <div className="min-w-0">
-          <div className="text-white text-xs font-medium truncate max-w-[220px]">{r.fundName ?? r.symbol}</div>
+          <div className="text-ink text-xs font-medium truncate max-w-[220px]">{r.fundName ?? r.symbol}</div>
           <div className="text-2xs text-gray-600">
             Redeemed {r.redemptionDate} · {r.gainType} · {maskText(fmtINR(r.redeemedAmount))}
-            {r.status === 'ACTIVE' && <span className="text-yellow-400"> · {maskText(fmtINR(r.cashRemaining))} left to reinvest</span>}
+            {r.status === 'ACTIVE' && <span className="text-neutral"> · {maskText(fmtINR(r.cashRemaining))} left to reinvest</span>}
             {r.status === 'COMPLETED' && <span className="text-bull"> · fully reinvested</span>}
           </div>
         </div>
@@ -76,7 +76,7 @@ function RedemptionCard({ r, onReinvested }: { r: MfRedemption; onReinvested: ()
         <div className="mt-2 space-y-2">
           <div className="grid grid-cols-2 gap-2 text-2xs">
             <div className="bg-surface-hover rounded p-2"><div className="stat-label text-2xs">Capital Gain</div><div className={`font-mono font-semibold ${r.capitalGain >= 0 ? 'text-bull' : 'text-bear'}`}>{maskText(fmtINR(r.capitalGain))}</div></div>
-            <div className="bg-surface-hover rounded p-2"><div className="stat-label text-2xs">Estimated Tax</div><div className="font-mono font-semibold text-white">{maskText(fmtINR(r.estimatedTax))}</div></div>
+            <div className="bg-surface-hover rounded p-2"><div className="stat-label text-2xs">Estimated Tax</div><div className="font-mono font-semibold text-ink">{maskText(fmtINR(r.estimatedTax))}</div></div>
           </div>
           {r.reinvestments.length > 0 && (
             <div className="space-y-1">
@@ -84,7 +84,7 @@ function RedemptionCard({ r, onReinvested }: { r: MfRedemption; onReinvested: ()
               {r.reinvestments.map(re => (
                 <div key={re.id} className="flex justify-between text-2xs text-gray-400">
                   <span>{re.date}{re.targetFund ? ` · ${re.targetFund}` : ''}</span>
-                  <span className="font-mono text-white">{maskText(fmtINR(re.amount))}</span>
+                  <span className="font-mono text-ink">{maskText(fmtINR(re.amount))}</span>
                 </div>
               ))}
             </div>
@@ -122,7 +122,7 @@ export function RedeemedInvestments() {
     <div className="card">
       <div className="flex items-center gap-2 mb-1">
         <Landmark size={14} className="text-brand" />
-        <h3 className="font-semibold text-white text-sm">Redeemed Investments</h3>
+        <h3 className="font-semibold text-ink text-sm">Redeemed Investments</h3>
         <span className="text-2xs bg-brand/15 text-brand px-1.5 py-0.5 rounded-full">{redemptions.length}</span>
       </div>
       <div>

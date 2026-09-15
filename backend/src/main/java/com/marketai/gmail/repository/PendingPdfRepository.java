@@ -7,6 +7,15 @@ import java.util.List;
 import java.util.Optional;
 
 public interface PendingPdfRepository extends JpaRepository<PendingPdf, Long> {
+    /**
+     * Content-identity lookup for attachment deduplication. Scoped to the user so two people
+     * receiving the same provider circular never collide, and restricted to rows that actually
+     * produced an import — a previously-failed or still-locked copy of the same document should
+     * not block a fresh attempt at it.
+     */
+    java.util.Optional<PendingPdf> findFirstByUserIdAndContentHashAndStatus(
+        Long userId, String contentHash, String status);
+
     List<PendingPdf> findByUserIdAndStatusOrderByCreatedAtDesc(Long userId, String status);
     List<PendingPdf> findByUserIdAndStatusInOrderByCreatedAtDesc(Long userId, List<String> statuses);
     boolean existsByUserIdAndGmailMessageIdAndAttachmentId(Long userId, String gmailMessageId, String attachmentId);

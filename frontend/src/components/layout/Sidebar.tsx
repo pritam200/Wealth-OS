@@ -22,12 +22,12 @@ export function Sidebar({ sections, activeTab, onSelect }: Props) {
   return (
     <aside className={`flex flex-col h-screen shrink-0 bg-surface-card/95 backdrop-blur border-r border-surface-border transition-all duration-200 ease-snap ${collapsed ? 'w-16' : 'w-60'}`}>
       <div className={`flex items-center h-14 border-b border-surface-border/70 shrink-0 ${collapsed ? 'justify-center' : 'px-4 gap-2.5'}`}>
-        <div className="w-8 h-8 bg-brand-gradient rounded-xl flex items-center justify-center shrink-0" style={{ boxShadow: '0 4px 16px rgba(109,94,252,0.45)' }}>
+        <div className="w-8 h-8 bg-brand-gradient rounded-xl flex items-center justify-center shrink-0" style={{ boxShadow: '0 4px 16px rgba(59,130,246,0.35)' }}>
           <Zap size={16} className="text-white" fill="currentColor" />
         </div>
         {!collapsed && (
           <div className="leading-tight">
-            <div className="text-sm font-extrabold text-white tracking-tight">MarketAI</div>
+            <div className="text-sm font-extrabold text-ink tracking-tight">MarketAI</div>
             <div className="text-2xs text-gray-600 -mt-0.5">Wealth OS</div>
           </div>
         )}
@@ -53,7 +53,7 @@ export function Sidebar({ sections, activeTab, onSelect }: Props) {
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-150 ${
                   isActiveSection
                     ? 'text-white font-semibold bg-brand-gradient shadow-glow'
-                    : 'text-gray-400 hover:text-white hover:bg-surface-hover'
+                    : 'text-gray-400 hover:text-ink hover:bg-surface-hover'
                 } ${collapsed ? 'justify-center' : ''}`}
               >
                 <Icon size={17} className="shrink-0" />
@@ -81,7 +81,7 @@ export function Sidebar({ sections, activeTab, onSelect }: Props) {
       </nav>
 
       <button onClick={() => setCollapsed(c => !c)}
-        className="flex items-center justify-center h-10 border-t border-surface-border/70 text-gray-500 hover:text-white hover:bg-surface-hover transition-colors shrink-0">
+        className="flex items-center justify-center h-10 border-t border-surface-border/70 text-gray-500 hover:text-ink hover:bg-surface-hover transition-colors shrink-0">
         {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
       </button>
     </aside>

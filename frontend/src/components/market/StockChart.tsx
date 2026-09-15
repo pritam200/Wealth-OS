@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Loader2, Info } from 'lucide-react';
 import { marketApi } from '../../api/market';
 import type { PriceHistory } from '../../types';
+import { CHART } from '../../theme/chartTheme';
 
 const fmt = (n: number) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n || 0);
 
@@ -64,19 +65,19 @@ export function StockChart({ symbol, support, resistance }: { symbol: string; su
       <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${symbol} 6-month candlestick chart`} style={{ display: 'block' }}>
         {gridVals.map((gv, i) => (
           <g key={i}>
-            <line x1={padL} y1={y(gv)} x2={W - padR} y2={y(gv)} stroke="#232c3f" strokeDasharray="3 3" />
-            <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill="#8e99ab" fontFamily="monospace">{fmt(gv)}</text>
+            <line x1={padL} y1={y(gv)} x2={W - padR} y2={y(gv)} stroke={CHART.grid} strokeDasharray="3 3" />
+            <text x={padL - 6} y={y(gv) + 3} textAnchor="end" fontSize="9" fill={CHART.text} fontFamily="monospace">{fmt(gv)}</text>
           </g>
         ))}
         {support && support > min && support < max ? (
-          <line x1={padL} y1={y(support)} x2={W - padR} y2={y(support)} stroke="#1ecb8b" strokeDasharray="4 3" strokeOpacity={0.7} />
+          <line x1={padL} y1={y(support)} x2={W - padR} y2={y(support)} stroke={CHART.bull} strokeDasharray="4 3" strokeOpacity={0.8} />
         ) : null}
         {resistance && resistance > min && resistance < max ? (
-          <line x1={padL} y1={y(resistance)} x2={W - padR} y2={y(resistance)} stroke="#f04b5a" strokeDasharray="4 3" strokeOpacity={0.7} />
+          <line x1={padL} y1={y(resistance)} x2={W - padR} y2={y(resistance)} stroke={CHART.bear} strokeDasharray="4 3" strokeOpacity={0.8} />
         ) : null}
         {data.map((d, i) => {
           const up = d.close >= d.open;
-          const col = up ? '#1ecb8b' : '#f04b5a';
+          const col = up ? CHART.bull : CHART.bear;
           const yO = y(d.open), yC = y(d.close);
           const top = Math.min(yO, yC), h = Math.max(1, Math.abs(yC - yO));
           return (
@@ -86,7 +87,7 @@ export function StockChart({ symbol, support, resistance }: { symbol: string; su
             </g>
           );
         })}
-        <text x={W - padR} y={y(last) - 4} textAnchor="end" fontSize="9" fill="#e2e6ee" fontFamily="monospace">now ₹{fmt(last)}</text>
+        <text x={W - padR} y={y(last) - 4} textAnchor="end" fontSize="9" fill={CHART.ink} fontFamily="monospace">now ₹{fmt(last)}</text>
       </svg>
       <div className="flex justify-between text-2xs text-gray-500 mt-1 px-1">
         <span>6-month daily candles</span>
