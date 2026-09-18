@@ -90,7 +90,7 @@ public class ImportedTransactionFingerprint {
      * <p>So the conflicting reading is recorded against the original rather than discarded, and
      * surfaced through reconciliation for a human to resolve.
      */
-    @Column(name = "conflict_detected", nullable = false)
+    @Column(name = "conflict_detected", nullable = false, columnDefinition = "boolean not null default false")
     @Builder.Default
     private boolean conflictDetected = false;
 
