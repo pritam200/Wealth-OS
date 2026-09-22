@@ -101,7 +101,7 @@ function AddMFModal({ portfolioId, onClose, onAdded }: {
             <h3 className="font-semibold text-ink">Add Mutual Fund Holding</h3>
             <p className="text-2xs text-gray-600 mt-0.5">Log historical lump sum or SIP investment</p>
           </div>
-          <button onClick={onClose} className="btn-icon"><X size={16} /></button>
+          <button aria-label="Close" onClick={onClose} className="btn-icon"><X size={16} /></button>
         </div>
         <div className="p-6 space-y-4">
           {error && <p className="text-bear text-sm bg-bear/10 px-3 py-2 rounded">{error}</p>}
@@ -249,7 +249,7 @@ function TransactionHistoryModal({ holding, portfolioId, onClose }: {
               {holding.broker ? ` · ${holding.broker}` : ''}
             </p>
           </div>
-          <button onClick={onClose} className="btn-icon"><X size={16} /></button>
+          <button aria-label="Close" onClick={onClose} className="btn-icon"><X size={16} /></button>
         </div>
 
         {/* Summary strip */}

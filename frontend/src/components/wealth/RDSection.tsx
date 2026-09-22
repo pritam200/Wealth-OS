@@ -140,7 +140,7 @@ export function RDSection({ onRefresh }: { onRefresh: () => void }) {
                   <button onClick={() => setClosingId(rd.id === closingId ? null : rd.id)}
                     className="btn-icon text-gray-500 hover:text-bull p-0.5 text-2xs" title="Record RD closure in your tracker (no real bank action)">✓</button>
                 )}
-                <button onClick={() => del(rd.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                <button aria-label="Delete" onClick={() => del(rd.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
               </div>
             </div>
             <div className="h-1 bg-surface-muted rounded-full overflow-hidden">

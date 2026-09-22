@@ -90,9 +90,9 @@ export function Tab14Dividends() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setYear(y => y - 1)} className="btn-icon"><ChevronLeft size={14} /></button>
+          <button aria-label="Previous" onClick={() => setYear(y => y - 1)} className="btn-icon"><ChevronLeft size={14} /></button>
           <span className="text-sm text-ink font-semibold w-14 text-center">{year}</span>
-          <button onClick={() => setYear(y => y + 1)} className="btn-icon"><ChevronRight size={14} /></button>
+          <button aria-label="Next" onClick={() => setYear(y => y + 1)} className="btn-icon"><ChevronRight size={14} /></button>
           <button onClick={() => setOpen(o => !o)} className="btn-primary flex items-center gap-1.5 text-xs ml-2">
             <Plus size={13} /> Add Dividend
           </button>

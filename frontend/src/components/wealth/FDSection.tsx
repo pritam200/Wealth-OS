@@ -167,7 +167,7 @@ export function FDSection({ onRefresh }: { onRefresh: () => void }) {
                     <button onClick={() => setClosingId(fd.id === closingId ? null : fd.id)}
                       className="btn-icon text-gray-500 hover:text-bull p-0.5 text-2xs" title="Record FD closure in your tracker (no real bank action)">✓</button>
                   )}
-                  <button onClick={() => del(fd.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                  <button aria-label="Delete" onClick={() => del(fd.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                 </div>
               </div>
               {closingId === fd.id && (

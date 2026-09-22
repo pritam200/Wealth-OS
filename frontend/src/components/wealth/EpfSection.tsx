@@ -92,7 +92,7 @@ export function EpfSection({ onRefresh }: { onRefresh?: () => void }) {
                 <div className="text-2xs text-gray-600">5Y → <span className="text-bull">{maskText(fmtINR(e.projected5Y))}</span></div>
               </div>
               <button onClick={() => startEdit(e)} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit EPF"><Edit2 size={11} /></button>
-              <button onClick={() => del(e.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+              <button aria-label="Delete" onClick={() => del(e.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
             </div>
           </div>
         ))}

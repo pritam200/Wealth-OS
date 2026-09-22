@@ -162,7 +162,7 @@ export function Tab3MarketForecast() {
                 <HelpCircle size={11} /> Insufficient data
               </span>
             </div>
-            <button onClick={() => run(symbol)} className="btn-icon"><RefreshCw size={13} /></button>
+            <button aria-label="Refresh" onClick={() => run(symbol)} className="btn-icon"><RefreshCw size={13} /></button>
           </div>
           <p className="text-xs text-gray-400 leading-relaxed">{data.basis}</p>
           <p className="text-2xs text-gray-700 mt-2">
@@ -186,7 +186,7 @@ export function Tab3MarketForecast() {
                   <span className={`text-xs font-semibold ${TREND_COLOR[data.trend] ?? 'text-gray-400'}`}>{data.trend?.replace('_', ' ')}</span>
                 </div>
               </div>
-              <button onClick={() => run(symbol)} className="btn-icon"><RefreshCw size={13} /></button>
+              <button aria-label="Refresh" onClick={() => run(symbol)} className="btn-icon"><RefreshCw size={13} /></button>
             </div>
 
             {/* Price range map */}

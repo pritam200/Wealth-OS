@@ -34,7 +34,7 @@ export function TransactionDetail({ open, onClose, title, badgeColor, badgeLabel
             </span>
             <h3 className="text-ink font-bold text-sm">{title}</h3>
           </div>
-          <button onClick={onClose} className="btn-icon text-gray-500 hover:text-ink"><X size={16} /></button>
+          <button aria-label="Close" onClick={onClose} className="btn-icon text-gray-500 hover:text-ink"><X size={16} /></button>
         </div>
 
         <div className="p-4">

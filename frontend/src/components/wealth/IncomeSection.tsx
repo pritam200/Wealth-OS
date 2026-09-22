@@ -82,9 +82,9 @@ export function IncomeSection() {
           {items.length > 0 && <span className="badge-bull">{items.length}</span>}
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={prevMonth} className="btn-icon"><ChevronLeft size={12} /></button>
+          <button aria-label="Previous" onClick={prevMonth} className="btn-icon"><ChevronLeft size={12} /></button>
           <span className="text-xs text-gray-400 w-28 text-center">{monthLabel}</span>
-          <button onClick={nextMonth} className="btn-icon"><ChevronRight size={12} /></button>
+          <button aria-label="Next" onClick={nextMonth} className="btn-icon"><ChevronRight size={12} /></button>
           <button onClick={() => setOpen(o => !o)} className="btn-secondary text-xs flex items-center gap-1 ml-1"><Plus size={11} /> Add</button>
         </div>
       </div>
@@ -172,7 +172,7 @@ export function IncomeSection() {
                   <div className="flex items-center gap-2 shrink-0 ml-2">
                     <span className="text-bull text-xs font-mono font-semibold">{maskText(fmtINR(e.amount))}</span>
                     <button onClick={(ev) => { ev.stopPropagation(); startEdit(e); }} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit income"><Edit2 size={11} /></button>
-                    <button onClick={(ev) => { ev.stopPropagation(); del(e.id); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                    <button aria-label="Delete" onClick={(ev) => { ev.stopPropagation(); del(e.id); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                   </div>
                 </div>
               );

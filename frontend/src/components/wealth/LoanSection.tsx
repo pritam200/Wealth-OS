@@ -117,7 +117,7 @@ export function LoanSection({ onRefresh }: { onRefresh: () => void }) {
                   <div className="text-gray-500 num text-2xs">Bal {maskText(fmtINR(l.outstanding))}</div>
                 </div>
                 <button onClick={() => startEdit(l)} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit loan"><Edit2 size={11} /></button>
-                <button onClick={() => del(l.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                <button aria-label="Delete" onClick={() => del(l.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
               </div>
             </div>
             {l.outstanding > 0 && l.remainingMonths > 0 && (

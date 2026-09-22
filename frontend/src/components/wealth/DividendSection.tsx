@@ -57,9 +57,9 @@ export function DividendSection() {
           {items.length > 0 && <span className="text-2xs bg-neutral/20 text-neutral px-1.5 py-0.5 rounded-full">{items.length}</span>}
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setYear(y => y - 1)} className="btn-icon"><ChevronLeft size={12} /></button>
+          <button aria-label="Previous" onClick={() => setYear(y => y - 1)} className="btn-icon"><ChevronLeft size={12} /></button>
           <span className="text-xs text-gray-400 w-12 text-center">{year}</span>
-          <button onClick={() => setYear(y => y + 1)} className="btn-icon"><ChevronRight size={12} /></button>
+          <button aria-label="Next" onClick={() => setYear(y => y + 1)} className="btn-icon"><ChevronRight size={12} /></button>
           <button onClick={() => setOpen(o => !o)} className="btn-ghost text-xs flex items-center gap-1 ml-1"><Plus size={11} /> Add</button>
         </div>
       </div>
@@ -114,7 +114,7 @@ export function DividendSection() {
                 </div>
                 <div className="flex items-center gap-2 shrink-0 ml-2">
                   <span className="text-neutral text-xs font-mono font-semibold">{maskText(fmtINR(d.amount))}</span>
-                  <button onClick={() => del(d.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                  <button aria-label="Delete" onClick={() => del(d.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                 </div>
               </div>
             ))}

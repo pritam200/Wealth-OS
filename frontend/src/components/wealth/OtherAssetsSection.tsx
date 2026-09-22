@@ -126,8 +126,8 @@ export function OtherAssetsSection({ onRefresh }: { onRefresh: () => void }) {
                         ) : (
                           <>
                             <span className="num text-xs text-ink">{maskText(fmtINR(entry.value))}</span>
-                            <button onClick={() => { setEditId(entry.id); setEditVal(String(entry.value)); }} className="btn-icon text-gray-600 hover:text-ink p-0.5"><Edit2 size={10} /></button>
-                            <button onClick={() => del(entry.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                            <button aria-label="Edit" onClick={() => { setEditId(entry.id); setEditVal(String(entry.value)); }} className="btn-icon text-gray-600 hover:text-ink p-0.5"><Edit2 size={10} /></button>
+                            <button aria-label="Delete" onClick={() => del(entry.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                           </>
                         )}
                       </div>

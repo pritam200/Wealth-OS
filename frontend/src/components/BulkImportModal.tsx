@@ -232,7 +232,7 @@ export function BulkImportModal({ onClose, onDone }: Props) {
             <h2 className="font-bold text-ink">Bulk Import</h2>
             <p className="text-xs text-gray-500 mt-0.5">Paste CSV data to import multiple entries at once</p>
           </div>
-          <button onClick={onClose} className="btn-icon"><X size={16} /></button>
+          <button aria-label="Close" onClick={onClose} className="btn-icon"><X size={16} /></button>
         </div>
 
         {/* Tabs */}
