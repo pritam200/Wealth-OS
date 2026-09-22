@@ -85,7 +85,6 @@ class GmailSenderTrustGateTest {
                     new com.marketai.document.classify.SubjectPatternStage())),
                 new com.marketai.document.route.ParserRouter()),
             importer,
-            mock(com.marketai.gmail.ai.AiEmailExtractor.class),
             pendingPdfRepo, excludedSenderRepo,
             mock(PasswordHintExtractor.class), mock(PdfImportService.class),
             intelAgent, reviewService,

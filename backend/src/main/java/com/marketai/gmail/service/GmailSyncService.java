@@ -49,7 +49,9 @@ public class GmailSyncService {
     private final SenderTrustEvaluator senderTrustEvaluator;
     private final SelectionComparator selectionComparator;
     private final ParsedEmailImporter importer;
-    private final com.marketai.gmail.ai.AiEmailExtractor aiEmailExtractor;
+    // AiEmailExtractor was injected here but never called — the email-body AI fallback is
+    // EmailIntelAgent's job now, and the extractor is only used on the PDF path
+    // (PdfImportService). Removed rather than left as a misleading dependency.
     private final PendingPdfRepository pendingPdfRepo;
     private final ExcludedSenderRepository excludedSenderRepo;
     private final PasswordHintExtractor passwordHintExtractor;

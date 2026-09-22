@@ -20,5 +20,6 @@ public class ExpenseResponse {
     private String paymentMethod;
     private String sourceEmailId;
     private String note;
+    private String planCategoryOverride;
     private LocalDateTime createdAt;
 }

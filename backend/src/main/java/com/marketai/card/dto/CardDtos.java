@@ -77,4 +77,23 @@ public class CardDtos {
         private BigDecimal bestValue;      // best possible redemption value
         private String recommendation;
     }
+
+    @Data
+    public static class RewardEntryRequest {
+        private Integer points;
+        private BigDecimal monetaryValue;
+        private java.time.LocalDate date;
+        private String note;
+    }
+
+    @Data @Builder @NoArgsConstructor @AllArgsConstructor
+    public static class RewardEntryResponse {
+        private Long id;
+        private String type;
+        private Integer points;
+        private BigDecimal monetaryValue;
+        private java.time.LocalDate date;
+        private String note;
+        private java.time.LocalDateTime createdAt;
+    }
 }

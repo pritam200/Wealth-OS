@@ -49,6 +49,16 @@ public class ExpenseController {
         return ResponseEntity.ok(expenseService.updateExpense(user.getId(), id, req));
     }
 
+    /** The planner's "move to a different section" action — see ExpenseService for why this is
+     *  a dedicated endpoint rather than folded into the generic update. */
+    @PutMapping("/{id}/plan-category")
+    public ResponseEntity<ExpenseResponse> setPlanCategory(
+            @AuthenticationPrincipal User user,
+            @PathVariable Long id,
+            @RequestBody com.marketai.planner.dto.PlannerDtos.MoveExpenseRequest req) {
+        return ResponseEntity.ok(expenseService.setPlanCategoryOverride(user.getId(), id, req.getPlanCategoryKey()));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteExpense(
             @AuthenticationPrincipal User user,

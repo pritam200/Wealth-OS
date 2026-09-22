@@ -19,8 +19,22 @@ public class AnalystAssessment {
     private NewsPulse news;
     private List<String> positives;
     private List<String> risks;
-    private String aiNarrative;   // optional (Gemini); null if unavailable
+    private String aiNarrative;   // optional (local Ollama model, or Gemini when configured); null if unavailable
     private String basis;
+
+    /**
+     * The model's OWN call, kept strictly separate from `rating` above.
+     *
+     * `rating`/`compositeScore`/`nextAction` are computed in Java from the configured factor
+     * weights and are the only authoritative output. These `ai*` fields are a second opinion
+     * for the user to read: they are never fed back into the composite, never break a tie, and
+     * a disagreement does NOT change the rating. All null when no model is available.
+     */
+    private String aiRating;      // BUY | HOLD | SELL | WATCH — the LLM's own view
+    private String aiKeyDriver;   // one line: what the model thinks matters most here
+    private String aiMainRisk;    // one line: the model's main stated risk
+    private Boolean aiAgrees;     // computed in Java: aiRating equals rating
+    private String aiProvider;    // e.g. "ollama:qwen2.5:7b" — traceability for the AI view
 
     // Populated by RecommendationEngine — the single source of truth for the advisor-style
     // action every module (Portfolio/Research/AI Advisor/Watchlist) should show identically.

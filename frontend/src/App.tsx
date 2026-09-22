@@ -1,11 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
-import { LayoutDashboard, Activity, TrendingUp, PieChart, Wallet, Receipt, Target, CreditCard, Brain, Coins, RefreshCw } from 'lucide-react';
+import { LayoutDashboard, Activity, TrendingUp, PieChart, Wallet, Receipt, Target, CreditCard, Brain, Coins, RefreshCw, ClipboardList } from 'lucide-react';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
-import { StockPage } from './pages/StockPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { DataSyncPage } from './pages/DataSyncPage';
 import { Sidebar } from './components/layout/Sidebar';
 import { Topbar } from './components/layout/Topbar';
 import type { NavSection } from './components/layout/Sidebar';
@@ -15,20 +12,29 @@ import { useEffect, useRef } from 'react';
 import { marketApi } from './api/market';
 import type { MarketOverview } from './types';
 
-import { Tab1MarketTrends }    from './pages/tabs/Tab1MarketTrends';
-import { Tab2StockAnalysis }   from './pages/tabs/Tab2StockAnalysis';
-import { Tab3MarketForecast }  from './pages/tabs/Tab3MarketForecast';
-import { Tab4StockProjections } from './pages/tabs/Tab4StockProjections';
-import { Tab5NewsAndCatalysts } from './pages/tabs/Tab5NewsAndCatalysts';
-import { Tab6MutualFunds }     from './pages/tabs/Tab6MutualFunds';
-import { Tab7RiskMatrix, StocksHoldingsSignals } from './pages/tabs/Tab7RiskMatrix';
-import { Tab8MyWealth }        from './pages/tabs/Tab8MyWealth';
-import { Tab9AiAdvisor }       from './pages/tabs/Tab9AiAdvisor';
-import { Tab10Expenses }       from './pages/tabs/Tab10Expenses';
-import { Tab11Cards }          from './pages/tabs/Tab11Cards';
-import { Tab12Planning }       from './pages/tabs/Tab12Planning';
-import { Tab14Dividends }      from './pages/tabs/Tab14Dividends';
-import { Tab16TodaysActions }  from './pages/tabs/Tab16TodaysActions';
+// Tabs are code-split rather than statically imported: all 17 tabs plus recharts used to be
+// bundled into a single ~1.14 MB chunk the browser had to download and parse before it could
+// show the FIRST tab. Each tab is its own chunk now, so startup pays for one tab, and the
+// charting library loads only when a tab that charts something is opened.
+const Tab1MarketTrends      = lazy(() => import('./pages/tabs/Tab1MarketTrends').then(m => ({ default: m.Tab1MarketTrends })));
+const Tab2StockAnalysis     = lazy(() => import('./pages/tabs/Tab2StockAnalysis').then(m => ({ default: m.Tab2StockAnalysis })));
+const Tab3MarketForecast    = lazy(() => import('./pages/tabs/Tab3MarketForecast').then(m => ({ default: m.Tab3MarketForecast })));
+const Tab4StockProjections  = lazy(() => import('./pages/tabs/Tab4StockProjections').then(m => ({ default: m.Tab4StockProjections })));
+const Tab5NewsAndCatalysts  = lazy(() => import('./pages/tabs/Tab5NewsAndCatalysts').then(m => ({ default: m.Tab5NewsAndCatalysts })));
+const Tab6MutualFunds       = lazy(() => import('./pages/tabs/Tab6MutualFunds').then(m => ({ default: m.Tab6MutualFunds })));
+const Tab7RiskMatrix        = lazy(() => import('./pages/tabs/Tab7RiskMatrix').then(m => ({ default: m.Tab7RiskMatrix })));
+const StocksHoldingsSignals = lazy(() => import('./pages/tabs/Tab7RiskMatrix').then(m => ({ default: m.StocksHoldingsSignals })));
+const Tab8MyWealth          = lazy(() => import('./pages/tabs/Tab8MyWealth').then(m => ({ default: m.Tab8MyWealth })));
+const Tab9AiAdvisor         = lazy(() => import('./pages/tabs/Tab9AiAdvisor').then(m => ({ default: m.Tab9AiAdvisor })));
+const Tab10Expenses         = lazy(() => import('./pages/tabs/Tab10Expenses').then(m => ({ default: m.Tab10Expenses })));
+const Tab11Cards            = lazy(() => import('./pages/tabs/Tab11Cards').then(m => ({ default: m.Tab11Cards })));
+const Tab12Planning         = lazy(() => import('./pages/tabs/Tab12Planning').then(m => ({ default: m.Tab12Planning })));
+const Tab14Dividends        = lazy(() => import('./pages/tabs/Tab14Dividends').then(m => ({ default: m.Tab14Dividends })));
+const Tab16TodaysActions    = lazy(() => import('./pages/tabs/Tab16TodaysActions').then(m => ({ default: m.Tab16TodaysActions })));
+const Tab17FinancialPlanner = lazy(() => import('./pages/tabs/Tab17FinancialPlanner').then(m => ({ default: m.Tab17FinancialPlanner })));
+const DashboardPage         = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
+const DataSyncPage          = lazy(() => import('./pages/DataSyncPage').then(m => ({ default: m.DataSyncPage })));
+const StockPage             = lazy(() => import('./pages/StockPage').then(m => ({ default: m.StockPage })));
 
 // Single-responsibility IA: My Wealth is holdings/net-worth only (no recommendations —
 // see the badge-free PortfolioSection default). Stocks and Mutual Funds are the only two
@@ -70,6 +76,10 @@ const NAV_SECTIONS: readonly NavSection[] = [
   {
     id: 'income', label: 'Income & Expenses', Icon: Receipt,
     tabs: [{ id: 10, label: 'Income & Expenses' }],
+  },
+  {
+    id: 'household-plan', label: 'Household Plan', Icon: ClipboardList,
+    tabs: [{ id: 17, label: 'Financial Planner' }],
   },
   {
     id: 'dividends', label: 'Dividends', Icon: Coins,
@@ -186,6 +196,7 @@ function TabContent({ tab, onNavigate }: { tab: number; onNavigate: (tabId: numb
     case 14: return <Tab14Dividends />;
     case 15: return <DataSyncPage />;
     case 16: return <Tab16TodaysActions />;
+    case 17: return <Tab17FinancialPlanner />;
     default: return <Tab1MarketTrends />;
   }
 }
@@ -204,7 +215,7 @@ function AppShell() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-surface">
+    <div className="flex h-screen overflow-hidden app-canvas">
       <Sidebar sections={NAV_SECTIONS} activeTab={activeTab} onSelect={setActiveTab} />
 
       <div className="flex flex-col flex-1 overflow-hidden">
@@ -239,7 +250,7 @@ export default function App() {
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/stock/:symbol" element={
           <PrivateRoute>
-            <div className="min-h-screen bg-surface p-6">
+            <div className="min-h-screen app-canvas p-6">
               <button onClick={() => window.history.back()}
                 className="btn-ghost mb-5 text-xs uppercase tracking-widest">
                 ← Back

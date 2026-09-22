@@ -42,6 +42,17 @@ export interface AnalystAssessment {
   news: AnalystNews | null;             // null on the INSUFFICIENT path
   positives: string[]; risks: string[];
   aiNarrative: string | null; basis: string;
+
+  // The AI's OWN call, deliberately separate from `rating` above. `rating`/`compositeScore`/
+  // `nextAction` are computed deterministically in the backend and stay authoritative; these
+  // fields are a readable second opinion. A disagreement changes nothing, and all of them are
+  // null when no model (local Ollama, or Gemini when configured) is available.
+  aiRating?: 'BUY' | 'HOLD' | 'SELL' | 'WATCH' | null;
+  aiKeyDriver?: string | null;
+  aiMainRisk?: string | null;
+  aiAgrees?: boolean | null;
+  aiProvider?: string | null;   // e.g. "ollama:qwen2.5:7b"
+
   // Set by the backend's RecommendationEngine — the same for every consumer of a given symbol.
   // Widened to string (not the narrower NextAction/MfNextAction unions) because this one DTO
   // shape is shared by both the stock and MF recommendation endpoints, which use different

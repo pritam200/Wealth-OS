@@ -69,4 +69,24 @@ public class CardController {
     public ResponseEntity<List<PointsTip>> pointsTips(@AuthenticationPrincipal User user) {
         return ResponseEntity.ok(service.pointsTips(user.getId()));
     }
+
+    @PostMapping("/{id}/rewards/earn")
+    public ResponseEntity<CardResponse> earnRewards(@AuthenticationPrincipal User user,
+                                                     @PathVariable Long id,
+                                                     @RequestBody RewardEntryRequest req) {
+        return ResponseEntity.ok(service.earnPoints(user.getId(), id, req));
+    }
+
+    @PostMapping("/{id}/rewards/redeem")
+    public ResponseEntity<CardResponse> redeemRewards(@AuthenticationPrincipal User user,
+                                                       @PathVariable Long id,
+                                                       @RequestBody RewardEntryRequest req) {
+        return ResponseEntity.ok(service.redeemPoints(user.getId(), id, req));
+    }
+
+    @GetMapping("/{id}/rewards/history")
+    public ResponseEntity<List<RewardEntryResponse>> rewardHistory(@AuthenticationPrincipal User user,
+                                                                    @PathVariable Long id) {
+        return ResponseEntity.ok(service.rewardHistory(user.getId(), id));
+    }
 }

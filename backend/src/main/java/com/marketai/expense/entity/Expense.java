@@ -44,6 +44,18 @@ public class Expense {
     @Column(length = 500)
     private String note;
 
+    /**
+     * The household planner's fine-grained category key (e.g. "GROCERIES"), set only when the
+     * user explicitly moves/overrides this expense away from whatever
+     * {@code PlanCategoryClassifier} would assign at read time. Null means "not overridden — use
+     * the live classifier result," not "uncategorized"; this is deliberately the ONLY thing
+     * persisted for planner categorization; the classifier's own (possibly different, if the
+     * user later edits category keywords) answer is always recomputed, never stored, so it can
+     * never go stale. Nullable/additive so existing rows need no backfill.
+     */
+    @Column(name = "plan_category_override", length = 60)
+    private String planCategoryOverride;
+
     @Column(nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();

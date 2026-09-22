@@ -4,11 +4,11 @@ import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
-@Data @Builder @NoArgsConstructor @AllArgsConstructor
+@Data @Builder(toBuilder = true) @NoArgsConstructor @AllArgsConstructor
 public class ParsedEmail {
     public enum Type {
         TRADE_BUY, TRADE_SELL, FD_OPEN, RD_OPEN, MF_SIP, MF_REDEEM, DIVIDEND,
-        INCOME, EXPENSE, CARD_BILL, UNKNOWN
+        INCOME, EXPENSE, CARD_BILL, CARD_PAYMENT, UNKNOWN
     }
 
     private Type type;
@@ -27,6 +27,10 @@ public class ParsedEmail {
     private String paymentMethod;  // e.g. "HDFC Bank", "Paytm UPI", "Credit Card ****1234"
     private String cardLast4;      // credit card last 4 digits
     private LocalDate dueDate;     // card bill due date
+    private LocalDate statementDate;   // card bill statement/generation date
+    private LocalDate paymentDate;     // card payment confirmation date (CARD_PAYMENT)
+    private String paymentReference;   // bank/UPI reference/RRN quoted in a payment confirmation
+    private String paymentStatus;      // "CONFIRMED" | "REVERSED" — set by CardPaymentParser
 
     // FD
     private String bank;

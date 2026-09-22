@@ -25,4 +25,19 @@ public class CardOptimizerController {
     public ResponseEntity<SpendAggregator.SpendProfile> spendProfile(@AuthenticationPrincipal User user) {
         return ResponseEntity.ok(spendAggregator.aggregate(user.getId()));
     }
+
+    /** Net-value verdict for one catalog card the user doesn't own yet, against their own spend. */
+    @GetMapping("/catalog/{name}")
+    public ResponseEntity<CardOptimizerService.ProspectiveResult> analyseCatalogCard(
+            @AuthenticationPrincipal User user, @PathVariable String name) {
+        return ResponseEntity.ok(optimizer.analyseCatalogCard(user.getId(), name));
+    }
+
+    /** Every catalog card not already owned, ranked by projected net value against the user's
+     *  own spend — "which new card is actually worth getting". */
+    @GetMapping("/catalog-all")
+    public ResponseEntity<CardOptimizerService.CatalogRanking> analyseAllCatalogCards(
+            @AuthenticationPrincipal User user) {
+        return ResponseEntity.ok(optimizer.analyseAllCatalogCards(user.getId()));
+    }
 }

@@ -2,7 +2,8 @@ package com.marketai.gmail.ai;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.marketai.ai.client.GeminiClient;
+import com.marketai.ai.llm.LlmProviderRouter;
+import com.marketai.ai.llm.LlmUnavailableException;
 import com.marketai.gmail.parser.ParsedEmail;
 import com.marketai.gmail.parser.ParserUtil;
 import com.marketai.market.entity.Stock;
@@ -22,17 +23,20 @@ import java.util.List;
  * broker/RTA parsers, etc.) fail to extract anything from — arbitrary phrasing, a bank's
  * unusual wording, a debit alert that doesn't match the mandatory "Rs./₹/INR"-prefixed
  * amount regex, and so on. Only invoked when the regular parser chain comes back empty
- * (see GmailSyncService), so it never overrides an already-working deterministic parser.
+ * (see PdfImportService's unlocked-statement path), so it never overrides an already-working
+ * deterministic parser. Email-body fallback is handled by EmailIntelAgent instead.
  *
- * Reuses the existing GeminiClient (same one AnalystService uses for narrative text) —
- * no new AI provider, no new config beyond the existing app.gemini.* keys.
+ * Goes through LlmProviderRouter, so it runs on the local Ollama model by default (no key, no
+ * per-call cost, nothing leaves the machine) and on Gemini only when configured. It called
+ * GeminiClient directly before, which silently required a Gemini key even with
+ * app.llm.provider=ollama.
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AiEmailExtractor {
 
-    private final GeminiClient gemini;
+    private final LlmProviderRouter llm;
     private final ObjectMapper objectMapper;
     private final MarketDataService marketDataService;
 
@@ -44,9 +48,13 @@ public class AiEmailExtractor {
         "transaction", "payment", "emi", "invested", "redeemed", "withdrawn", "balance"
     };
 
+    // Asked for as {"transactions": [...]} rather than a bare top-level array: Ollama's
+    // `format: json` decoding reliably produces an OBJECT, so a prompt demanding an array
+    // gets wrapped anyway. Both shapes are accepted when parsing (see extract).
     private static final String SYSTEM_INSTRUCTION =
         "You extract financial transactions from Indian bank/broker/investment emails. " +
-        "Return ONLY a JSON array, no prose, no markdown fences. Each element has exactly these fields " +
+        "Return ONLY a JSON object of the form {\"transactions\": [ ... ]}, no prose, no markdown fences. " +
+        "Each element of the array has exactly these fields " +
         "(omit a field if unknown, use null, never invent values):\n" +
         "{\"type\": one of TRADE_BUY|TRADE_SELL|FD_OPEN|RD_OPEN|MF_SIP|DIVIDEND|INCOME|EXPENSE|CARD_BILL, " +
         "\"symbol\": for a trade/dividend, the EXACT NSE trading ticker (e.g. RELIANCE, TCS, HDFCBANK, LT, ADANIENT) — " +
@@ -63,11 +71,10 @@ public class AiEmailExtractor {
         "\"fundName\": mutual fund scheme name if MF_SIP, \"nav\": per-unit NAV if MF, \"units\": MF units if known, " +
         "\"tradeDate\": ISO date yyyy-MM-dd if mentioned, else null}\n" +
         "If the email is not a real financial transaction (newsletter, OTP, marketing, a document you cannot read " +
-        "the numbers of), return an empty array []. Never guess a transaction that isn't clearly stated in the text.";
+        "the numbers of), return {\"transactions\": []}. Never guess a transaction that isn't clearly stated in the text.";
 
-    /** Shared with GmailSyncService's PDF-attachment gate, so both the AI text fallback and
-     *  the "queue this locked PDF for the user" decision use the same definition of
-     *  "looks like a financial email" instead of two independently-drifting keyword lists. */
+    /** The same "looks like a financial email" test {@link #extract} applies, exposed so a
+     *  caller can gate work before paying for a model call. */
     public boolean isFinanciallyRelevant(String subject, String bodyText) {
         String text = (subject == null ? "" : subject) + "\n" + (bodyText == null ? "" : bodyText);
         return ParserUtil.containsIgnoreCase(text, MONEY_SIGNALS);
@@ -77,12 +84,16 @@ public class AiEmailExtractor {
         String text = (subject == null ? "" : subject) + "\n" + (bodyText == null ? "" : bodyText);
         if (!ParserUtil.containsIgnoreCase(text, MONEY_SIGNALS)) return new ArrayList<>();
 
-        // Gemini has a real per-request cost/latency and a token limit — cap the input.
+        // Every model has latency and a context limit (and a hosted one has a per-call cost)
+        // — cap the input.
         String truncated = text.length() > 6000 ? text.substring(0, 6000) : text;
 
         String raw;
         try {
-            raw = gemini.generateContent(SYSTEM_INSTRUCTION, "From: " + from + "\nSubject: " + subject + "\n\n" + truncated);
+            raw = llm.complete(SYSTEM_INSTRUCTION, "From: " + from + "\nSubject: " + subject + "\n\n" + truncated).getText();
+        } catch (LlmUnavailableException e) {
+            log.debug("AI email extraction skipped — no model available: {}", e.getMessage());
+            return new ArrayList<>();
         } catch (Exception e) {
             log.debug("AI email extraction call failed: {}", e.getMessage());
             return new ArrayList<>();
@@ -90,16 +101,19 @@ public class AiEmailExtractor {
         if (raw == null) return new ArrayList<>();
 
         String json = raw.trim();
-        // Strip ```json ... ``` fences if Gemini added them despite instructions.
+        // Strip ```json ... ``` fences if the model added them despite instructions.
         if (json.startsWith("```")) {
             json = json.replaceFirst("^```[a-zA-Z]*\\n?", "").replaceFirst("```\\s*$", "").trim();
         }
-        if (!json.startsWith("[")) return new ArrayList<>(); // not the JSON array we asked for — bail safely
+        // Not JSON at all — bail safely rather than trying to salvage text.
+        if (!json.startsWith("[") && !json.startsWith("{")) return new ArrayList<>();
 
         List<ParsedEmail> out = new ArrayList<>();
         try {
-            JsonNode arr = objectMapper.readTree(json);
-            if (!arr.isArray()) return out;
+            JsonNode root = objectMapper.readTree(json);
+            // Accept either the requested {"transactions": [...]} or a bare top-level array.
+            JsonNode arr = root.isArray() ? root : root.get("transactions");
+            if (arr == null || !arr.isArray()) return out;
             for (JsonNode node : arr) {
                 ParsedEmail pe = toParsedEmail(node);
                 if (pe != null) out.add(pe);

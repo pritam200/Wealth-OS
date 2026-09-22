@@ -1,6 +1,7 @@
 package com.marketai.ai.service;
 
-import com.marketai.ai.client.GeminiClient;
+import com.marketai.ai.llm.LlmProviderRouter;
+import com.marketai.ai.llm.LlmUnavailableException;
 import com.marketai.ai.dto.AiRequest;
 import com.marketai.ai.dto.AiResponse;
 import com.marketai.ai.entity.AiHistory;
@@ -14,19 +15,30 @@ import com.marketai.technical.dto.TechnicalAnalysisDto;
 import com.marketai.technical.service.TechnicalIndicatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * The free-form AI analyst behind /api/ai/*. Goes through {@link LlmProviderRouter}, so it
+ * runs on the local Ollama model by default (no key, no cost, nothing leaves the machine)
+ * and on Gemini only when explicitly configured — it used to call GeminiClient directly,
+ * which made app.llm.provider=none a lie for this feature.
+ *
+ * When no model is available the request FAILS (503). It must never persist a
+ * "configure your API key" sentence into ai_history as though the model had answered.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AiService {
 
-    private final GeminiClient geminiClient;
+    private final LlmProviderRouter llm;
     private final AiHistoryRepository aiHistoryRepository;
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalService;
@@ -66,7 +78,7 @@ public class AiService {
         }
 
         String prompt = context + "\nUser question: " + request.getPrompt();
-        String rawResponse = geminiClient.generateContent(SYSTEM_INSTRUCTION, prompt);
+        String rawResponse = ask(prompt);
 
         saveHistory(user, AiHistory.QueryType.STOCK_ANALYSIS, request.getPrompt(), rawResponse, symbol);
 
@@ -83,7 +95,7 @@ public class AiService {
                 "Cover Nifty 50, Bank Nifty, sector performance, FII/DII activity, " +
                 "key movers and shakers, and the overall market sentiment.";
 
-        String rawResponse = geminiClient.generateContent(SYSTEM_INSTRUCTION, context);
+        String rawResponse = ask(context);
         saveHistory(user, AiHistory.QueryType.MARKET_SUMMARY, context, rawResponse, null);
 
         return AiResponse.builder()
@@ -120,7 +132,7 @@ public class AiService {
         context.append("\nProvide: diversification analysis, underperformers to review, " +
                 "risk assessment, rebalancing suggestions for Indian market conditions.");
 
-        String rawResponse = geminiClient.generateContent(SYSTEM_INSTRUCTION, context.toString());
+        String rawResponse = ask(context.toString());
         saveHistory(user, AiHistory.QueryType.PORTFOLIO_REVIEW, "Portfolio review", rawResponse, null);
 
         return AiResponse.builder()
@@ -132,7 +144,7 @@ public class AiService {
 
     @Transactional
     public AiResponse chat(AiRequest request, User user) {
-        String rawResponse = geminiClient.generateContent(SYSTEM_INSTRUCTION, request.getPrompt());
+        String rawResponse = ask(request.getPrompt());
         saveHistory(user, AiHistory.QueryType.CHAT, request.getPrompt(), rawResponse,
                 request.getSymbol());
 
@@ -141,6 +153,20 @@ public class AiService {
                 .rawResponse(rawResponse)
                 .generatedAt(LocalDateTime.now())
                 .build();
+    }
+
+    /**
+     * One prose call through the router. A missing/unreachable model becomes a 503 rather
+     * than a string that reads like an answer, so nothing downstream (history, the UI) can
+     * mistake "no model configured" for analysis.
+     */
+    private String ask(String prompt) {
+        try {
+            return llm.completeProse(SYSTEM_INSTRUCTION, prompt).getText();
+        } catch (LlmUnavailableException e) {
+            log.warn("AI request rejected — no model available: {}", e.getMessage());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, LlmProviderRouter.NONE_AVAILABLE);
+        }
     }
 
     private void saveHistory(User user, AiHistory.QueryType type, String prompt,

@@ -33,11 +33,14 @@ public class ParsedEmailImporter {
     private final com.marketai.income.repository.IncomeRepository incomeRepo;
     private final com.marketai.expense.repository.ExpenseRepository expenseRepo;
     private final com.marketai.card.repository.CreditCardRepository cardRepo;
+    private final com.marketai.card.repository.CardStatementRepository cardStatementRepo;
+    private final com.marketai.card.repository.CardPaymentRepository cardPaymentRepo;
     private final com.marketai.tracking.repository.FixedDepositRepository fdRepo;
     private final com.marketai.tracking.repository.RecurringDepositRepository rdRepo;
     private final TransactionFingerprinter fingerprinter;
     private final com.marketai.gmail.repository.ImportedTransactionFingerprintRepository fingerprintRepo;
     private final com.marketai.document.identity.ReferenceHarvester referenceHarvester;
+    private final TransactionMatchScorer matchScorer;
 
     public void importParsedEmail(Long userId, User user, ParsedEmail pe) throws Exception {
         importParsedEmail(userId, user, pe, null);
@@ -131,10 +134,57 @@ public class ParsedEmailImporter {
             return;
         }
 
+        // --- Tier 3: weighted multi-factor match. Tiers 1/2 above only ever catch byte-for-byte
+        // identical evidence; this catches the far more common case of the SAME transaction
+        // described slightly differently by two documents (a transaction alert vs the statement
+        // line that later restates it) — amount + near date + card + merchant, scored, not
+        // hashed. See TransactionMatchScorer for the weighting and why no single signal here is
+        // treated as decisive on its own (unlike the rail reference in tier 1).
+        var bestMatch = matchScorer.findBestMatch(userId, pe);
+        com.marketai.gmail.entity.DuplicateState duplicateState = com.marketai.gmail.entity.DuplicateState.NEW;
+        Long matchedFingerprintId = null;
+        Double matchConfidence = null;
+
+        if (bestMatch.isPresent()) {
+            var match = bestMatch.get();
+            matchedFingerprintId = match.getMatched().getId();
+            matchConfidence = match.getConfidence();
+
+            if (match.getConfidence() >= TransactionMatchScorer.CONFIRM_THRESHOLD) {
+                // High-confidence match: treated as corroboration of the existing record, not a
+                // new financial event. A fingerprint row is still written (see below the
+                // early-return branch is deliberately NOT taken here) so a re-delivery of this
+                // exact email is caught by the cheap tier-2 hash check next time, instead of
+                // re-running this scorer.
+                fingerprintRepo.save(buildFingerprintRow(userId, pe, gmailMessageId, fp, ref,
+                    com.marketai.gmail.entity.DuplicateState.MATCHED_TO_EXISTING, matchedFingerprintId, matchConfidence));
+                log.info("MATCHED_TO_EXISTING (confidence {}): {} scored against fingerprint {} — not booked as a new transaction",
+                    String.format("%.2f", match.getConfidence()), pe.getSourceDescription(), matchedFingerprintId);
+                return;
+            }
+
+            // Below the confirm bar but above the review bar: per spec, an uncertain transaction
+            // is never silently discarded. It IS imported — refusing to book a real transaction
+            // just because it resembles another one would be its own kind of data loss — but the
+            // fingerprint row is flagged NEEDS_REVIEW so a human/reconciliation pass can look at
+            // it rather than the match being invisible.
+            duplicateState = com.marketai.gmail.entity.DuplicateState.NEEDS_REVIEW;
+            log.info("NEEDS_REVIEW (confidence {}): {} resembles fingerprint {} but below the auto-match threshold — importing and flagging",
+                String.format("%.2f", match.getConfidence()), pe.getSourceDescription(), matchedFingerprintId);
+        }
+
         routeImport(userId, user, pe, gmailMessageId);
 
         // Recorded only after a successful import, so a failed attempt stays retryable.
-        fingerprintRepo.save(com.marketai.gmail.entity.ImportedTransactionFingerprint.builder()
+        fingerprintRepo.save(buildFingerprintRow(userId, pe, gmailMessageId, fp, ref,
+            duplicateState, matchedFingerprintId, matchConfidence));
+    }
+
+    private com.marketai.gmail.entity.ImportedTransactionFingerprint buildFingerprintRow(
+            Long userId, ParsedEmail pe, String gmailMessageId, String fp,
+            com.marketai.document.identity.ExternalReference ref,
+            com.marketai.gmail.entity.DuplicateState duplicateState, Long matchedFingerprintId, Double matchConfidence) {
+        return com.marketai.gmail.entity.ImportedTransactionFingerprint.builder()
             .userId(userId)
             .fingerprint(fp)
             .type(pe.getType() != null ? pe.getType().name() : null)
@@ -143,7 +193,14 @@ public class ParsedEmailImporter {
             .externalRefType(ref != null ? ref.type().name() : null)
             .description(pe.getSourceDescription() != null && pe.getSourceDescription().length() > 300
                 ? pe.getSourceDescription().substring(0, 300) : pe.getSourceDescription())
-            .build());
+            .amount(pe.getAmount())
+            .transactionDate(TransactionMatchScorer.candidateDate(pe))
+            .merchant(pe.getMerchant())
+            .cardLast4(pe.getCardLast4())
+            .duplicateState(duplicateState.name())
+            .matchedFingerprintId(matchedFingerprintId)
+            .matchConfidence(matchConfidence)
+            .build();
     }
 
     /** Keeps conflict detail inside its column without truncating mid-character. */
@@ -234,7 +291,10 @@ public class ParsedEmailImporter {
                 importExpense(userId, pe, gmailMessageId);
                 break;
             case CARD_BILL:
-                applyCardBill(userId, pe);
+                applyCardBill(userId, pe, gmailMessageId);
+                break;
+            case CARD_PAYMENT:
+                importCardPayment(userId, pe, gmailMessageId);
                 break;
             default:
                 break;
@@ -340,7 +400,58 @@ public class ParsedEmailImporter {
         return false;
     }
 
-    private void applyCardBill(Long userId, ParsedEmail pe) {
+    /**
+     * A statement is booked as an immutable {@link com.marketai.card.entity.CardStatement} row
+     * — never overwritten — so a later bill doesn't erase the history a
+     * {@link com.marketai.card.service.CardReconciliationService} needs to explain a prior
+     * cycle. {@code CreditCard.currentDue}/{@code currentDueDate} are still updated too, purely
+     * as a cheap "what's due right now" cache for the existing card-list UI; the statement row,
+     * not this cache, is the source of truth for reconciliation and history.
+     */
+    private void applyCardBill(Long userId, ParsedEmail pe, String gmailMessageId) {
+        com.marketai.card.entity.CreditCard card = findCard(userId, pe);
+        if (card == null) return; // no saved card to attach the bill to — the fingerprint is still recorded by the caller
+
+        cardStatementRepo.save(com.marketai.card.entity.CardStatement.builder()
+            .cardId(card.getId())
+            .userId(userId)
+            .statementDate(pe.getStatementDate())
+            .dueDate(pe.getDueDate())
+            .totalDue(pe.getAmount())
+            .sourceEmailId(gmailMessageId)
+            .build());
+
+        card.setCurrentDue(pe.getAmount());
+        card.setCurrentDueDate(pe.getDueDate());
+        cardRepo.save(card);
+    }
+
+    /**
+     * A payment confirmation is booked as an immutable {@link com.marketai.card.entity.CardPayment}
+     * fact. {@code cardId} is left null when no saved card matches — the row is not dropped,
+     * just parked unreconciled, so a payment for a card the user hasn't added yet is not lost.
+     * This never touches any balance directly: {@code CardReconciliationService} derives
+     * outstanding/paid status by walking statements and payments together at read time.
+     */
+    private void importCardPayment(Long userId, ParsedEmail pe, String gmailMessageId) {
+        com.marketai.card.entity.CreditCard card = findCard(userId, pe);
+        com.marketai.card.entity.CardPaymentStatus status =
+            "REVERSED".equalsIgnoreCase(pe.getPaymentStatus())
+                ? com.marketai.card.entity.CardPaymentStatus.REVERSED
+                : com.marketai.card.entity.CardPaymentStatus.CONFIRMED;
+
+        cardPaymentRepo.save(com.marketai.card.entity.CardPayment.builder()
+            .cardId(card != null ? card.getId() : null)
+            .userId(userId)
+            .amount(pe.getAmount())
+            .paymentDate(pe.getPaymentDate() != null ? pe.getPaymentDate() : LocalDate.now())
+            .referenceNumber(pe.getPaymentReference())
+            .status(status)
+            .sourceEmailId(gmailMessageId)
+            .build());
+    }
+
+    private com.marketai.card.entity.CreditCard findCard(Long userId, ParsedEmail pe) {
         List<com.marketai.card.entity.CreditCard> matches = new ArrayList<>();
         if (pe.getCardLast4() != null) {
             matches = cardRepo.findByUserIdAndLastFour(userId, pe.getCardLast4());
@@ -348,11 +459,7 @@ public class ParsedEmailImporter {
         if (matches.isEmpty() && pe.getBank() != null) {
             matches = cardRepo.findByUserIdAndIssuerIgnoreCase(userId, pe.getBank());
         }
-        if (matches.isEmpty()) return; // no saved card to attach the bill to
-        com.marketai.card.entity.CreditCard card = matches.get(0);
-        card.setCurrentDue(pe.getAmount());
-        card.setCurrentDueDate(pe.getDueDate());
-        cardRepo.save(card);
+        return matches.isEmpty() ? null : matches.get(0);
     }
 
     private Portfolio getOrCreatePortfolio(Long userId, User user) throws Exception {

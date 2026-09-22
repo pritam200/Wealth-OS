@@ -1,6 +1,9 @@
 package com.marketai.analyst.service;
 
-import com.marketai.ai.client.GeminiClient;
+import com.marketai.ai.llm.LlmCompletion;
+import com.marketai.ai.llm.LlmJsonParser;
+import com.marketai.ai.llm.LlmProviderRouter;
+import com.marketai.ai.llm.LlmUnavailableException;
 import com.marketai.analyst.dto.AnalystAssessment;
 import com.marketai.analyst.dto.AnalystAssessment.*;
 import com.marketai.market.dto.QuoteDto;
@@ -25,8 +28,13 @@ import com.marketai.common.quality.DataQuality;
  *   Momentum  (20%)  – where price sits in its 52-week range
  *   Valuation (20%)  – P/E bucket
  *   Sentiment (30%)  – keyword sentiment over recent stock-specific news
- * Composite → BUY / HOLD / SELL with a factor breakdown, the fundamentals it
- * used, and (if Gemini is configured) a short written outlook.
+ * Composite → BUY / HOLD / SELL with a factor breakdown, the fundamentals it used, and
+ * (when a model is available — local Ollama by default, Gemini if configured) an AI second
+ * opinion carried in the `ai*` fields.
+ *
+ * The AI view is strictly advisory: it is produced AFTER the composite is final, is never an
+ * input to it, and a disagreement changes nothing. If no model is reachable, every `ai*` field
+ * is null and the verdict is identical.
  */
 @Service
 @RequiredArgsConstructor
@@ -36,7 +44,10 @@ public class AnalystService {
     private final TechnicalIndicatorService technical;
     private final MarketDataService marketData;
     private final NewsService newsService;
-    private final GeminiClient gemini;
+    // Vendor-neutral: Ollama locally by default, Gemini only when configured. Was GeminiClient
+    // directly, which made app.llm.provider=none have no effect on this path.
+    private final LlmProviderRouter llm;
+    private final LlmJsonParser llmJson;
 
     // Configurable per the "Financial Intelligence Engine" requirement — tune weighting
     // without a code change. Must sum to 100; defaults match the original hardcoded model.
@@ -206,13 +217,22 @@ public class AnalystService {
             (pe != null && pe.doubleValue() > 0 ? "P/E" : "no P/E available"),
             pulse.getTotal());
 
-        String narrative = aiNarrative(displayName, rating, factors, fund, pulse);
+        // Asked for only after `rating`/`composite` above are final — the AI cannot influence
+        // them, it can only comment on them.
+        AiView ai = aiView(displayName, rating, factors, fund, pulse);
 
         return AnalystAssessment.builder()
             .symbol(symbol).displayName(displayName != null ? displayName : base).price(round(price))
             .rating(rating).conviction(conviction).compositeScore(composite).factorBreakdown(factors)
             .fundamentals(fund).technicals(tl).news(pulse).positives(dedup(positives)).risks(dedup(risks))
-            .aiNarrative(narrative).basis(basis)
+            .aiNarrative(ai == null ? null : ai.outlook())
+            .aiRating(ai == null ? null : ai.rating())
+            .aiKeyDriver(ai == null ? null : ai.keyDriver())
+            .aiMainRisk(ai == null ? null : ai.mainRisk())
+            // Agreement is computed here in Java, never asserted by the model itself.
+            .aiAgrees(ai == null || ai.rating() == null ? null : ai.rating().equals(rating))
+            .aiProvider(ai == null ? null : ai.provider())
+            .basis(basis)
             .dataQuality(ta.getDataQuality()).barsAvailable(ta.getBarsAvailable())
             .build();
     }
@@ -274,7 +294,21 @@ public class AnalystService {
     private String clean(String s) { return s.replaceAll("<[^>]+>", "").replace("&amp;", "&").replace("&#39;", "'").replace("&quot;", "\"").replace("&nbsp;", " ").trim(); }
     private String shortDate(String d) { if (d == null) return null; return d.length() >= 16 ? d.substring(5, 16) : d; }
 
-    private String aiNarrative(String name, String rating, List<Factor> factors, Fundamentals f, NewsPulse pulse) {
+    /** Advisory-only companion to the deterministic assessment. All fields may be null. */
+    record AiView(String rating, String keyDriver, String mainRisk, String outlook, String provider) {}
+
+    private static final java.util.Set<String> ALLOWED_AI_RATINGS =
+        java.util.Set.of("BUY", "HOLD", "SELL", "WATCH");
+
+    /**
+     * The AI second opinion: the model's own call plus a short outlook, requested as JSON so
+     * the verdict can be displayed BESIDE the deterministic rating instead of blended into it.
+     *
+     * Every failure mode degrades to "no AI view" (null) and leaves the composite untouched:
+     * no model configured, model unreachable, non-JSON output, or a rating outside the
+     * whitelist. An unrecognised verdict is dropped rather than shown as a rating.
+     */
+    private AiView aiView(String name, String rating, List<Factor> factors, Fundamentals f, NewsPulse pulse) {
         try {
             StringBuilder ctx = new StringBuilder();
             ctx.append("Stock: ").append(name).append("\nModel rating: ").append(rating).append("\nFactors: ");
@@ -282,11 +316,36 @@ public class AnalystService {
             ctx.append("\nP/E: ").append(f.getPe()).append(", sector: ").append(f.getSector()).append(", trend: ").append(f.getTrend());
             if (pulse.getHeadlines() != null && !pulse.getHeadlines().isEmpty())
                 ctx.append("\nRecent headlines: ").append(String.join(" | ", pulse.getHeadlines()));
-            String sys = "You are a sell-side equity analyst. In 2-3 sentences give a balanced outlook for this Indian stock using ONLY the data provided. Mention the key driver and the main risk. Do not invent numbers. End with 'Not investment advice.'";
-            String out = gemini.generateContent(sys, ctx.toString());
-            return (out != null && !out.trim().isEmpty()) ? out.trim() : null;
+
+            String sys = "You are a sell-side equity analyst reviewing an Indian (NSE/BSE) stock. "
+                + "Use ONLY the data provided — never invent numbers, prices or events. "
+                + "Reply with a JSON object and nothing else: "
+                + "{\"rating\": one of BUY|HOLD|SELL|WATCH — your own independent call, "
+                + "\"keyDriver\": one short sentence on what matters most here, "
+                + "\"mainRisk\": one short sentence on the biggest risk, "
+                + "\"outlook\": 2-3 sentences of balanced outlook ending with 'Not investment advice.'} "
+                + "Use WATCH when the data provided is too thin to take a side.";
+
+            LlmCompletion out = llm.complete(sys, ctx.toString());
+            var json = llmJson.parse(out.getText()).orElse(null);
+            if (json == null) return null;
+
+            String aiRating = llmJson.str(json, "rating");
+            if (aiRating != null) {
+                aiRating = aiRating.trim().toUpperCase();
+                if (!ALLOWED_AI_RATINGS.contains(aiRating)) aiRating = null;
+            }
+
+            AiView view = new AiView(aiRating, llmJson.str(json, "keyDriver"), llmJson.str(json, "mainRisk"),
+                llmJson.str(json, "outlook"), out.getProvider() + ":" + out.getModel());
+            // Nothing usable came back — treat as no AI view rather than an empty panel.
+            if (view.rating() == null && view.outlook() == null) return null;
+            return view;
+        } catch (LlmUnavailableException e) {
+            return null; // no model configured/reachable — the deterministic model still stands
         } catch (Exception e) {
-            return null; // Gemini not configured / unavailable — deterministic model still stands
+            log.debug("AI view unavailable for {}: {}", name, e.getMessage());
+            return null;
         }
     }
 

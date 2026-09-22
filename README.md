@@ -11,7 +11,7 @@ Backend (Java 21 + Spring Boot 3.3)
     ↓
 PostgreSQL + Redis
     ↓
-Yahoo Finance API  ·  Gemini AI  ·  News API
+Yahoo Finance API  ·  Local LLM (Ollama) or Gemini  ·  News API
 ```
 
 ## Features
@@ -19,7 +19,7 @@ Yahoo Finance API  ·  Gemini AI  ·  News API
 - **Real-time Market Data** — Nifty 50, Sensex, Bank Nifty, stock quotes via Yahoo Finance
 - **Technical Analysis** — RSI, MACD, SMA/EMA, Bollinger Bands, ATR, Support/Resistance
 - **Portfolio Tracking** — P&L, CAGR, allocation, risk metrics with live prices
-- **AI Analyst** — Gemini-powered stock analysis, market summaries, portfolio review
+- **AI Analyst** — stock analysis, market summaries, portfolio review and a second-opinion rating, on a local Ollama model by default (no API key)
 - **Market News** — Sentiment-classified news feed
 - **Bloomberg-style dark UI** — Responsive trading dashboard
 
@@ -37,7 +37,8 @@ Yahoo Finance API  ·  Gemini AI  ·  News API
 git clone <repo>
 cd indian-markets-ai-platform
 cp .env.example .env
-# Edit .env — set DB credentials, JWT_SECRET, GEMINI_API_KEY
+# Edit .env — set DB credentials and JWT_SECRET.
+# No AI key needed: the default provider is a local Ollama model (see "AI layer" below).
 ```
 
 ### 2. Database
@@ -89,9 +90,52 @@ docker compose up -d
 | `DB_USER` | ✓ | Database user |
 | `DB_PASSWORD` | ✓ | Database password |
 | `JWT_SECRET` | ✓ | JWT signing key (min 64 chars) |
-| `GEMINI_API_KEY` | Recommended | Google Gemini API key for AI features |
+| `LLM_PROVIDER` | Optional | `ollama` (default, local, free) \| `gemini` \| `none` |
+| `OLLAMA_MODEL` | Optional | Local model name, default `qwen2.5:7b` — **change this to switch models** |
+| `OLLAMA_BASE_URL` | Optional | Default `http://localhost:11434` |
+| `GEMINI_API_KEY` | Optional | Only for `LLM_PROVIDER=gemini`. Free key: https://aistudio.google.com/apikey |
+| `GEMINI_MODEL` | Optional | Default `gemini-2.0-flash` |
 | `NEWS_API_KEY` | Optional | NewsAPI.org key for news feed |
 | `REDIS_HOST` | ✓ | Redis host |
+
+## AI layer
+
+AI here is **additive, never load-bearing**: it supplies semantics (classification, narrative,
+a second-opinion rating) while every calculation, duplicate check and database write is done in
+deterministic Java. Set `LLM_PROVIDER=none` and the platform behaves identically minus the AI
+commentary. A model that is missing or unreachable yields an error or an empty result — never a
+placeholder that could be mistaken for a financial fact.
+
+**The default is local and free** — no API key:
+
+```bash
+brew install ollama        # then, in another shell: ollama serve
+ollama pull qwen2.5:7b
+```
+
+### Changing the local model
+
+Pull it, point `OLLAMA_MODEL` at it, restart the backend. Nothing else changes.
+
+```bash
+ollama pull qwen2.5:14b
+OLLAMA_MODEL=qwen2.5:14b ./backend/start.sh
+```
+
+| Model | Size | Good for |
+|---|---|---|
+| `qwen2.5:7b` | ~4.7 GB | Default. Bulk email classification — a full sync is hundreds of calls |
+| `qwen2.5:14b` | ~9.0 GB | Better reasoning and prose; slower per call |
+| `llama3.1:8b`, `mistral:7b`, `phi4` | varies | Any Ollama chat model that can return strict JSON |
+
+A replacement model must support a system message and be able to emit strict JSON (the
+extraction and classification paths request `format: json`). Temperature is pinned to 0, so the
+same email always classifies the same way.
+
+Where AI is used: Gmail email classification (`EmailIntelAgent` — results below
+`LLM_MIN_CONFIDENCE` go to the review queue instead of importing), PDF-statement transaction
+extraction (`AiEmailExtractor`), the AI second opinion on the Analyst View, and the AI Market
+Copilot. Every call is recorded in the `ai_audit_trail` table with provider, model and latency.
 
 ## API Documentation
 
@@ -127,7 +171,7 @@ indian-markets-ai-platform/
 │       ├── market/        — Stock data, Yahoo Finance
 │       ├── technical/     — RSI, MACD, MA, BB, ATR
 │       ├── portfolio/     — Holdings, P&L, transactions
-│       ├── ai/            — Gemini integration
+│       ├── ai/            — LLM layer (Ollama + Gemini providers, audit, review queue)
 │       ├── news/          — News feed, sentiment
 │       └── common/        — Config, exceptions, security
 ├── frontend/

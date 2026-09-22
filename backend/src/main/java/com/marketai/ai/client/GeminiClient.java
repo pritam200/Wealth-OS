@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.marketai.ai.llm.LlmUnavailableException;
 import com.marketai.common.exception.ExternalApiException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +20,10 @@ public class GeminiClient {
     private final WebClient.Builder webClientBuilder;
     private final ObjectMapper objectMapper;
 
-    @Value("${app.gemini.api-key}")
+    // Optional: Gemini is one of two providers behind LlmProviderRouter, and the default
+    // (Ollama) needs no key at all. Declared with an empty default so a deployment that
+    // never uses Gemini still starts.
+    @Value("${app.gemini.api-key:}")
     private String apiKey;
 
     @Value("${app.gemini.base-url}")
@@ -28,9 +32,15 @@ public class GeminiClient {
     @Value("${app.gemini.model}")
     private String model;
 
+    /**
+     * @throws LlmUnavailableException when no key is configured. This used to RETURN an
+     *         apologetic sentence instead, which callers had no way to distinguish from a
+     *         real answer — AiService persisted it to ai_history and AnalystService rendered
+     *         it as a stock outlook. A missing model must be an error, never a fact.
+     */
     public String generateContent(String systemInstruction, String userPrompt) {
         if (apiKey == null || apiKey.trim().isEmpty()) {
-            return "AI features require a Gemini API key. Please set GEMINI_API_KEY in your environment.";
+            throw new LlmUnavailableException("Gemini API key not configured (app.gemini.api-key)");
         }
 
         try {

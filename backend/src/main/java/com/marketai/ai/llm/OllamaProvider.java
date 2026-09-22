@@ -64,6 +64,17 @@ public class OllamaProvider implements LlmProvider {
 
     @Override
     public LlmCompletion complete(String systemInstruction, String userPrompt) {
+        return call(systemInstruction, userPrompt, true);
+    }
+
+    /** Prose mode: no `format: json`, or the model would answer with a JSON object instead
+     *  of the 2-3 sentences the advisory/copilot callers are asking for. */
+    @Override
+    public LlmCompletion completeProse(String systemInstruction, String userPrompt) {
+        return call(systemInstruction, userPrompt, false);
+    }
+
+    private LlmCompletion call(String systemInstruction, String userPrompt, boolean jsonMode) {
         long started = System.currentTimeMillis();
         try {
             ObjectNode body = objectMapper.createObjectNode();
@@ -71,7 +82,7 @@ public class OllamaProvider implements LlmProvider {
             body.put("stream", false);
             // Constrain decoding to JSON — the single most effective guard against a small
             // local model wrapping its answer in prose or markdown fences.
-            body.put("format", "json");
+            if (jsonMode) body.put("format", "json");
 
             ObjectNode options = objectMapper.createObjectNode();
             options.put("temperature", temperature);

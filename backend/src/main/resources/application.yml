@@ -64,10 +64,13 @@ app:
     expiration-ms: 86400000        # 24 hours
     refresh-expiration-ms: 604800000  # 7 days
 
+  # Optional hosted provider — nothing requires it, since app.llm.provider defaults to the
+  # local Ollama model. The model name is env-overridable because Google retires them:
+  # gemini-1.5-* is no longer served to newly created API keys.
   gemini:
     api-key: ${GEMINI_API_KEY:}
     base-url: https://generativelanguage.googleapis.com/v1beta
-    model: gemini-1.5-flash
+    model: ${GEMINI_MODEL:gemini-2.0-flash}
 
   sync:
     worker:
@@ -91,7 +94,7 @@ app:
   # parsers and all arithmetic keep working, since the AI layer is strictly additive.)
   llm:
     provider: ${LLM_PROVIDER:ollama}
-    fallback-enabled: true
+    fallback-enabled: ${LLM_FALLBACK_ENABLED:true}
     ollama:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       # qwen2.5:7b is the throughput choice — a full sync classifies hundreds of emails and
@@ -204,10 +207,25 @@ app:
     expiration-ms: 86400000
     refresh-expiration-ms: 604800000
 
+  # Empty default on purpose: Gemini is an OPTIONAL provider, so prod must not refuse to
+  # start just because no hosted-AI key was supplied. It previously used ${GEMINI_API_KEY}
+  # with no default, which made a missing optional key a fatal startup failure.
   gemini:
-    api-key: ${GEMINI_API_KEY}
+    api-key: ${GEMINI_API_KEY:}
     base-url: https://generativelanguage.googleapis.com/v1beta
-    model: gemini-1.5-flash
+    model: ${GEMINI_MODEL:gemini-2.0-flash}
+
+  # Mirrors the dev block. Prod previously declared no app.llm at all and silently relied on
+  # the @Value defaults compiled into the Java, so the provider could not be configured here.
+  llm:
+    provider: ${LLM_PROVIDER:ollama}
+    fallback-enabled: ${LLM_FALLBACK_ENABLED:true}
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      model: ${OLLAMA_MODEL:qwen2.5:7b}
+      timeout-seconds: ${OLLAMA_TIMEOUT_SECONDS:120}
+      temperature: 0.0
+    min-confidence: ${LLM_MIN_CONFIDENCE:0.85}
 
   yahoo-finance:
     base-url: https://query1.finance.yahoo.com

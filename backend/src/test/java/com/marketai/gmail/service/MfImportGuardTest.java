@@ -67,9 +67,12 @@ class MfImportGuardTest {
             mock(com.marketai.income.repository.IncomeRepository.class),
             mock(com.marketai.expense.repository.ExpenseRepository.class),
             mock(com.marketai.card.repository.CreditCardRepository.class),
+            mock(com.marketai.card.repository.CardStatementRepository.class),
+            mock(com.marketai.card.repository.CardPaymentRepository.class),
             mock(com.marketai.tracking.repository.FixedDepositRepository.class),
             mock(com.marketai.tracking.repository.RecurringDepositRepository.class),
-            new TransactionFingerprinter(), fpRepo, new ReferenceHarvester());
+            new TransactionFingerprinter(), fpRepo, new ReferenceHarvester(),
+            mock(TransactionMatchScorer.class));
     }
 
     private ParsedEmail mf(BigDecimal units, BigDecimal nav, BigDecimal amount) {

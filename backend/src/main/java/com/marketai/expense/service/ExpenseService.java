@@ -101,6 +101,21 @@ public class ExpenseService {
         return toResponse(expenseRepository.save(e));
     }
 
+    /**
+     * The planner's "move to a different section" action. Sets the override key that
+     * {@code PlannerService} reads instead of the live classifier result for this expense —
+     * never creates a second row, so the household's total actual spend is unchanged; only which
+     * category box the amount appears under moves. Passing null clears the override, reverting
+     * this expense back to whatever the classifier currently says.
+     */
+    @Transactional
+    public ExpenseResponse setPlanCategoryOverride(Long userId, Long id, String planCategoryKey) {
+        Expense e = expenseRepository.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Expense not found"));
+        e.setPlanCategoryOverride(planCategoryKey == null || planCategoryKey.isBlank() ? null : planCategoryKey);
+        return toResponse(expenseRepository.save(e));
+    }
+
     @Transactional
     public void deleteExpense(Long userId, Long id) {
         if (!expenseRepository.existsByIdAndUserId(id, userId)) {
@@ -158,6 +173,7 @@ public class ExpenseService {
                 .paymentMethod(e.getPaymentMethod())
                 .sourceEmailId(e.getSourceEmailId())
                 .note(e.getNote())
+                .planCategoryOverride(e.getPlanCategoryOverride())
                 .createdAt(e.getCreatedAt())
                 .build();
     }

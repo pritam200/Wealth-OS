@@ -2,6 +2,7 @@ package com.marketai.card.service;
 
 import com.marketai.card.dto.CardDtos.*;
 import com.marketai.card.entity.CreditCard;
+import com.marketai.card.entity.RewardTransaction;
 import com.marketai.card.repository.CreditCardRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -18,6 +19,7 @@ import java.util.stream.Collectors;
 public class CardService {
 
     private final CreditCardRepository repo;
+    private final RewardLedgerService rewardLedger;
 
     /* ── Catalog ── */
     public List<CatalogEntry> catalog() {
@@ -70,11 +72,47 @@ public class CardService {
         repo.findByIdAndUserId(id, userId).ifPresent(repo::delete);
     }
 
+    /** Legacy "set absolute balance" edit box — recorded as a ledger delta rather than a
+     *  silent overwrite, so the audit trail still explains where the number moved. */
     public CardResponse updatePoints(Long userId, Long id, Integer points) {
         CreditCard c = repo.findByIdAndUserId(id, userId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        rewardLedger.adjustToAbsolute(userId, id, points, "Manual balance correction");
         c.setPointsBalance(points);
         return toDto(repo.save(c));
+    }
+
+    /** Records real points earned (a statement, a bonus, a promo credit). */
+    public CardResponse earnPoints(Long userId, Long id, RewardEntryRequest req) {
+        if (req.getPoints() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "points is required");
+        }
+        rewardLedger.earn(userId, id, req.getPoints(), req.getMonetaryValue(), req.getDate(), req.getNote());
+        CreditCard c = repo.findByIdAndUserId(id, userId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        return toDto(c);
+    }
+
+    /** Records points actually redeemed — rejected if it would exceed the ledger balance. */
+    public CardResponse redeemPoints(Long userId, Long id, RewardEntryRequest req) {
+        if (req.getPoints() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "points is required");
+        }
+        rewardLedger.redeem(userId, id, req.getPoints(), req.getMonetaryValue(), req.getDate(), req.getNote());
+        CreditCard c = repo.findByIdAndUserId(id, userId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        return toDto(c);
+    }
+
+    public List<RewardEntryResponse> rewardHistory(Long userId, Long id) {
+        return rewardLedger.history(userId, id).stream().map(this::toDto).collect(Collectors.toList());
+    }
+
+    private RewardEntryResponse toDto(RewardTransaction t) {
+        return RewardEntryResponse.builder()
+            .id(t.getId()).type(t.getType().name()).points(t.getPoints())
+            .monetaryValue(t.getMonetaryValue()).date(t.getTransactionDate())
+            .note(t.getNote()).createdAt(t.getCreatedAt()).build();
     }
 
     /** Full edit of a saved card (points, name, network, fees, billing days, etc.). */
@@ -316,9 +354,11 @@ public class CardService {
     /* ── Points optimizer ── */
     public List<PointsTip> pointsTips(Long userId) {
         return repo.findByUserIdOrderByCreatedAtDesc(userId).stream()
-            .filter(c -> c.getPointsBalance() != null && c.getPointsBalance() > 0)
-            .map(c -> {
-                int pts = c.getPointsBalance();
+            .map(c -> Map.entry(c, rewardLedger.getBalance(c.getId(), c.getPointsBalance())))
+            .filter(e -> e.getValue() > 0)
+            .map(e -> {
+                CreditCard c = e.getKey();
+                int pts = e.getValue();
                 BigDecimal cash = c.getPointValue().multiply(BigDecimal.valueOf(pts)).setScale(2, RoundingMode.HALF_UP);
                 // best value ~ transferring to travel/airline partners typically ~2x cashback value
                 BigDecimal best = cash.multiply(new BigDecimal("2")).setScale(2, RoundingMode.HALF_UP);
@@ -339,12 +379,13 @@ public class CardService {
     }
 
     private CardResponse toDto(CreditCard c) {
-        BigDecimal cash = c.getPointValue().multiply(BigDecimal.valueOf(c.getPointsBalance() != null ? c.getPointsBalance() : 0))
+        int balance = rewardLedger.getBalance(c.getId(), c.getPointsBalance());
+        BigDecimal cash = c.getPointValue().multiply(BigDecimal.valueOf(balance))
             .setScale(2, RoundingMode.HALF_UP);
         return CardResponse.builder()
             .id(c.getId()).name(c.getName()).issuer(c.getIssuer()).network(c.getNetwork())
             .lastFour(c.getLastFour()).annualFee(c.getAnnualFee()).pointValue(c.getPointValue())
-            .pointsBalance(c.getPointsBalance()).billingDay(c.getBillingDay()).dueDay(c.getDueDay())
+            .pointsBalance(balance).billingDay(c.getBillingDay()).dueDay(c.getDueDay())
             .benefits(c.getBenefits()).bestFor(c.getBestFor())
             .rewardRates(c.getRewardRates()).pointsCashValue(cash)
             .currentDue(c.getCurrentDue()).currentDueDate(c.getCurrentDueDate()).build();

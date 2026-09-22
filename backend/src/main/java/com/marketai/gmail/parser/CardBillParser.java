@@ -22,6 +22,9 @@ public class CardBillParser implements EmailParser {
     private static final Pattern DUE_DATE = Pattern.compile(
         "(?:due\\s+date|payment\\s+due\\s+(?:by|on)|due\\s+by)[^\\d]{0,15}(\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}|\\d{1,2}[- ][A-Za-z]{3}[- ]\\d{2,4})",
         Pattern.CASE_INSENSITIVE);
+    private static final Pattern STATEMENT_DATE = Pattern.compile(
+        "(?:statement\\s+date|statement\\s+generated\\s+on|bill\\s+date|generated\\s+on)[^\\d]{0,15}(\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}|\\d{1,2}[- ][A-Za-z]{3}[- ]\\d{2,4})",
+        Pattern.CASE_INSENSITIVE);
     private static final Pattern LAST4 = Pattern.compile(
         "(?:card\\s*(?:no|number|ending|xx+)[^\\d]{0,8}|\\*{2,}\\s*)(\\d{4})\\b", Pattern.CASE_INSENSITIVE);
 
@@ -42,6 +45,7 @@ public class CardBillParser implements EmailParser {
         BigDecimal due = ParserUtil.parseMoney(ParserUtil.findFirst(text, DUE_AMOUNT));
         if (due == null) return out;
         LocalDate dueDate = ParserUtil.parseDate(ParserUtil.findFirst(text, DUE_DATE));
+        LocalDate statementDate = ParserUtil.parseDate(ParserUtil.findFirst(text, STATEMENT_DATE));
         String last4 = ParserUtil.findFirst(text, LAST4);
 
         String issuer = "Card";
@@ -58,6 +62,7 @@ public class CardBillParser implements EmailParser {
             .cardLast4(last4)
             .amount(due)
             .dueDate(dueDate)
+            .statementDate(statementDate)
             .sourceDescription(String.format("%s card bill: ₹%.0f due%s", issuer, due,
                 dueDate != null ? " by " + dueDate : ""))
             .build());

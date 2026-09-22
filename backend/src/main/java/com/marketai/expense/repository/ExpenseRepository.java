@@ -32,4 +32,6 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
                                   @Param("to") LocalDate to);
 
     boolean existsByIdAndUserId(Long id, Long userId);
+
+    java.util.Optional<Expense> findByIdAndUserId(Long id, Long userId);
 }

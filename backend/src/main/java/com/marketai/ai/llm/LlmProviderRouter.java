@@ -58,9 +58,26 @@ public class LlmProviderRouter {
      */
     public LlmCompletion complete(String systemInstruction, String userPrompt) {
         LlmProvider p = active();
-        if (p == null) throw new LlmUnavailableException("No LLM provider is available");
+        if (p == null) throw new LlmUnavailableException(NONE_AVAILABLE);
         return p.complete(systemInstruction, userPrompt);
     }
+
+    /**
+     * Human-readable answer (advisory narrative, copilot) rather than JSON.
+     *
+     * @throws LlmUnavailableException when no provider is usable — same contract as
+     *         {@link #complete}, so a missing model can never be mistaken for an answer.
+     */
+    public LlmCompletion completeProse(String systemInstruction, String userPrompt) {
+        LlmProvider p = active();
+        if (p == null) throw new LlmUnavailableException(NONE_AVAILABLE);
+        return p.completeProse(systemInstruction, userPrompt);
+    }
+
+    /** Surfaced to users when an AI feature is asked for but nothing can serve it. */
+    public static final String NONE_AVAILABLE =
+        "No AI model is available. Start Ollama locally (app.llm.provider=ollama, default "
+        + "http://localhost:11434) or set GEMINI_API_KEY and app.llm.provider=gemini.";
 
     public String describeActive() {
         LlmProvider p = active();

@@ -2,15 +2,19 @@ package com.marketai.card.optimizer;
 
 import com.marketai.card.entity.CreditCard;
 import com.marketai.card.repository.CreditCardRepository;
+import com.marketai.card.service.CardCatalog;
 import lombok.Builder;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Net-value card optimizer.
@@ -67,31 +71,41 @@ public class CardOptimizerService {
         private List<String> caveats;
     }
 
+    /** Same net-value verdict, but for a card the user doesn't own yet — "should I get this?"
+     *  answered with the same rigor as "should I keep this?", against the user's own spend. */
+    @Data @Builder
+    public static class ProspectiveResult {
+        private LocalDateTime generatedAt;
+        private SpendAggregator.SpendProfile spendWindow;
+        private CardVerdict verdict;
+        private boolean trustworthy;
+        private List<String> caveats;
+    }
+
+    @Data @Builder
+    public static class CatalogRanking {
+        private LocalDateTime generatedAt;
+        private SpendAggregator.SpendProfile spendWindow;
+        private boolean trustworthy;
+        private List<String> caveats;
+        /** Catalog cards the user doesn't already own, ranked by net value against their
+         *  own spend — best acquisition candidates first. */
+        private List<CardVerdict> candidates;
+    }
+
     public OptimizerResult analyse(Long userId) {
         SpendAggregator.SpendProfile spend = spendAggregator.aggregate(userId);
         List<CreditCard> cards = cardRepository.findByUserIdOrderByCreatedAtDesc(userId);
-
-        List<String> caveats = new ArrayList<>();
-        caveats.add(spend.getNote());
-
-        boolean trustworthy = spend.getCoverage().compareTo(MIN_TRUSTWORTHY_COVERAGE) >= 0
-            && spend.getObservedSpend().compareTo(BigDecimal.ZERO) > 0;
-        if (!trustworthy) {
-            caveats.add("Verdicts below are directional only — there isn't enough categorized "
-                      + "spend to justify cancelling or keeping a card on these numbers alone.");
-        }
-        // Reward terms in this app come from a hand-maintained catalog. Indian issuers devalue
-        // frequently, so a net-value figure without this caveat would read as more
-        // authoritative than its inputs support.
-        caveats.add("Reward rates come from a manually maintained catalog; verify against the "
-                  + "issuer's current terms before acting on a cancellation.");
+        boolean trustworthy = isTrustworthy(spend);
+        List<String> caveats = buildCaveats(spend, trustworthy);
 
         List<CardVerdict> verdicts = new ArrayList<>();
         BigDecimal totalFees = BigDecimal.ZERO;
         BigDecimal totalRewards = BigDecimal.ZERO;
 
         for (CreditCard card : cards) {
-            CardVerdict v = evaluate(card, spend, trustworthy);
+            CardVerdict v = evaluate(card.getId(), card.getName(), card.getAnnualFee(),
+                card.getRewardRates(), spend, trustworthy);
             verdicts.add(v);
             totalFees = totalFees.add(nz(v.getAnnualFee()));
             totalRewards = totalRewards.add(nz(v.getProjectedAnnualRewards()));
@@ -111,10 +125,82 @@ public class CardOptimizerService {
             .build();
     }
 
-    private CardVerdict evaluate(CreditCard card, SpendAggregator.SpendProfile spend, boolean trustworthy) {
-        BigDecimal fee = nz(card.getAnnualFee());
-        Map<String, BigDecimal> rates = card.getRewardRates() == null
-            ? Collections.emptyMap() : card.getRewardRates();
+    /** Net-value verdict for one specific catalog card the user doesn't own, using the exact
+     *  same math as {@link #analyse}. */
+    public ProspectiveResult analyseCatalogCard(Long userId, String catalogName) {
+        CardCatalog.CatalogCard cat = CardCatalog.byName(catalogName)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Unknown card: " + catalogName));
+        SpendAggregator.SpendProfile spend = spendAggregator.aggregate(userId);
+        boolean trustworthy = isTrustworthy(spend);
+        List<String> caveats = buildCaveats(spend, trustworthy);
+
+        CardVerdict verdict = evaluate(null, cat.name, cat.annualFee, cat.rewardRates, spend, trustworthy);
+        return ProspectiveResult.builder()
+            .generatedAt(LocalDateTime.now())
+            .spendWindow(spend)
+            .verdict(verdict)
+            .trustworthy(trustworthy)
+            .caveats(caveats)
+            .build();
+    }
+
+    /** Ranks every catalog card the user doesn't already own by projected net value against
+     *  their own spend — the "which new card is actually worth getting" answer, using the same
+     *  rigor as the owned-card KEEP/CANCEL verdicts rather than the cruder headline-rate
+     *  fallback in {@code CardService.recommend()} for users with no saved cards. */
+    public CatalogRanking analyseAllCatalogCards(Long userId) {
+        List<CreditCard> owned = cardRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        Set<String> ownedNames = owned.stream()
+            .map(c -> c.getName().toLowerCase()).collect(Collectors.toSet());
+
+        SpendAggregator.SpendProfile spend = spendAggregator.aggregate(userId);
+        boolean trustworthy = isTrustworthy(spend);
+        List<String> caveats = buildCaveats(spend, trustworthy);
+
+        List<CardVerdict> candidates = CardCatalog.CARDS.stream()
+            .filter(c -> !ownedNames.contains(c.name.toLowerCase()))
+            .map(c -> evaluate(null, c.name, c.annualFee, c.rewardRates, spend, trustworthy))
+            .sorted(Comparator.comparing((CardVerdict v) -> nz(v.getNetValue())).reversed())
+            .collect(Collectors.toList());
+
+        return CatalogRanking.builder()
+            .generatedAt(LocalDateTime.now())
+            .spendWindow(spend)
+            .trustworthy(trustworthy)
+            .caveats(caveats)
+            .candidates(candidates)
+            .build();
+    }
+
+    private boolean isTrustworthy(SpendAggregator.SpendProfile spend) {
+        return spend.getCoverage().compareTo(MIN_TRUSTWORTHY_COVERAGE) >= 0
+            && spend.getObservedSpend().compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    private List<String> buildCaveats(SpendAggregator.SpendProfile spend, boolean trustworthy) {
+        List<String> caveats = new ArrayList<>();
+        caveats.add(spend.getNote());
+        if (!trustworthy) {
+            caveats.add("Verdicts below are directional only — there isn't enough categorized "
+                      + "spend to justify cancelling, keeping, or acquiring a card on these numbers alone.");
+        }
+        // Reward terms in this app come from a hand-maintained catalog. Indian issuers devalue
+        // frequently, so a net-value figure without this caveat would read as more
+        // authoritative than its inputs support.
+        caveats.add("Reward rates come from a manually maintained catalog; verify against the "
+                  + "issuer's current terms before acting on this.");
+        return caveats;
+    }
+
+    /**
+     * @param cardId null for a prospective (not-yet-owned) catalog card
+     */
+    private CardVerdict evaluate(Long cardId, String cardName, BigDecimal annualFee,
+                                 Map<String, BigDecimal> rewardRates,
+                                 SpendAggregator.SpendProfile spend, boolean trustworthy) {
+        BigDecimal fee = nz(annualFee);
+        Map<String, BigDecimal> rates = rewardRates == null
+            ? Collections.emptyMap() : rewardRates;
 
         // Rewards are computed per category against this card's own rate for that category,
         // which is the point: a travel card looks strong only if the user actually travels.
@@ -158,8 +244,8 @@ public class CardOptimizerService {
         }
 
         return CardVerdict.builder()
-            .cardId(card.getId())
-            .cardName(card.getName())
+            .cardId(cardId)
+            .cardName(cardName)
             .annualFee(fee)
             .projectedAnnualRewards(projected)
             .netValue(netValue)

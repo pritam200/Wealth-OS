@@ -8,111 +8,178 @@
   * { box-sizing: border-box; }
   body {
     @apply bg-surface text-ink font-sans antialiased m-0;
+    /* The colour mesh (see tailwind.config `mesh-glow`) is fixed to the viewport, so the
+       page keeps its tint while content scrolls instead of dragging the blooms along. */
+    background-image: theme('backgroundImage.mesh-glow');
+    background-attachment: fixed;
+    background-repeat: no-repeat;
     font-feature-settings: 'tnum' 1, 'kern' 1;
     line-height: 1.5;
     letter-spacing: 0.1px;
     min-height: 100vh;
   }
   h1,h2,h3,h4 { letter-spacing: -0.4px; }
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar { width: 7px; height: 7px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #CFD8E3; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb { background: #C7CEEB; border-radius: 9999px; }
   ::-webkit-scrollbar-thumb:hover { @apply bg-brand; }
+  ::selection { background: rgba(124,58,237,0.18); }
 }
 
 @layer components {
-  /* ── Panels & Cards ── */
-  /* Flat opaque surface with a crisp border. Deliberately no gradient top-edge and no
-     backdrop blur: on a dense numeric dashboard those read as a colour cast over every
-     panel, which is what made containers look muddy. Separation comes from the border. */
+  /* ── Panels & Cards ──
+     White panel, hairline border, a faint indigo sheen on the top edge and a soft coloured
+     drop shadow. The sheen is kept under 5% alpha and fades out by ~46% height, so dense
+     numeric content still sits on plain white — it reads as depth, not as a colour cast. */
   .card {
-    @apply bg-surface-card border border-surface-border p-4 relative transition-colors duration-150 ease-snap;
+    @apply bg-surface-card border border-surface-border p-4 relative transition-all duration-200 ease-snap;
     border-radius: 16px;
+    background-image: theme('backgroundImage.card-sheen');
+    box-shadow: theme('boxShadow.card');
   }
-  .card:hover { border-color: #CFD8E3; }
+  .card:hover {
+    border-color: rgba(99,102,241,0.34);
+    box-shadow: 0 14px 30px -18px rgba(79,70,229,0.45), 0 1px 2px rgba(16,22,53,0.05);
+  }
 
-  /* Emphasis without colour: a slightly lifted surface and a stronger border, so a
-     "featured" panel still belongs to the same neutral family as everything around it. */
+  /* A "featured" panel: same family as .card, one step more lift and a brand-tinted edge. */
   .card-elevated {
-    @apply relative p-5 bg-surface-card border border-surface-border;
+    @apply relative p-5 bg-surface-card border;
+    border-color: rgba(99,102,241,0.22);
     border-radius: 20px;
-    box-shadow: 0 4px 16px rgba(15,23,42,0.07);
+    background-image: theme('backgroundImage.card-sheen');
+    box-shadow: 0 18px 40px -24px rgba(79,70,229,0.50), 0 1px 2px rgba(16,22,53,0.05);
   }
-  .card-flat { @apply bg-surface-hover rounded-xl p-3; }
+  /* Inner sub-surface. Tinted rather than grey, so nested blocks read as part of the
+     accent family instead of as dead filler. */
+  .card-flat {
+    @apply bg-surface-hover rounded-xl p-3 border;
+    border-color: rgba(99,102,241,0.12);
+  }
+
+  /* Full-page canvas. Any element that fills the viewport with an opaque background would
+     hide the body's colour mesh, so full-screen wrappers use this instead of plain
+     `bg-surface` and repaint the mesh themselves. */
+  .app-canvas {
+    @apply bg-surface;
+    background-image: theme('backgroundImage.mesh-glow');
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
 
   .panel {
     @apply bg-surface-panel border border-surface-border;
     border-radius: 18px;
-    box-shadow: 0 8px 28px rgba(15,23,42,0.10);
+    box-shadow: theme('boxShadow.panel');
   }
 
-  /* ── Section headers ── */
+  /* ── Section headers — a small gradient rule before the label anchors each section ── */
   .section-title { @apply flex items-center gap-2 text-ink font-semibold text-sm mb-3; }
+  .section-title::before {
+    content: '';
+    @apply bg-brand-gradient rounded-full shrink-0;
+    width: 3px; height: 15px;
+  }
+  /* Opt-out for section titles that already lead with their own icon. */
+  .section-title-plain::before { content: none; }
 
-  /* ── Icon badges — the small gradient/tinted square used next to KPIs, section headers,
-     table row leads, nav items. Keeps icon treatment consistent app-wide. ── */
+  /* ── Icon badges — the small square used next to KPIs, section headers, table row leads,
+     nav items. Now a saturated gradient with a white glyph: this is the single biggest
+     source of colour across the app, and it keeps icon treatment consistent everywhere. ── */
   .icon-badge {
-    @apply inline-flex items-center justify-center rounded-lg shrink-0;
+    @apply inline-flex items-center justify-center rounded-xl shrink-0 text-white;
     width: 30px; height: 30px;
   }
-  .icon-badge-brand { @apply icon-badge bg-brand/10 text-brand-light border border-brand/25; }
-  .icon-badge-bull   { @apply icon-badge bg-bull/10 text-bull border border-bull/25; }
-  .icon-badge-bear   { @apply icon-badge bg-bear/10 text-bear border border-bear/25; }
-  .icon-badge-neutral{ @apply icon-badge bg-neutral/10 text-neutral border border-neutral/25; }
-  .icon-badge-gold   { @apply icon-badge bg-gold/10 text-gold border border-gold/25; }
-  .icon-badge-sm { width: 22px; height: 22px; @apply rounded-md; }
+  .icon-badge-brand  { @apply icon-badge bg-brand-gradient;  box-shadow: theme('boxShadow.glow'); }
+  .icon-badge-bull   { @apply icon-badge bg-bull-gradient;   box-shadow: theme('boxShadow.glow-bull'); }
+  .icon-badge-bear   { @apply icon-badge bg-bear-gradient;   box-shadow: theme('boxShadow.glow-bear'); }
+  .icon-badge-neutral{ @apply icon-badge bg-gold-gradient;   box-shadow: theme('boxShadow.glow-gold'); }
+  .icon-badge-gold   { @apply icon-badge bg-gold-gradient;   box-shadow: theme('boxShadow.glow-gold'); }
+  .icon-badge-accent { @apply icon-badge bg-accent-gradient; box-shadow: 0 6px 18px -6px rgba(14,116,144,0.5); }
+  .icon-badge-violet { @apply icon-badge bg-violet-gradient; box-shadow: 0 6px 18px -6px rgba(124,58,237,0.5); }
+  .icon-badge-sm { width: 22px; height: 22px; @apply rounded-lg; }
 
-  /* ── KPI tile — icon + label/value, replaces the old bare "label over number" block ── */
-  .kpi-tile { @apply flex items-center gap-2.5 bg-surface-hover/70 rounded-xl p-2.5 border border-surface-border/60 transition-colors; }
-  .kpi-tile:hover { @apply border-brand/25; }
+  /* ── KPI tile ── */
+  .kpi-tile {
+    @apply flex items-center gap-2.5 rounded-xl p-2.5 border transition-all duration-200 ease-snap;
+    background-image: theme('backgroundImage.brand-gradient-soft');
+    border-color: rgba(99,102,241,0.16);
+  }
+  .kpi-tile:hover {
+    border-color: rgba(99,102,241,0.40);
+    transform: translateY(-1px);
+    box-shadow: 0 10px 22px -14px rgba(79,70,229,0.5);
+  }
 
   /* ── Buttons ── */
   .btn-primary {
-    @apply bg-brand hover:bg-brand-dark text-white px-4 py-2 text-sm font-semibold transition-colors cursor-pointer inline-flex items-center justify-center gap-1.5;
+    @apply bg-brand-gradient text-white px-4 py-2 text-sm font-semibold transition-all duration-200 ease-snap cursor-pointer inline-flex items-center justify-center gap-1.5;
     border-radius: 10px;
+    box-shadow: theme('boxShadow.glow');
   }
+  .btn-primary:hover { filter: saturate(1.1) brightness(1.06); transform: translateY(-1px); }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-primary:disabled { @apply opacity-60 cursor-not-allowed; box-shadow: none; transform: none; }
   .btn-secondary {
-    @apply bg-surface-hover border border-surface-border hover:border-brand/40 text-gray-200 px-3.5 py-2 text-sm font-medium transition-all cursor-pointer inline-flex items-center justify-center gap-1.5;
+    @apply bg-surface-hover border text-gray-200 px-3.5 py-2 text-sm font-medium transition-all cursor-pointer inline-flex items-center justify-center gap-1.5;
+    border-color: rgba(99,102,241,0.20);
     border-radius: 10px;
   }
+  .btn-secondary:hover { border-color: rgba(99,102,241,0.55); @apply text-brand-light; }
   .btn-ghost {
-    @apply text-gray-400 hover:text-ink hover:bg-surface-hover px-3 py-1.5 text-sm transition-colors cursor-pointer inline-flex items-center gap-1.5;
+    @apply text-gray-400 hover:text-brand-light hover:bg-brand/10 px-3 py-1.5 text-sm transition-colors cursor-pointer inline-flex items-center gap-1.5;
     border-radius: 9px;
   }
   .btn-icon {
-    @apply text-gray-500 hover:text-ink hover:bg-surface-hover p-1.5 transition-colors cursor-pointer inline-flex items-center justify-center;
+    @apply text-gray-500 hover:text-brand-light hover:bg-brand/10 p-1.5 transition-colors cursor-pointer inline-flex items-center justify-center;
     border-radius: 8px;
   }
 
-  /* ── Status pills — high-contrast tinted tag on a neutral surface. Use these for state
-     (sector direction, signal, sync outcome) so status never relies on tinting the whole
+  /* ── Status pills — tinted tag on a neutral surface. Use these for state (sector
+     direction, signal, sync outcome) so status never relies on tinting the whole
      container it sits in. ── */
   .pill {
     @apply inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap;
   }
-  .pill-bull    { @apply pill bg-bull/10 text-bull border-bull/20; }
-  .pill-bear    { @apply pill bg-bear/10 text-bear border-bear/20; }
-  .pill-neutral { @apply pill bg-neutral/10 text-neutral border-neutral/20; }
-  .pill-info    { @apply pill bg-brand/10 text-brand-light border-brand/20; }
+  .pill-bull    { @apply pill bg-bull/10 text-bull border-bull/30; }
+  .pill-bear    { @apply pill bg-bear/10 text-bear border-bear/30; }
+  .pill-neutral { @apply pill bg-neutral/10 text-neutral border-neutral/30; }
+  .pill-info    { @apply pill bg-brand/10 text-brand-light border-brand/30; }
   .pill-muted   { @apply pill bg-surface-hover text-gray-400 border-surface-border; }
 
   /* ── Badges ── */
-  .badge-bull    { @apply inline-flex items-center gap-1 text-bull bg-bull/10 border border-bull/25 text-xs font-semibold px-2 py-0.5 rounded-full font-mono; }
-  .badge-bear    { @apply inline-flex items-center gap-1 text-bear bg-bear/10 border border-bear/25 text-xs font-semibold px-2 py-0.5 rounded-full font-mono; }
-  .badge-neutral { @apply inline-flex items-center gap-1 text-neutral bg-neutral/10 border border-neutral/25 text-xs font-semibold px-2 py-0.5 rounded-full font-mono; }
-  .badge-gold    { @apply inline-flex items-center gap-1 text-gold bg-gold/10 border border-gold/25 text-xs font-semibold px-2 py-0.5 rounded-full font-mono; }
+  .badge-bull    { @apply inline-flex items-center gap-1 text-bull bg-bull/10 border border-bull/30 text-xs font-semibold px-2 py-0.5 rounded-full font-mono; }
+  .badge-bear    { @apply inline-flex items-center gap-1 text-bear bg-bear/10 border border-bear/30 text-xs font-semibold px-2 py-0.5 rounded-full font-mono; }
+  .badge-neutral { @apply inline-flex items-center gap-1 text-neutral bg-neutral/10 border border-neutral/30 text-xs font-semibold px-2 py-0.5 rounded-full font-mono; }
+  .badge-gold    { @apply inline-flex items-center gap-1 text-gold bg-gold/10 border border-gold/30 text-xs font-semibold px-2 py-0.5 rounded-full font-mono; }
 
   /* ── Typography ── */
   .stat-label   { @apply text-2xs text-gray-500 uppercase tracking-wider font-semibold; }
   .stat-value   { @apply text-2xl font-bold text-ink font-mono tabular-nums; }
-  /* Solid white, not gradient-clipped: a headline figure has to stay readable, and
-     gradient text loses contrast at the thin strokes of tabular digits. */
-  .stat-value-gradient { @apply text-2xl font-bold font-mono tabular-nums text-ink; }
+  /* Gradient-clipped headline figure. Both gradient stops are dark enough (#4F46E5 →
+     #7C3AED) that the thin strokes of tabular digits still hold contrast on white —
+     which is why this is reserved for large type and never used for body numbers. */
+  .stat-value-gradient {
+    @apply text-2xl font-extrabold font-mono tabular-nums bg-clip-text text-transparent;
+    background-image: linear-gradient(120deg, #4F46E5 0%, #7C3AED 100%);
+  }
   .stat-value-hero { @apply text-4xl font-extrabold font-mono tabular-nums text-ink tracking-tight; }
+  .text-gradient-brand {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(120deg, #4F46E5 0%, #7C3AED 100%);
+  }
   .num          { @apply font-mono tabular-nums; }
   .value-bull   { @apply text-bull font-semibold font-mono; }
   .value-bear   { @apply text-bear font-semibold font-mono; }
   .value-neutral { @apply text-neutral font-semibold font-mono; }
+
+  /* ── Progress bar — shared by budget boxes, allocation meters, goal trackers ── */
+  .meter { @apply w-full rounded-full overflow-hidden bg-surface-hover; height: 7px; }
+  .meter-fill { @apply h-full rounded-full transition-all duration-500 ease-snap; }
+  .meter-fill-brand { @apply meter-fill bg-brand-gradient; }
+  .meter-fill-bull  { @apply meter-fill bg-bull-gradient; }
+  .meter-fill-bear  { @apply meter-fill bg-bear-gradient; }
+  .meter-fill-gold  { @apply meter-fill bg-gold-gradient; }
 
   /* ── Form ── */
   .input-field {
@@ -121,17 +188,21 @@
     border-radius: 10px;
     min-height: 36px;
   }
-  .input-field:focus { @apply border-brand/60; box-shadow: 0 0 0 3px rgba(59,130,246,0.18); }
+  .input-field:focus {
+    @apply bg-surface-card;
+    border-color: rgba(99,102,241,0.65);
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.18);
+  }
 
   /* ── Table ── */
   .data-table { @apply w-full text-sm border-collapse; }
-  .data-table thead tr { @apply border-b border-surface-border; }
+  .data-table thead tr { @apply border-b; border-color: rgba(99,102,241,0.22); }
   .data-table thead th { @apply text-2xs text-gray-500 uppercase tracking-wider font-semibold pb-2.5 px-3 align-middle whitespace-nowrap; }
   .data-table tbody tr {
     @apply border-b border-surface-border/40 transition-all cursor-pointer;
     box-shadow: inset 3px 0 0 0 transparent;
   }
-  .data-table tbody tr:hover { @apply bg-surface-hover; box-shadow: inset 3px 0 0 0 rgba(59,130,246,0.7); }
+  .data-table tbody tr:hover { @apply bg-surface-hover; box-shadow: inset 3px 0 0 0 #6366F1; }
   .data-table tbody td { @apply py-2.5 px-3 align-middle; }
   .data-table thead th:first-child, .data-table tbody td:first-child { @apply pl-1; }
   .data-table thead th:last-child, .data-table tbody td:last-child { @apply pr-1; }

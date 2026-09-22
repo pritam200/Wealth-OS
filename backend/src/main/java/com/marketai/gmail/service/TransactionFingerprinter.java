@@ -37,6 +37,22 @@ public class TransactionFingerprinter {
         sb.append('|').append(key(pe.getBank()));
         sb.append('|').append(key(pe.getMerchant()));
         sb.append('|').append(key(pe.getCardLast4()));
+
+        // CARD_BILL/CARD_PAYMENT only, appended after every pre-existing field so the hash for
+        // every other transaction type is byte-for-byte unchanged (re-processing an old email
+        // must still produce the fingerprint already stored for it, or dedup silently breaks for
+        // all pre-existing data). Without this, two different months' bills on the same card for
+        // the same total-due amount collide on one fingerprint and the second is dropped as a
+        // false duplicate — dueDate/statementDate distinguish them; referenceNumber/paymentDate/
+        // paymentStatus do the same for payment confirmations (a reversal must not fingerprint
+        // identically to the original payment it reverses).
+        if (pe.getType() == ParsedEmail.Type.CARD_BILL || pe.getType() == ParsedEmail.Type.CARD_PAYMENT) {
+            sb.append('|').append(norm(pe.getDueDate()));
+            sb.append('|').append(norm(pe.getStatementDate()));
+            sb.append('|').append(norm(pe.getPaymentDate()));
+            sb.append('|').append(key(pe.getPaymentReference()));
+            sb.append('|').append(key(pe.getPaymentStatus()));
+        }
         return sha256(sb.toString());
     }
 

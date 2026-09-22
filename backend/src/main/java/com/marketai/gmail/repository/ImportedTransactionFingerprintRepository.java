@@ -16,4 +16,14 @@ public interface ImportedTransactionFingerprintRepository extends JpaRepository<
 
     /** Conflicting restatements awaiting a human decision. */
     java.util.List<ImportedTransactionFingerprint> findByUserIdAndConflictDetectedTrue(Long userId);
+
+    /**
+     * Candidate pool for {@code TransactionMatchScorer} — narrowed by exact amount (a real bank
+     * amount is exact, so unlike date/merchant it is safe to filter on rather than merely score),
+     * leaving date/merchant/card/reference to be scored in memory over a small set.
+     */
+    java.util.List<ImportedTransactionFingerprint> findByUserIdAndAmount(Long userId, java.math.BigDecimal amount);
+
+    /** Rows awaiting human review, oldest first. */
+    java.util.List<ImportedTransactionFingerprint> findByUserIdAndDuplicateStateOrderByImportedAtAsc(Long userId, String duplicateState);
 }

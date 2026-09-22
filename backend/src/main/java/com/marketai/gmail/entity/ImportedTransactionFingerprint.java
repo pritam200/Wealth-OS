@@ -3,6 +3,8 @@ package com.marketai.gmail.entity;
 import lombok.*;
 
 import jakarta.persistence.*;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
@@ -97,6 +99,41 @@ public class ImportedTransactionFingerprint {
     /** What differed, in plain words. Never contains a raw document or a secret. */
     @Column(name = "conflict_detail", length = 500)
     private String conflictDetail;
+
+    // --- Weighted duplicate matching (multi-factor, not just the exact-hash gate above) ---
+    //
+    // These four are carried purely so a LATER candidate can be scored against THIS row without
+    // re-parsing the original email — narrowed by amount at the DB layer, then compared in
+    // memory on date/merchant/card. All nullable: many rows (trades, FDs, RDs — which have their
+    // own dedicated dedup already) never populate them, and old rows predating this feature must
+    // not need a backfill to stay valid.
+    @Column(precision = 12, scale = 2)
+    private BigDecimal amount;
+
+    @Column(name = "transaction_date")
+    private LocalDate transactionDate;
+
+    @Column(length = 200)
+    private String merchant;
+
+    @Column(name = "card_last4", length = 4)
+    private String cardLast4;
+
+    /**
+     * NEW / POSSIBLE_DUPLICATE / CONFIRMED_DUPLICATE / MATCHED_TO_EXISTING / RECONCILED /
+     * NEEDS_REVIEW — see {@link DuplicateState}. Null on rows written before this field existed;
+     * treat null the same as NEW when read.
+     */
+    @Column(name = "duplicate_state", length = 24)
+    private String duplicateState;
+
+    /** The weighted match score (0.0–1.0) that produced {@link #duplicateState}, for audit. */
+    @Column(name = "match_confidence")
+    private Double matchConfidence;
+
+    /** The prior fingerprint row this one was scored against, when duplicateState is not NEW. */
+    @Column(name = "matched_fingerprint_id")
+    private Long matchedFingerprintId;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime importedAt;

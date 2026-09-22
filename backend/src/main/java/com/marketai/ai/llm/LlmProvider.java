@@ -18,6 +18,17 @@ public interface LlmProvider {
      */
     LlmCompletion complete(String systemInstruction, String userPrompt);
 
+    /**
+     * Same contract, but for answers meant to be read by a human (advisory narrative, the
+     * market copilot) rather than parsed. Providers that constrain decoding to JSON for
+     * {@link #complete} must NOT do so here — a JSON-constrained model returns
+     * {"answer": "..."} instead of prose. Defaults to {@link #complete} for providers where
+     * there is no difference.
+     */
+    default LlmCompletion completeProse(String systemInstruction, String userPrompt) {
+        return complete(systemInstruction, userPrompt);
+    }
+
     /** Identifier recorded in the audit trail, e.g. "ollama:qwen2.5:7b". */
     String describe();
 
