@@ -78,6 +78,15 @@ public class GoalService {
 
         if (saved >= target) {
             status = "ACHIEVED"; onTrack = true; projected = saved;
+        } else if (months != null && months == 0) {
+            // The target date is today or already past, so there is no horizon left to spread a
+            // contribution over. Every "required monthly" formula divides by the horizon here
+            // (r > 0 divides by pow(1+r,0)-1 == 0), which produced Infinity and then threw out of
+            // BigDecimal.valueOf — taking the whole goals list down with a 500. There is no monthly
+            // figure to report: the shortfall is simply the amount still missing, today.
+            projected = saved;
+            onTrack = false;
+            status = "SHORTFALL";
         } else if (months != null) {
             double fvLump = saved * Math.pow(1 + r, months);
             double fvSip = r > 0 ? sip * ((Math.pow(1 + r, months) - 1) / r) : sip * months;

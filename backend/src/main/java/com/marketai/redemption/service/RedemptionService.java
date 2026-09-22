@@ -8,6 +8,8 @@ import com.marketai.redemption.dto.DeploymentPlan;
 import com.marketai.redemption.entity.MfRedemption;
 import com.marketai.redemption.entity.Reinvestment;
 import com.marketai.redemption.repository.MfRedemptionRepository;
+import com.marketai.tax.lot.CapitalGainsRates;
+import com.marketai.tax.lot.FyExemptionLedger;
 import com.marketai.technical.dto.TechnicalAnalysisDto;
 import com.marketai.technical.service.TechnicalIndicatorService;
 import lombok.RequiredArgsConstructor;
@@ -30,9 +32,6 @@ import java.util.List;
 public class RedemptionService {
 
     private static final String NIFTY_SYMBOL = "^NSEI";
-    private static final BigDecimal STCG_RATE = BigDecimal.valueOf(0.15);
-    private static final BigDecimal LTCG_RATE = BigDecimal.valueOf(0.125);
-    private static final BigDecimal LTCG_EXEMPTION = BigDecimal.valueOf(125000);
 
     private final MfRedemptionRepository redemptionRepo;
     private final PortfolioRepository portfolioRepository;
@@ -50,24 +49,46 @@ public class RedemptionService {
         BigDecimal investedPortion = holding.getAverageCost().multiply(unitsRedeemed).setScale(2, RoundingMode.HALF_UP);
         BigDecimal gain = redeemedAmount.subtract(investedPortion);
 
-        long daysHeld = holding.getBuyDate() != null ? ChronoUnit.DAYS.between(holding.getBuyDate(), LocalDate.now()) : 0;
+        LocalDate today = LocalDate.now();
+        long daysHeld = holding.getBuyDate() != null ? ChronoUnit.DAYS.between(holding.getBuyDate(), today) : 0;
         boolean isLongTerm = daysHeld >= 365;
         String gainType = isLongTerm ? "LTCG" : "STCG";
-        BigDecimal tax = BigDecimal.ZERO;
-        if (gain.compareTo(BigDecimal.ZERO) > 0) {
-            tax = isLongTerm
-                ? gain.subtract(LTCG_EXEMPTION).max(BigDecimal.ZERO).multiply(LTCG_RATE).setScale(2, RoundingMode.HALF_UP)
-                : gain.multiply(STCG_RATE).setScale(2, RoundingMode.HALF_UP);
-        }
+        BigDecimal tax = estimateTax(userId, gain, isLongTerm, today);
 
         MfRedemption redemption = MfRedemption.builder()
             .userId(userId).symbol(holding.getSymbol()).fundName(holding.getName())
             .unitsRedeemed(unitsRedeemed).navAtRedemption(nav).redeemedAmount(redeemedAmount)
-            .investedValueAtRedemption(investedPortion).redemptionDate(LocalDate.now())
+            .investedValueAtRedemption(investedPortion).redemptionDate(today)
             .holdingPeriodDays(daysHeld).gainType(gainType).capitalGain(gain).estimatedTax(tax)
             .reinvestedAmount(BigDecimal.ZERO).status("ACTIVE")
             .build();
         return redemptionRepo.save(redemption);
+    }
+
+    /**
+     * Estimated tax on this redemption's gain.
+     *
+     * <p>Two rules this gets right that the previous local constants did not. The short-term rate
+     * is 20%, not 15% — raised by the Finance (No.2) Act 2024 — and the rates now come from
+     * {@link CapitalGainsRates}, the one place they are maintained, rather than being duplicated
+     * here where they went stale. And the ₹1,25,000 long-term exemption is consumed from a
+     * running financial-year balance via {@link FyExemptionLedger}: applying it afresh to every
+     * redemption reported ₹0 tax on four ₹1,20,000 gains in one year, where the real figure is
+     * 12.5% of (₹4,80,000 − ₹1,25,000).
+     */
+    private BigDecimal estimateTax(Long userId, BigDecimal gain, boolean isLongTerm, LocalDate asOf) {
+        if (gain == null || gain.signum() <= 0) return BigDecimal.ZERO;
+        if (!isLongTerm) {
+            return gain.multiply(CapitalGainsRates.STCG_RATE).setScale(2, RoundingMode.HALF_UP);
+        }
+        int fyStartYear = FyExemptionLedger.fyStartYearFor(asOf);
+        LocalDate fyStart = LocalDate.of(fyStartYear, 4, 1);
+        LocalDate fyEnd = LocalDate.of(fyStartYear + 1, 3, 31);
+        BigDecimal alreadyRealised = redemptionRepo.sumLongTermGainsInFy(userId, fyStart, fyEnd);
+        FyExemptionLedger ledger = new FyExemptionLedger(fyStartYear,
+            alreadyRealised != null ? alreadyRealised : BigDecimal.ZERO);
+        BigDecimal taxable = gain.subtract(ledger.remainingExemption()).max(BigDecimal.ZERO);
+        return taxable.multiply(CapitalGainsRates.LTCG_RATE).setScale(2, RoundingMode.HALF_UP);
     }
 
     /**

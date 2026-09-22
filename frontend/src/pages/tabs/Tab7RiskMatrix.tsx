@@ -322,7 +322,7 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
                         <input type="number" value={sell.sellPrice} onChange={e => sell.setSellPrice(e.target.value)} placeholder="Price" className="input-field text-xs w-24 py-1" />
                         {sell.sellQty && sell.sellPrice && (
                           <span className={`text-2xs font-mono ${(Number(sell.sellPrice) - h.averageCost) >= 0 ? 'text-bull' : 'text-bear'}`}>
-                            PnL: {fmtINR((Number(sell.sellPrice) - h.averageCost) * Number(sell.sellQty))}
+                            PnL: {mask(fmtINR((Number(sell.sellPrice) - h.averageCost) * Number(sell.sellQty)))}
                           </span>
                         )}
                         <button onClick={() => sell.doSell(h.id, h.portfolioId)} className="btn-primary text-xs py-1 px-3 ml-auto">Record</button>

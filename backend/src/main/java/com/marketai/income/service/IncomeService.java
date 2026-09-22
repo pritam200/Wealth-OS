@@ -66,7 +66,10 @@ public class IncomeService {
     public Map<String, Object> getMonthlySummary(Long userId, int year, int month) {
         LocalDate from = LocalDate.of(year, month, 1);
         LocalDate to   = from.withDayOfMonth(from.lengthOfMonth());
+        // SUM over no rows is SQL NULL. A month with no income is ₹0, not "unknown" — and a null
+        // total renders as a blank tile downstream. ExpenseService already coalesces the same way.
         BigDecimal total = repo.sumByUserIdAndDateRange(userId, from, to);
+        if (total == null) total = BigDecimal.ZERO;
         List<Object[]> rows = repo.sumBySource(userId, from, to);
         Map<String, BigDecimal> bySource = new LinkedHashMap<>();
         for (Object[] r : rows) bySource.put((String) r[0], (BigDecimal) r[1]);

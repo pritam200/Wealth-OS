@@ -412,6 +412,18 @@ public class ParsedEmailImporter {
         com.marketai.card.entity.CreditCard card = findCard(userId, pe);
         if (card == null) return; // no saved card to attach the bill to — the fingerprint is still recorded by the caller
 
+        // CardStatement.totalDue is NOT NULL, and every other import path (FD, RD) already
+        // refuses an unusable amount with a REJECTED log. Without the same guard here, a bill
+        // whose amount regex missed — a new issuer template — failed the not-null constraint,
+        // and because the transaction rolls back the fingerprint row too, the same message was
+        // retried and failed identically on every subsequent sync: a permanent, self-repeating
+        // sync failure instead of one skipped item.
+        if (pe.getAmount() == null || pe.getAmount().signum() <= 0) {
+            log.warn("REJECTED card bill import — no usable amount (card={}, amount={}). Source: {}",
+                card.getName(), pe.getAmount(), pe.getSourceDescription());
+            return;
+        }
+
         cardStatementRepo.save(com.marketai.card.entity.CardStatement.builder()
             .cardId(card.getId())
             .userId(userId)
@@ -421,9 +433,19 @@ public class ParsedEmailImporter {
             .sourceEmailId(gmailMessageId)
             .build());
 
-        card.setCurrentDue(pe.getAmount());
-        card.setCurrentDueDate(pe.getDueDate());
-        cardRepo.save(card);
+        // "What's due right now" must not regress when an older bill is backfilled. The statement
+        // row above is the source of truth and keeps every cycle; this cache should only ever move
+        // forward, so a statement older than the one already cached leaves it alone.
+        boolean isNewerCycle = card.getCurrentDueDate() == null || pe.getDueDate() == null
+            || !pe.getDueDate().isBefore(card.getCurrentDueDate());
+        if (isNewerCycle) {
+            card.setCurrentDue(pe.getAmount());
+            card.setCurrentDueDate(pe.getDueDate());
+            cardRepo.save(card);
+        } else {
+            log.debug("Backfilled older statement for card {} — leaving the current-due cache at {}",
+                card.getName(), card.getCurrentDueDate());
+        }
     }
 
     /**
@@ -526,6 +548,14 @@ public class ParsedEmailImporter {
         portfolioService.addHolding(portfolio.getId(), userId, req);
     }
 
+    /**
+     * Records an unmatchable sale as proceeds, not as a gain.
+     *
+     * <p>Nothing here knows the cost basis — that is the whole reason this branch exists — so the
+     * row is booked under {@code UNMATCHED_SALE}. It used to be booked under {@code CAPITAL_GAIN},
+     * which {@code TaxService} taxes directly: a ₹1,50,000 sale whose true gain was ₹8,000 added
+     * ₹1,50,000 to the year's taxable gains and inflated the estimate by tens of thousands.
+     */
     private void importSellAsTransaction(Long portfolioId, Long userId, String symbol,
             ParsedEmail pe, LocalDate date, BigDecimal quantity) {
         BigDecimal saleValue = pe.getPrice().multiply(quantity);
@@ -538,9 +568,10 @@ public class ParsedEmailImporter {
             .userId(userId)
             .description(desc)
             .amount(saleValue)
-            .source(com.marketai.income.entity.IncomeSource.CAPITAL_GAIN)
+            .source(com.marketai.income.entity.IncomeSource.UNMATCHED_SALE)
             .incomeDate(date)
-            .note("Sold " + quantity.stripTrailingZeros().toPlainString() + " units @ ₹" + pe.getPrice() + " (holding not found)")
+            .note("Sold " + quantity.stripTrailingZeros().toPlainString() + " units @ ₹" + pe.getPrice()
+                + " — gross proceeds, no matching holding so the cost basis and therefore the gain are unknown")
             .build());
     }
 
@@ -600,6 +631,26 @@ public class ParsedEmailImporter {
 
         if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, units, nav)) {
             log.debug("Skipping duplicate MF import: {} {} units @ {} on {}", symbol, units, nav, date);
+            return;
+        }
+
+        // A redemption removes units. This branch used to be absent: MF_SIP and MF_REDEEM both
+        // fell through to addHolding below, which writes a BUY — so a CAMS statement redeeming
+        // 500 units of a 1,000-unit position left the holding reading 1,500 units with a cost
+        // basis blended against the redemption NAV, added the withdrawn money to net worth
+        // instead of removing it, and recorded no MfRedemption (so no STCG/LTCG at all).
+        if (pe.getType() == ParsedEmail.Type.MF_REDEEM) {
+            Long holdingId = portfolioService.findHoldingId(portfolio.getId(), symbol);
+            if (holdingId == null) {
+                // Refusing, not falling through: without the position there is no cost basis, and
+                // the one thing that must never happen is a redemption being recorded as a purchase.
+                log.warn("REJECTED MF redemption import — no holding found for '{}' ({} units @ ₹{}). "
+                    + "Refusing to import a redemption as a purchase. Source: {}",
+                    pe.getFundName(), units, nav, pe.getSourceDescription());
+                return;
+            }
+            portfolioService.sellHolding(portfolio.getId(), holdingId, userId, units, nav, incomeRepo);
+            log.info("Imported MF REDEMPTION: {} x {} units @ ₹{}", symbol, units, nav);
             return;
         }
 

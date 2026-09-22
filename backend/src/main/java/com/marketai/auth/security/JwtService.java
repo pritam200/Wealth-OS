@@ -86,7 +86,7 @@ public class JwtService {
                 }
             }
             if (!found) lines.add(ENV_KEY + "=" + value);
-            java.nio.file.Files.write(envFile.toPath(), lines, java.nio.charset.StandardCharsets.UTF_8);
+            com.marketai.common.util.SecretFile.writeLines(envFile.toPath(), lines);
         } catch (Exception e) {
             // Not fatal: the in-memory secret still works for this run; only persistence failed.
             log.warn("Could not persist {} to {}: {} — sessions will not survive a restart.",

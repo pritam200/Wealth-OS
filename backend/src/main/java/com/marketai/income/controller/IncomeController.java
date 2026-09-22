@@ -40,12 +40,12 @@ public class IncomeController {
 
     @PostMapping
     public ResponseEntity<IncomeResponse> add(@AuthenticationPrincipal User user,
-                                              @RequestBody IncomeRequest req) {
+                                              @RequestBody @jakarta.validation.Valid IncomeRequest req) {
         return ResponseEntity.ok(service.add(user.getId(), req));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<IncomeResponse> update(@AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody IncomeRequest req) {
+    public ResponseEntity<IncomeResponse> update(@AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody @jakarta.validation.Valid IncomeRequest req) {
         return ResponseEntity.ok(service.update(user.getId(), id, req));
     }
 

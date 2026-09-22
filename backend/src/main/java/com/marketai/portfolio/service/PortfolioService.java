@@ -27,6 +27,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -132,14 +133,24 @@ public class PortfolioService {
         return recomputeFromLedger(holding);
     }
 
+    /**
+     * Refreshes every priceable holding and reports how many actually got a price.
+     *
+     * <p>It used to return nothing, and the endpoint answered {@code {"status":"recalculated"}}
+     * with 200 even when every single quote failed — telling the user their prices were up to
+     * date when none of them had moved. The per-symbol failure is also logged at warn now, not
+     * debug: a quote provider that has started refusing every request should be visible.
+     */
     @Transactional
-    public void refreshAllPrices(Long userId) {
+    public RefreshOutcome refreshAllPrices(Long userId) {
         List<Portfolio> portfolios = portfolioRepository.findByUserId(userId);
+        int attempted = 0, updated = 0;
         for (Portfolio portfolio : portfolios) {
             List<Holding> holdings = holdingRepository.findByPortfolioId(portfolio.getId());
             for (Holding h : holdings) {
                 String sym = h.getSymbol();
                 if (sym == null || sym.endsWith(".MF")) continue;
+                attempted++;
                 try {
                     QuoteDto quote = marketDataService.getQuote(sym);
                     if (quote != null && quote.getCurrentPrice() != null
@@ -147,30 +158,38 @@ public class PortfolioService {
                         h.setCurrentPrice(quote.getCurrentPrice());
                         h.setUpdatedAt(LocalDateTime.now());
                         holdingRepository.save(h);
+                        updated++;
                     }
                 } catch (Exception e) {
-                    log.debug("Price refresh failed for {}: {}", sym, e.getMessage());
+                    log.warn("Price refresh failed for {}: {}", sym, e.getMessage());
                 }
             }
         }
+        if (attempted > 0 && updated == 0) {
+            log.warn("Price refresh for user {}: none of {} symbol(s) returned a usable quote", userId, attempted);
+        }
+        return new RefreshOutcome(attempted, updated);
+    }
+
+    /** @param attempted priceable (non-MF) holdings tried; @param updated those that got a price */
+    public record RefreshOutcome(int attempted, int updated) {
+        public boolean completelyFailed() { return attempted > 0 && updated == 0; }
     }
 
     /**
-     * Runs {@link #rebuildHoldingsFromTransactions} for every user — the nightly reconciliation
-     * pass that catches any drift between a holding's stored quantity/averageCost and what its
-     * transaction ledger actually implies, before a user ever notices a wrong number on screen.
+     * The work list for the nightly reconciliation pass — every user whose holdings should be
+     * replayed against their transaction ledger.
+     *
+     * <p>The per-user loop deliberately lives in {@code HoldingReconciliationScheduler} rather than
+     * here. When this class looped and called {@link #rebuildHoldingsFromTransactions} on
+     * {@code this}, the call never crossed the Spring proxy, so that method's
+     * {@code @Transactional} had no effect and the whole sweep ran on auto-commit: a failure
+     * partway through left a portfolio half-rebuilt, with an already-committed delete of a
+     * fully-sold holding and nothing to roll back. Iterating from the scheduler means each user's
+     * rebuild is a real transaction.
      */
-    public void reconcileAllUsers() {
-        for (User u : userRepository.findAll()) {
-            try {
-                int fixed = rebuildHoldingsFromTransactions(u.getId());
-                if (fixed > 0) {
-                    log.warn("Nightly reconciliation: user {} had {} holding(s) drifted from their transaction ledger — corrected", u.getId(), fixed);
-                }
-            } catch (Exception e) {
-                log.error("Nightly reconciliation failed for user {}: {}", u.getId(), e.getMessage());
-            }
-        }
+    public List<Long> allUserIdsForReconciliation() {
+        return userRepository.findAll().stream().map(User::getId).toList();
     }
 
     @Transactional
@@ -179,11 +198,15 @@ public class PortfolioService {
         int fixed = 0;
         for (Portfolio portfolio : portfolios) {
             List<Holding> holdings = holdingRepository.findByPortfolioId(portfolio.getId());
+            // Loaded once per holding and passed down: this used to query the transactions to test
+            // for emptiness and recomputeFromLedger immediately re-ran the identical query, so the
+            // nightly sweep did twice the round trips it needed for every holding of every user.
             for (Holding h : holdings) {
-                if (transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId()).isEmpty()) continue;
+                List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId());
+                if (txns.isEmpty()) continue;
                 BigDecimal beforeQty = h.getQuantity();
                 BigDecimal beforeAvgCost = h.getAverageCost();
-                Holding after = recomputeFromLedger(h);
+                Holding after = recomputeFromLedger(h, txns);
                 if (after == null) {
                     fixed++;
                     log.info("Removed fully sold holding: {}", h.getSymbol());
@@ -205,8 +228,13 @@ public class PortfolioService {
      * bulk import) — a manual/unverified number is still better than blank.
      */
     private BigDecimal computeRealXirr(Holding h) {
-        List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId());
-        if (txns.isEmpty()) return h.getXirr();
+        return computeRealXirr(h, transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId()));
+    }
+
+    /** Same computation against transactions the caller has already loaded — see
+     *  {@link TransactionRepository#findByHoldingIdInOrderByTransactionDateAsc}. */
+    private BigDecimal computeRealXirr(Holding h, List<Transaction> txns) {
+        if (txns == null || txns.isEmpty()) return h.getXirr();
 
         List<com.marketai.portfolio.util.XirrCalculator.CashFlow> flows = new ArrayList<>();
         for (Transaction t : txns) {
@@ -232,7 +260,11 @@ public class PortfolioService {
      * and returns null if the ledger nets to zero or negative quantity (fully sold).
      */
     private Holding recomputeFromLedger(Holding h) {
-        List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId());
+        return recomputeFromLedger(h, transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId()));
+    }
+
+    /** Same replay against transactions the caller already holds, to avoid re-querying them. */
+    private Holding recomputeFromLedger(Holding h, List<Transaction> txns) {
         BigDecimal netQty = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
         for (Transaction t : txns) {
@@ -302,6 +334,15 @@ public class PortfolioService {
                         .multiply(BigDecimal.valueOf(100))
                 : BigDecimal.ZERO;
 
+        // One query for every holding's transactions, grouped in memory, instead of one query per
+        // holding inside the mapping below.
+        Map<Long, List<Transaction>> txnsByHolding = holdings.isEmpty()
+                ? Map.of()
+                : transactionRepository
+                    .findByHoldingIdInOrderByTransactionDateAsc(holdings.stream().map(Holding::getId).toList())
+                    .stream()
+                    .collect(Collectors.groupingBy(t -> t.getHolding().getId()));
+
         List<PortfolioSummaryDto.HoldingDto> holdingDtos = holdings.stream()
                 .map(h -> {
                     BigDecimal weight = currentValue.compareTo(BigDecimal.ZERO) != 0
@@ -324,7 +365,7 @@ public class PortfolioService {
                             .broker(h.getBroker())
                             .folio(h.getFolio())
                             .buyDate(h.getBuyDate())
-                            .xirr(computeRealXirr(h))
+                            .xirr(computeRealXirr(h, txnsByHolding.getOrDefault(h.getId(), List.of())))
                             .build();
                 })
                 .collect(Collectors.toList());
@@ -761,8 +802,11 @@ public class PortfolioService {
         // Remove via the owning collection so orphanRemoval actually deletes the row
         // (a bare holdingRepository.deleteById gets re-persisted by the managed collection).
         boolean removed = pf.getHoldings().removeIf(h -> h.getId().equals(holdingId));
-        if (removed) portfolioRepository.save(pf);
-        else holdingRepository.deleteById(holdingId);
+        // Not in this portfolio's collection means it is not this portfolio's holding — and since
+        // the portfolio is the only thing ownership-checked here, deleting it anyway would let a
+        // request delete any holding in the database by naming its id. It is a 404, not a fallback.
+        if (!removed) throw new ResourceNotFoundException("Holding", "id", holdingId);
+        portfolioRepository.save(pf);
     }
 
     /** Bulk-clear holdings. type = "stocks" (non-.MF), "mf", or "all". */
@@ -801,7 +845,7 @@ public class PortfolioService {
                                  java.time.LocalDate buyDate, BigDecimal xirr) {
         portfolioRepository.findByIdAndUserId(portfolioId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Portfolio", "id", portfolioId));
-        Holding h = holdingRepository.findById(holdingId)
+        Holding h = holdingRepository.findByIdAndPortfolioId(holdingId, portfolioId)
                 .orElseThrow(() -> new ResourceNotFoundException("Holding", "id", holdingId));
 
         BigDecimal targetQty = (quantity != null && quantity.compareTo(BigDecimal.ZERO) > 0) ? quantity : null;
@@ -852,7 +896,7 @@ public class PortfolioService {
                             com.marketai.income.repository.IncomeRepository incomeRepo) {
         portfolioRepository.findByIdAndUserId(portfolioId, userId)
             .orElseThrow(() -> new ResourceNotFoundException("Portfolio", "id", portfolioId));
-        Holding h = holdingRepository.findById(holdingId)
+        Holding h = holdingRepository.findByIdAndPortfolioId(holdingId, portfolioId)
             .orElseThrow(() -> new ResourceNotFoundException("Holding", "id", holdingId));
 
         if (qtySold.compareTo(h.getQuantity()) > 0) {

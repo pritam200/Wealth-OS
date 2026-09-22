@@ -47,10 +47,18 @@ class GmailSenderTrustGateTest {
 
     private GmailSyncService service;
 
-    /** Stands in for any of the 18 real parsers: matches on a substring of the From header. */
+    /**
+     * Stands in for any of the 18 real parsers: matches on a substring of the From header.
+     *
+     * <p>Matches an unregistered broker too, so the UNKNOWN_DOMAIN case is reachable at all. A
+     * From containing "zerodha" can never be unknown — for an unverified domain the evaluator
+     * searches the whole header, so "zerodha" anywhere in it is an impersonation claim by design.
+     */
     private static class SubstringParser implements EmailParser {
         @Override public boolean canParse(String from, String subject) {
-            return from != null && from.toLowerCase().contains("zerodha");
+            if (from == null) return false;
+            String f = from.toLowerCase();
+            return f.contains("zerodha") || f.contains("smallbroker");
         }
         @Override public List<ParsedEmail> parse(String from, String subject, String body) {
             return List.of(ParsedEmail.builder()
@@ -143,8 +151,16 @@ class GmailSenderTrustGateTest {
     void unknownDomainIsNotBlocked() throws Exception {
         // The registry will always lag reality. Blocking unrecognised domains would mean any
         // bank we have not catalogued silently stops importing, which costs more than it saves.
-        when(gmailClient.getFrom(any())).thenReturn("\"Zerodha\" <noreply@zerodha.com>");
+        //
+        // The domain must genuinely be outside the registry for this to test anything — it used
+        // to reuse the registered zerodha.com, making it a duplicate of genuineSenderStillImports
+        // and leaving the UNKNOWN_DOMAIN path completely uncovered. The display name claims no
+        // issuer, so this is "unknown", not "spoofed".
+        when(gmailClient.getFrom(any())).thenReturn("\"Trade Alerts\" <noreply@smallbroker.example>");
+
         service.syncSpecificMessages(USER_ID, List.of(MSG_ID));
+
         verify(importer).importParsedEmail(any(), any(), any(), any(), any());
+        verify(reviewService, never()).enqueue(any(), any(), any(), any(), any());
     }
 }

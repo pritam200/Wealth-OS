@@ -54,6 +54,18 @@ public class CashAccount {
     @Builder.Default
     private BigDecimal balance = BigDecimal.ZERO;
 
+    /**
+     * Optimistic lock on the balance.
+     *
+     * <p>Every balance change is a read-modify-write in {@code LedgerTransferService}. With no
+     * version, a Gmail sync worker and a user-initiated transfer debiting the same account
+     * concurrently both read ₹1,00,000, both write ₹70,000, and ₹30,000 of outflow is lost
+     * silently — the balance is permanently wrong with nothing recorded anywhere. The version
+     * turns that into an {@code OptimisticLockException} the caller can retry.
+     */
+    @Version
+    private Long version;
+
     /** When the balance was last reconciled against a statement. */
     @Column(name = "as_of")
     private LocalDate asOf;

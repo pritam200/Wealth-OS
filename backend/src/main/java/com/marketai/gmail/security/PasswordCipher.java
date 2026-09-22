@@ -97,7 +97,7 @@ public class PasswordCipher {
                 }
             }
             if (!found) lines.add("PDF_PASSWORD_ENC_KEY=" + keyB64);
-            java.nio.file.Files.write(envFile.toPath(), lines, StandardCharsets.UTF_8);
+            com.marketai.common.util.SecretFile.writeLines(envFile.toPath(), lines);
         } catch (Exception e) {
             log.warn("Could not write PDF_PASSWORD_ENC_KEY to {}: {}", envFile.getPath(), e.getMessage());
         }

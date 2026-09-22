@@ -8,7 +8,6 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
-import jakarta.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -39,9 +38,19 @@ public class AmfiNavService {
     private final WebClient.Builder webClientBuilder;
     private final AtomicReference<List<AmfiNavResult>> cache = new AtomicReference<>(Collections.emptyList());
 
-    @PostConstruct
+    /**
+     * Loaded after the context is up, not during bean init: this download is several MB from a
+     * third party, and doing it in @PostConstruct meant a slow AMFI delayed — or hung — the whole
+     * application start, with no health endpoint answering in the meantime. Until the first
+     * refresh lands the cache is simply empty, which every reader already handles.
+     */
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
     void init() {
-        refresh();
+        // Own thread rather than @Async: there is no @EnableAsync in this application, so @Async
+        // would silently run inline and still hold up readiness.
+        Thread t = new Thread(this::refresh, "amfi-initial-nav-load");
+        t.setDaemon(true);
+        t.start();
     }
 
     @Scheduled(cron = "0 30 21 * * *") // AMFI publishes the day's NAV in the evening
@@ -52,7 +61,10 @@ public class AmfiNavService {
                     reactor.netty.http.client.HttpClient.create().followRedirect(true)))
                 .build().get().uri(NAV_URL)
                 .header("User-Agent", "Mozilla/5.0")
-                .retrieve().bodyToMono(String.class).block();
+                .retrieve().bodyToMono(String.class)
+                // Several MB over a link we do not control — bounded so a stalled feed
+                // cannot hold the thread (or, via init(), startup) indefinitely.
+                .block(java.time.Duration.ofSeconds(90));
 
             // Every failure path below logs. Previously a null or unparseable body returned
             // silently, which made "AMFI is down", "the URL moved" and "this never ran" all

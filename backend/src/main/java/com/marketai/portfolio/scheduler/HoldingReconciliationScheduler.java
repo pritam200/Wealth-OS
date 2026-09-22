@@ -26,7 +26,20 @@ public class HoldingReconciliationScheduler {
     public void scheduledReconciliation() {
         log.info("Running nightly holding-ledger reconciliation...");
         try {
-            portfolioService.reconcileAllUsers();
+            // One call per user, from outside the service, so each rebuild crosses the Spring proxy
+            // and actually runs in the transaction its @Transactional declares.
+            for (Long userId : portfolioService.allUserIdsForReconciliation()) {
+                try {
+                    int fixed = portfolioService.rebuildHoldingsFromTransactions(userId);
+                    if (fixed > 0) {
+                        log.warn("Nightly reconciliation: user {} had {} holding(s) drifted from their "
+                            + "transaction ledger — corrected", userId, fixed);
+                    }
+                } catch (Exception e) {
+                    // One user's failure must not abandon the rest of the sweep.
+                    log.error("Nightly reconciliation failed for user {}: {}", userId, e.getMessage());
+                }
+            }
         } catch (Exception e) {
             log.error("Nightly holding reconciliation error: {}", e.getMessage());
         }

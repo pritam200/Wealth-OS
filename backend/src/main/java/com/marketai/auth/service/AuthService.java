@@ -20,7 +20,9 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.Collections;
@@ -87,7 +89,9 @@ public class AuthService {
                 .orElseThrow(() -> new ResourceNotFoundException("RefreshToken", "token", "provided"));
 
         if (storedToken.isRevoked() || storedToken.getExpiresAt().isBefore(Instant.now())) {
-            throw new RuntimeException("Refresh token is expired or revoked");
+            // 401, not 500: a token expiring after its normal lifetime is the routine case, and the
+            // client can only redirect to login if it can tell "re-authenticate" from "server broken".
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh token is expired or revoked");
         }
 
         User user = storedToken.getUser();

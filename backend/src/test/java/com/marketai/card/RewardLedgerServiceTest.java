@@ -87,9 +87,11 @@ class RewardLedgerServiceTest {
 
         ledger.redeem(1L, 5L, 400, new BigDecimal("100.00"), LocalDate.of(2026, 2, 1), "Flight booking");
 
+        // Two rows: the legacy 1,000 is materialised as an opening entry first (see
+        // legacyStoredBalanceSurvivesTheFirstLedgerEntry), then the redemption itself.
         ArgumentCaptor<RewardTransaction> captor = ArgumentCaptor.forClass(RewardTransaction.class);
-        verify(ledgerRepository).save(captor.capture());
-        RewardTransaction saved = captor.getValue();
+        verify(ledgerRepository, times(2)).save(captor.capture());
+        RewardTransaction saved = captor.getAllValues().get(1);
         assertThat(saved.getType()).isEqualTo(RewardTransactionType.REDEEM);
         assertThat(saved.getPoints()).isEqualTo(-400);
     }
@@ -123,9 +125,62 @@ class RewardLedgerServiceTest {
         ledger.adjustToAbsolute(1L, 5L, 1500, "Manual correction");
 
         ArgumentCaptor<RewardTransaction> captor = ArgumentCaptor.forClass(RewardTransaction.class);
-        verify(ledgerRepository).save(captor.capture());
-        assertThat(captor.getValue().getType()).isEqualTo(RewardTransactionType.ADJUST);
-        assertThat(captor.getValue().getPoints()).isEqualTo(500);
+        verify(ledgerRepository, times(2)).save(captor.capture());
+        // Opening row carries the legacy 1,000; the correction itself records only the +500 delta,
+        // so the ledger replays to exactly the 1,500 the user typed.
+        assertThat(captor.getAllValues().get(0).getPoints()).isEqualTo(1000);
+        assertThat(captor.getAllValues().get(1).getType()).isEqualTo(RewardTransactionType.ADJUST);
+        assertThat(captor.getAllValues().get(1).getPoints()).isEqualTo(500);
+        assertThat(captor.getAllValues().stream().mapToInt(RewardTransaction::getPoints).sum()).isEqualTo(1500);
+    }
+
+    @Test
+    void legacyStoredBalanceSurvivesTheFirstLedgerEntry() {
+        // A card added before the ledger existed: 1,000 points stored, no history. Redeeming 300
+        // must leave 700, not −300 — the stored figure has to become a real ledger row first.
+        when(cardRepository.findByIdAndUserId(5L, 1L)).thenReturn(Optional.of(card(5L, 1L, 1000)));
+        when(ledgerRepository.existsByCardId(5L)).thenReturn(false);
+
+        ledger.redeem(1L, 5L, 300, null, null, null);
+
+        ArgumentCaptor<RewardTransaction> captor = ArgumentCaptor.forClass(RewardTransaction.class);
+        verify(ledgerRepository, times(2)).save(captor.capture());
+        RewardTransaction opening = captor.getAllValues().get(0);
+        assertThat(opening.getType()).isEqualTo(RewardTransactionType.ADJUST);
+        assertThat(opening.getPoints()).isEqualTo(1000);
+        assertThat(opening.getNote()).contains("Opening balance");
+        assertThat(captor.getAllValues().stream().mapToInt(RewardTransaction::getPoints).sum()).isEqualTo(700);
+    }
+
+    @Test
+    void firstEarnOnALegacyCardDoesNotDiscardTheStoredBalance() {
+        when(cardRepository.findByIdAndUserId(5L, 1L)).thenReturn(Optional.of(card(5L, 1L, 2500)));
+        when(ledgerRepository.existsByCardId(5L)).thenReturn(false);
+
+        ledger.earn(1L, 5L, 500, null, null, "Statement bonus");
+
+        ArgumentCaptor<RewardTransaction> captor = ArgumentCaptor.forClass(RewardTransaction.class);
+        verify(ledgerRepository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues().stream().mapToInt(RewardTransaction::getPoints).sum()).isEqualTo(3000);
+    }
+
+    @Test
+    void noOpeningRowIsWrittenWhenThereIsNothingToCarryOver() {
+        when(cardRepository.findByIdAndUserId(5L, 1L)).thenReturn(Optional.of(card(5L, 1L, 0)));
+        when(ledgerRepository.existsByCardId(5L)).thenReturn(false);
+
+        ledger.earn(1L, 5L, 500, null, null, null);
+        verify(ledgerRepository, times(1)).save(any());
+    }
+
+    @Test
+    void openingRowIsWrittenOnlyOnceBecauseHistoryThenExists() {
+        when(cardRepository.findByIdAndUserId(5L, 1L)).thenReturn(Optional.of(card(5L, 1L, 1000)));
+        when(ledgerRepository.existsByCardId(5L)).thenReturn(true);
+        when(ledgerRepository.sumPointsByCardId(5L)).thenReturn(1000);
+
+        ledger.earn(1L, 5L, 500, null, null, null);
+        verify(ledgerRepository, times(1)).save(any());
     }
 
     @Test

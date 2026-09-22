@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -217,9 +218,20 @@ public class CardService {
             Optional<CardCatalog.CatalogCard> catCard = CardCatalog.byName(c.getName());
             if (catCard.isPresent() && catCard.get().monthlyCashbackCap != null) {
                 BigDecimal cap = catCard.get().monthlyCashbackCap;
-                if (reward.compareTo(cap) > 0) {
-                    reward = cap;
-                    reasons.add(String.format("Capped at %s/month", inr(cap)));
+                // The cap is a monthly running counter, so what matters is the headroom LEFT
+                // this month — not the whole cap applied afresh to this one transaction. With the
+                // old check, a card that had already earned its full ₹5,000 was still ranked top
+                // on the next purchase at a reward it could not actually pay.
+                BigDecimal alreadyEarned = rewardLedger.earnedValueInMonth(c.getId(), LocalDate.now());
+                BigDecimal headroom = cap.subtract(alreadyEarned).max(BigDecimal.ZERO);
+                if (reward.compareTo(headroom) > 0) {
+                    reward = headroom;
+                    if (alreadyEarned.signum() > 0) {
+                        reasons.add(String.format("Only %s of the %s/month cap is left — %s already earned this month",
+                            inr(headroom), inr(cap), inr(alreadyEarned)));
+                    } else {
+                        reasons.add(String.format("Capped at %s/month", inr(cap)));
+                    }
                 }
             }
 

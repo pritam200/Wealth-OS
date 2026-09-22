@@ -49,11 +49,26 @@ public class GmailPushController {
     @Value("${app.gmail.push.verification-token:}")
     private String verificationToken;
 
+    /** Push off (the default) means nothing legitimate calls this endpoint at all. */
+    @Value("${app.gmail.push.enabled:false}")
+    private boolean pushEnabled;
+
     @PostMapping
     public ResponseEntity<Void> receive(@RequestBody Map<String, Object> body,
                                         @RequestParam(required = false) String token) {
-        if (verificationToken != null && !verificationToken.trim().isEmpty()
-                && !verificationToken.equals(token)) {
+        // Fail closed. Previously a blank secret — the shipped default — short-circuited the
+        // comparison and accepted every caller on an endpoint that is permitAll and kicks off
+        // minutes of LLM work per request. An unconfigured or disabled push path must accept
+        // nothing rather than everything.
+        if (!pushEnabled) {
+            log.debug("Gmail push received while push is disabled — ignoring");
+            return ResponseEntity.ok().build();
+        }
+        if (verificationToken == null || verificationToken.trim().isEmpty()) {
+            log.warn("Gmail push rejected: app.gmail.push.verification-token is not configured");
+            return ResponseEntity.ok().build();
+        }
+        if (!verificationToken.equals(token)) {
             log.warn("Rejected Gmail push with a bad verification token");
             // 200 anyway: a 4xx makes Pub/Sub retry a request that will never succeed.
             return ResponseEntity.ok().build();
@@ -81,9 +96,7 @@ public class GmailPushController {
     }
 
     private void enqueueFor(String emailAddress) {
-        GmailToken token = tokenRepo.findAll().stream()
-            .filter(t -> emailAddress.equalsIgnoreCase(t.getConnectedEmail()))
-            .findFirst().orElse(null);
+        GmailToken token = tokenRepo.findByConnectedEmailIgnoreCase(emailAddress).orElse(null);
         if (token == null || token.getUser() == null) {
             log.debug("Gmail push for unknown mailbox {} — ignoring", emailAddress);
             return;

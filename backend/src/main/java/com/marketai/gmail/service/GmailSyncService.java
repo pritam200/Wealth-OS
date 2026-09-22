@@ -457,25 +457,25 @@ public class GmailSyncService {
                     try {
                         importer.importParsedEmail(userId, user, pe, msgId, body);
                         summaries.add(pe.getSourceDescription());
-                        importedTypes.add(pe.getType().name());
-                        steps.add("DB updated: " + pe.getType().name() + " — " + pe.getSourceDescription());
+                        importedTypes.add(typeName(pe));
+                        steps.add("DB updated: " + typeName(pe) + " — " + pe.getSourceDescription());
                         imported++;
                         emailImported++;
                     } catch (Exception e) {
-                        steps.add("Import failed for " + pe.getType().name() + ": " + e.getMessage());
+                        steps.add("Import failed for " + typeName(pe) + ": " + e.getMessage());
                         log.error("Import failed for {}: {}", pe.getSourceDescription(), e.getMessage());
                         actionItems.add("FAILED: " + pe.getSourceDescription() + " — " + e.getMessage());
                         failed++;
                     }
                 }
 
-                String combinedType = importedTypes.isEmpty() ? (parsed.isEmpty() ? "UNKNOWN" : parsed.get(0).getType().name()) : String.join(",", importedTypes);
+                String combinedType = importedTypes.isEmpty() ? (parsed.isEmpty() ? "UNKNOWN" : typeName(parsed.get(0))) : String.join(",", importedTypes);
                 String combinedSummary = emailImported > 0 ? String.join("; ", summaries.subList(Math.max(0, summaries.size() - emailImported), summaries.size())) : "Import failed";
                 saveProcessed(userId, msgId, combinedType, emailImported > 0 ? "IMPORTED" : "FAILED", combinedSummary, from, matchedParser);
 
                 if (emailImported > 0) steps.add("UI refresh triggered");
 
-                String firstType = parsed.isEmpty() ? "UNKNOWN" : parsed.get(0).getType().name();
+                String firstType = parsed.isEmpty() ? "UNKNOWN" : typeName(parsed.get(0));
                 logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                     .gmailMessageId(msgId).sender(from).subject(subject)
                     .matchedParser(matchedParser)
@@ -559,6 +559,18 @@ public class GmailSyncService {
                 log.error("Scheduled sync failed for user {}: {}", token.getUser().getId(), e.getMessage());
             }
         });
+    }
+
+    /**
+     * A parsed item's type as a log label.
+     *
+     * <p>Null-safe because {@code ParsedEmailImporter.routeImport} documents a null type as
+     * reachable and handles it — but the log lines here dereferenced it, so an item the importer
+     * had already committed threw NPE on the way to being logged and the message was recorded as
+     * FAILED. A logging concern must not change a record's reported outcome.
+     */
+    private static String typeName(ParsedEmail pe) {
+        return pe == null || pe.getType() == null ? "UNKNOWN" : pe.getType().name();
     }
 
     // Upsert, not insert: a retried FAILED email already has a row, and (user_id,

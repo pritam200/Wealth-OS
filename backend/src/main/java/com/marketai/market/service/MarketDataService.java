@@ -184,8 +184,16 @@ public class MarketDataService {
         }
         List<YahooFinanceClient.OhlcvBar> bars = yahooClient.getHistory(yahooSymbol, range, "1d");
 
-        bars.stream()
-                .filter(bar -> !priceHistoryRepository.existsBySymbolAndDate(symbol, bar.date()))
+        // One select for the dates we already have and one batched insert, instead of an
+        // existence check plus a single-row save per bar (~500 round trips per ticker for 1y).
+        java.util.Set<LocalDate> existing = bars.isEmpty() ? java.util.Set.of()
+                : new java.util.HashSet<>(priceHistoryRepository.findDatesBySymbolAndDateBetween(
+                    symbol,
+                    bars.stream().map(YahooFinanceClient.OhlcvBar::date).min(LocalDate::compareTo).orElseThrow(),
+                    bars.stream().map(YahooFinanceClient.OhlcvBar::date).max(LocalDate::compareTo).orElseThrow()));
+
+        List<PriceHistory> toStore = bars.stream()
+                .filter(bar -> !existing.contains(bar.date()))
                 .map(bar -> PriceHistory.builder()
                         .symbol(symbol)
                         .date(bar.date())
@@ -196,9 +204,10 @@ public class MarketDataService {
                         .adjClose(BigDecimal.valueOf(bar.close()).setScale(2, RoundingMode.HALF_UP))
                         .volume(bar.volume())
                         .build())
-                .forEach(priceHistoryRepository::save);
+                .toList();
+        priceHistoryRepository.saveAll(toStore);
 
-        log.info("Stored {} bars for {}", bars.size(), symbol);
+        log.info("Stored {} new bar(s) of {} fetched for {}", toStore.size(), bars.size(), symbol);
     }
 
     @Scheduled(fixedRateString = "${app.market.refresh-rate-ms:900000}")

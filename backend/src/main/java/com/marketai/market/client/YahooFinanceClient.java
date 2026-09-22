@@ -17,6 +17,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -76,7 +77,7 @@ public class YahooFinanceClient {
                     .header("Accept", "application/json")
                     .retrieve()
                     .bodyToMono(JsonNode.class)
-                    .block();
+                    .block(Duration.ofSeconds(timeoutSeconds));
 
             return parseQuote(root, yahooSymbol);
         } catch (WebClientResponseException e) {
@@ -117,7 +118,7 @@ public class YahooFinanceClient {
                     .header("Cookie", session.cookie)
                     .retrieve()
                     .bodyToMono(JsonNode.class)
-                    .block();
+                    .block(Duration.ofSeconds(timeoutSeconds));
             JsonNode result = root != null ? root.at("/quoteSummary/result/0") : null;
             if (result == null || result.isMissingNode()) return null;
 
@@ -185,7 +186,7 @@ public class YahooFinanceClient {
                     .header("User-Agent", USER_AGENT)
                     .exchangeToMono(resp -> resp.releaseBody()
                             .thenReturn(resp.headers().header("Set-Cookie")))
-                    .block();
+                    .block(Duration.ofSeconds(timeoutSeconds));
             if (setCookies == null || setCookies.isEmpty()) {
                 log.warn("Yahoo crumb handshake: no Set-Cookie header received — cannot proceed.");
                 return null;
@@ -205,7 +206,7 @@ public class YahooFinanceClient {
                     .header("Cookie", cookie)
                     .retrieve()
                     .bodyToMono(String.class)
-                    .block();
+                    .block(Duration.ofSeconds(timeoutSeconds));
 
             if (crumb == null || crumb.trim().isEmpty() || crumb.contains("Too Many Requests") || crumb.contains("<html")) {
                 log.warn("Yahoo crumb handshake failed — got [{}] instead of a token (likely rate-limited).",
@@ -271,7 +272,7 @@ public class YahooFinanceClient {
                     .header("Accept", "application/json")
                     .retrieve()
                     .bodyToMono(JsonNode.class)
-                    .block();
+                    .block(Duration.ofSeconds(timeoutSeconds));
             JsonNode quotes = root != null ? root.at("/quotes") : null;
             if (quotes != null && quotes.isArray()) {
                 for (JsonNode q : quotes) {
@@ -308,7 +309,7 @@ public class YahooFinanceClient {
                     .header("Accept-Language", "en-US,en;q=0.9")
                     .retrieve()
                     .bodyToMono(JsonNode.class)
-                    .block();
+                    .block(Duration.ofSeconds(timeoutSeconds));
 
             return parseHistory(root);
         } catch (WebClientResponseException e) {

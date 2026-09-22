@@ -80,9 +80,19 @@ public class PortfolioContextService {
         int stockCount = 0, mfCount = 0;
 
         List<Holding> stocks = new ArrayList<>();
+        int unpriced = 0;
+        BigDecimal unpricedValue = BigDecimal.ZERO;
         for (Holding h : holdings) {
             BigDecimal cur = nz(h.getCurrentValue());
             BigDecimal inv = nz(h.getInvestedValue());
+            // Holding.getCurrentValue() falls back to invested value when no price is known. The
+            // fallback is right — a blank would be worse — but it was invisible: the position was
+            // summed into net worth at cost, showed exactly 0.00% return, and dataQuality still
+            // reported FULL. Counting it means the figure can be qualified instead of trusted.
+            if (h.getCurrentPrice() == null) {
+                unpriced++;
+                unpricedValue = unpricedValue.add(inv);
+            }
             equityInvested = equityInvested.add(inv);
             equityCurrent = equityCurrent.add(cur);
             if (isMf(h)) {
@@ -223,6 +233,15 @@ public class PortfolioContextService {
                 "Sector is known for only %.0f%% of your direct-stock value, so sector concentration below is partial. It fills in as each symbol's profile is fetched.",
                 sectorCoverage));
         }
+        if (unpriced > 0) {
+            gaps.add(String.format(
+                "%d holding%s (₹%s) ha%s no current price, so %s valued at cost. Their return "
+                    + "reads as 0%% because it is unknown, not because it is zero — net worth is "
+                    + "understated by however much they have actually moved.",
+                unpriced, unpriced == 1 ? "" : "s", scale(unpricedValue).toPlainString(),
+                unpriced == 1 ? "s" : "ve", unpriced == 1 ? "it is" : "they are"));
+        }
+
         if (mfCount > 0) {
             // The single genuinely-blocked analysis: without per-fund constituent disclosures
             // there is no way to know a fund's underlying stocks, so true look-through overlap

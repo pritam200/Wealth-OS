@@ -1,9 +1,10 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, lazy, Suspense } from 'react';
 import { LayoutDashboard, Activity, TrendingUp, PieChart, Wallet, Receipt, Target, CreditCard, Brain, Coins, RefreshCw, ClipboardList } from 'lucide-react';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { Sidebar } from './components/layout/Sidebar';
+import { TabErrorBoundary } from './components/layout/TabErrorBoundary';
 import { Topbar } from './components/layout/Topbar';
 import type { NavSection } from './components/layout/Sidebar';
 import { useAuthStore } from './store/authStore';
@@ -143,24 +144,34 @@ function IndexPill({ label, value, change }: { label: string; value: string; cha
 function LiveTicker() {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [pulse, setPulse] = useState(false);
-  const timerRef = useRef<any>(null);
+  // A swallowed error left overview null, so the topbar animated "Fetching market data…"
+  // indefinitely while retrying every 60s with no visible change of state.
+  const [failed, setFailed] = useState(false);
+  const timerRef = useRef<number | null>(null);
+  const pulseTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const load = () => {
       marketApi.getOverview().then(r => {
         setOverview(r.data);
+        setFailed(false);
         setPulse(true);
-        setTimeout(() => setPulse(false), 400);
-      }).catch(() => {});
+        if (pulseTimerRef.current !== null) window.clearTimeout(pulseTimerRef.current);
+        pulseTimerRef.current = window.setTimeout(() => setPulse(false), 400);
+      }).catch(() => setFailed(true));
     };
     load();
-    timerRef.current = setInterval(load, 60_000);
-    return () => clearInterval(timerRef.current);
+    timerRef.current = window.setInterval(load, 60_000);
+    return () => {
+      if (timerRef.current !== null) window.clearInterval(timerRef.current);
+      if (pulseTimerRef.current !== null) window.clearTimeout(pulseTimerRef.current);
+    };
   }, []);
 
   if (!overview) return (
-    <div className="flex items-center gap-2 px-4 text-2xs text-gray-600 uppercase tracking-widest animate-pulse">
-      Fetching market data…
+    <div className={`flex items-center gap-2 px-4 text-2xs uppercase tracking-widest ${
+      failed ? 'text-bear' : 'text-gray-600 animate-pulse'}`}>
+      {failed ? 'Market data unavailable' : 'Fetching market data…'}
     </div>
   );
 
@@ -173,6 +184,22 @@ function LiveTicker() {
       {overview.sensex     && <IndexPill label="SENSEX"     value={fmt(overview.sensex.value)}     change={fmtChg(overview.sensex.changePercent)} />}
       {overview.bankNifty  && <IndexPill label="BANK NIFTY" value={fmt(overview.bankNifty.value)}  change={fmtChg(overview.bankNifty.changePercent)} />}
       {overview.niftyMidcap && <IndexPill label="MIDCAP 50" value={fmt(overview.niftyMidcap.value)} change={fmtChg(overview.niftyMidcap.changePercent)} />}
+    </div>
+  );
+}
+
+/** Shown while a tab's chunk is in flight. Shaped like the content it replaces so the layout
+ *  doesn't jump when the real tab renders. */
+function TabSkeleton() {
+  return (
+    <div className="space-y-4 animate-pulse" aria-busy="true" aria-label="Loading">
+      <div className="h-8 w-64 rounded-lg bg-surface-hover" />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="h-24 rounded-2xl bg-surface-hover" />
+        <div className="h-24 rounded-2xl bg-surface-hover" />
+        <div className="h-24 rounded-2xl bg-surface-hover" />
+      </div>
+      <div className="h-64 rounded-2xl bg-surface-hover" />
     </div>
   );
 }
@@ -229,7 +256,13 @@ function AppShell() {
 
         <main className="flex-1 overflow-y-auto">
           <div className="p-5 max-w-screen-2xl mx-auto">
-            <TabContent tab={activeTab} onNavigate={setActiveTab} />
+            {/* Keyed on the tab id so switching tabs shows the skeleton again rather than
+                holding the previous tab's content on screen while the new chunk loads. */}
+            <TabErrorBoundary key={activeTab} tabLabel={activeSection.label}>
+              <Suspense fallback={<TabSkeleton />}>
+                <TabContent tab={activeTab} onNavigate={setActiveTab} />
+              </Suspense>
+            </TabErrorBoundary>
           </div>
         </main>
       </div>
@@ -255,7 +288,9 @@ export default function App() {
                 className="btn-ghost mb-5 text-xs uppercase tracking-widest">
                 ← Back
               </button>
-              <StockPage />
+              <Suspense fallback={<TabSkeleton />}>
+                <StockPage />
+              </Suspense>
             </div>
           </PrivateRoute>
         } />

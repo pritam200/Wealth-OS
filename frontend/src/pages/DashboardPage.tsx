@@ -11,6 +11,8 @@ import type { ReconciliationIssue } from '../api/reconciliation';
 import type { PortfolioSummary } from '../types';
 import { NetWorthBar } from './tabs/Tab7RiskMatrix';
 import { usePrivacyStore } from '../store/privacyStore';
+import { LoadFailure } from '../components/shared/LoadFailure';
+import { formatINR } from '../utils/currency';
 
 const ISSUE_LABELS: Record<string, string> = {
   UNVERIFIABLE_NAME: 'Unverified name',
@@ -114,8 +116,10 @@ function ReconciliationBanner({ issues }: { issues: ReconciliationIssue[] }) {
   );
 }
 
-const fmtINR = (n: number) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0, notation: n >= 1_00_00_000 ? 'compact' : 'standard' }).format(n || 0);
+// The hero used to switch to compact notation above ₹1 crore while <NetWorthBar/>, rendered
+// directly below it, printed the same figure in full — the one net worth appearing twice on one
+// screen as two different-looking numbers. Both now use the shared whole-rupee formatter.
+const fmtINR = formatINR;
 
 interface LinkCard { id: number; label: string; desc: string; Icon: typeof TrendingUp; tone: string }
 
@@ -138,6 +142,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
   const [otherIssues, setOtherIssues] = useState<ReconciliationIssue[]>([]);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   // Shared with the Topbar's eye toggle — one privacy switch controls every screen,
   // not a page-local one that resets when you navigate away.
   const masked = usePrivacyStore(s => s.masked);
@@ -153,6 +158,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
       ]);
       setSummary(trackingSummary);
       setWealth(wealthSummary);
+      setFailed(false);
       portfolioApi.integrityCheck().then(r => setIntegrityReport(r.data)).catch(() => {});
       // Portfolio-domain issues already surface via the banner above (with its own merge
       // action) — only show FD/RD/net-worth issues here, so nothing is flagged twice.
@@ -165,7 +171,11 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
         )).filter(Boolean) as PortfolioSummary[];
         setHoldingCount(summaries.flatMap(s => s.holdings ?? []).length);
       }
-    } catch {} finally { setLoading(false); }
+    } catch {
+      // Without this the hero rendered ₹0 as a statement of fact, under copy inviting the user to
+      // "add holdings" — when the real situation is that we could not reach the server.
+      setFailed(true);
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -190,14 +200,16 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
             <ShieldCheck size={13} className="text-bull" /> Your net worth today
           </div>
           <div className="flex items-center gap-3">
-            <div className="stat-value-hero">{masked ? '••••••' : fmtINR(netWorth)}</div>
+            <div className="stat-value-hero">{failed ? '—' : masked ? '••••••' : fmtINR(netWorth)}</div>
             <button onClick={toggleMasked} title={masked ? 'Show net worth' : 'Hide net worth'}
               className="btn-icon shrink-0">
               {masked ? <Eye size={16} /> : <EyeOff size={16} />}
             </button>
           </div>
           <p className="text-xs text-gray-500 mt-1.5">
-            {holdingCount > 0
+            {failed
+              ? 'Your figures could not be loaded — this is a connection problem, not an empty portfolio.'
+              : holdingCount > 0
               ? `Across ${holdingCount} holding${holdingCount !== 1 ? 's' : ''} and your tracked assets & liabilities.`
               : 'Add holdings under My Wealth to see your full picture here.'}
           </p>
@@ -207,7 +219,9 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
         </div>
       </div>
 
-      <NetWorthBar wealth={wealth} emi={summary?.totalMonthlyEmi ?? 0} />
+      {failed
+        ? <LoadFailure what="your net worth and holdings" onRetry={load} />
+        : <NetWorthBar wealth={wealth} emi={summary?.totalMonthlyEmi ?? 0} />}
 
       {/* ── Quick links — every module one tap away, no recommendation content duplicated here ── */}
       <div>

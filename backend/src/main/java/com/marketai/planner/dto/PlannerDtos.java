@@ -161,6 +161,8 @@ public class PlannerDtos {
         private BigDecimal totalPlanned;
         private BigDecimal totalAdded;
         private BigDecimal totalUsed;
+        /** Balance carried into January from every prior year — a fund does not restart at ₹0. */
+        private BigDecimal openingBalance;
         private BigDecimal endingBalance;
     }
 

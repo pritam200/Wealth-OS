@@ -249,4 +249,58 @@ class MfImportGuardTest {
 
         verify(portfolioService, never()).addHolding(any(), any(), any());
     }
+
+    private ParsedEmail redemption(BigDecimal units, BigDecimal nav) {
+        return ParsedEmail.builder()
+            .type(ParsedEmail.Type.MF_REDEEM)
+            .fundName("HDFC Flexi Cap Fund")
+            .units(units).nav(nav).amount(units.multiply(nav))
+            .tradeDate(LocalDate.of(2026, 9, 1))
+            .sourceDescription("CAMS redemption statement")
+            .build();
+    }
+
+    /**
+     * Regression: MF_SIP and MF_REDEEM were routed to the same handler, which only ever writes a
+     * BUY. A 500-unit redemption of a 1,000-unit position therefore left the holding reading
+     * 1,500 units, blended the cost basis against the redemption NAV, added the withdrawn money
+     * to net worth instead of removing it, and recorded no capital gain at all.
+     */
+    @Test
+    @DisplayName("a redemption reduces the position — it is never imported as a purchase")
+    void redemptionSellsRatherThanBuys() throws Exception {
+        when(portfolioService.findHoldingId(eq(1L), anyString())).thenReturn(42L);
+
+        importer.importParsedEmail(USER, new User(),
+            redemption(new BigDecimal("500"), new BigDecimal("42.50")), "redeem-1", null);
+
+        verify(portfolioService, never()).addHolding(any(), any(), any());
+        verify(portfolioService).sellHolding(eq(1L), eq(42L), eq(USER),
+            argThat(q -> q.compareTo(new BigDecimal("500")) == 0),
+            argThat(p -> p.compareTo(new BigDecimal("42.50")) == 0),
+            any());
+    }
+
+    @Test
+    @DisplayName("a redemption of an untracked fund is refused, not turned into a purchase")
+    void redemptionWithNoMatchingHoldingIsRefused() throws Exception {
+        when(portfolioService.findHoldingId(eq(1L), anyString())).thenReturn(null);
+
+        importer.importParsedEmail(USER, new User(),
+            redemption(new BigDecimal("500"), new BigDecimal("42.50")), "redeem-2", null);
+
+        // Neither side: no invented purchase, and no sale against a position we cannot identify
+        // (there would be no cost basis to compute a gain from).
+        verify(portfolioService, never()).addHolding(any(), any(), any());
+        verify(portfolioService, never()).sellHolding(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aSipIsStillImportedAsAPurchase() throws Exception {
+        importer.importParsedEmail(USER, new User(),
+            mf(new BigDecimal("100"), new BigDecimal("50"), new BigDecimal("5000")), "sip-1", null);
+
+        verify(portfolioService).addHolding(any(), any(), any());
+        verify(portfolioService, never()).sellHolding(any(), any(), any(), any(), any(), any());
+    }
 }

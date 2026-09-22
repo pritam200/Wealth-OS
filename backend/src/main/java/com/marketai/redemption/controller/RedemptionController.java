@@ -31,7 +31,7 @@ public class RedemptionController {
 
     @PostMapping("/{id}/reinvestments")
     public ResponseEntity<MfRedemption> recordReinvestment(
-            @AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody ReinvestmentRequest req) {
+            @AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody @jakarta.validation.Valid ReinvestmentRequest req) {
         return ResponseEntity.ok(redemptionService.recordReinvestment(
             user.getId(), id, req.getAmount(), req.getDate(), req.getTargetFund(), req.getNote()));
     }

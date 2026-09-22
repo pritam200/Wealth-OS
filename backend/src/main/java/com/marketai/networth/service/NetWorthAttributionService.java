@@ -68,8 +68,12 @@ public class NetWorthAttributionService {
         LocalDate start = opening.getSnapshotDate();
         LocalDate end = closing.getSnapshotDate();
 
-        BigDecimal income = sumIncome(userId, start, end);
-        BigDecimal expense = sumExpense(userId, start, end);
+        // start.plusDays(1): the repository queries are inclusive at both ends, and `start` is the
+        // opening snapshot's own date — whose net worth already reflects that day's activity. A
+        // ₹1,20,000 salary credited on the opening date was therefore counted twice, once inside
+        // the opening figure and again as income for the period.
+        BigDecimal income = sumIncome(userId, start.plusDays(1), end);
+        BigDecimal expense = sumExpense(userId, start.plusDays(1), end);
 
         BigDecimal change = closing.getNetWorth().subtract(opening.getNetWorth());
 

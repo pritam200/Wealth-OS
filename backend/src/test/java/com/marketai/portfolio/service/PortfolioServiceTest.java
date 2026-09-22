@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -212,6 +213,54 @@ class PortfolioServiceTest {
         assertThat(service.isDuplicateTrade(PORTFOLIO_ID, null, LocalDate.now(), BigDecimal.ONE, BigDecimal.ONE)).isFalse();
     }
 
+    /**
+     * Cross-user isolation. The portfolio is ownership-checked, but the holding used to be loaded
+     * by raw id, so pairing your own portfolio id with someone else's holding id let the write
+     * land on their position — a sell even booked the proceeds, derived from their cost basis,
+     * into your own income ledger. The lookup is now scoped to the portfolio, so a foreign
+     * holding id simply does not resolve.
+     */
+    @Test
+    void updateHoldingRefusesAHoldingThatIsNotInThisPortfolio() {
+        when(portfolioRepository.findByIdAndUserId(PORTFOLIO_ID, USER_ID))
+            .thenReturn(Optional.of(Portfolio.builder().id(PORTFOLIO_ID).build()));
+        when(holdingRepository.findByIdAndPortfolioId(9001L, PORTFOLIO_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.updateHolding(PORTFOLIO_ID, 9001L, USER_ID,
+                new BigDecimal("1"), new BigDecimal("1"), null, null, null, null, null, null))
+            .isInstanceOf(com.marketai.common.exception.ResourceNotFoundException.class);
+        verify(holdingRepository, never()).save(any(Holding.class));
+        verify(transactionRepository, never()).save(any(Transaction.class));
+    }
+
+    @Test
+    void sellHoldingRefusesAHoldingThatIsNotInThisPortfolio() {
+        when(portfolioRepository.findByIdAndUserId(PORTFOLIO_ID, USER_ID))
+            .thenReturn(Optional.of(Portfolio.builder().id(PORTFOLIO_ID).build()));
+        when(holdingRepository.findByIdAndPortfolioId(9001L, PORTFOLIO_ID)).thenReturn(Optional.empty());
+        com.marketai.income.repository.IncomeRepository incomeRepo =
+            mock(com.marketai.income.repository.IncomeRepository.class);
+
+        assertThatThrownBy(() -> service.sellHolding(PORTFOLIO_ID, 9001L, USER_ID,
+                new BigDecimal("999999"), new BigDecimal("1"), incomeRepo))
+            .isInstanceOf(com.marketai.common.exception.ResourceNotFoundException.class);
+        verify(incomeRepo, never()).save(any());
+        verify(holdingRepository, never()).delete(any(Holding.class));
+    }
+
+    @Test
+    void removeHoldingDoesNotDeleteAHoldingBelongingToAnotherPortfolio() {
+        // The old else-branch called deleteById unconditionally, which is reached precisely when
+        // the holding is NOT in the ownership-checked portfolio.
+        Portfolio portfolio = Portfolio.builder().id(PORTFOLIO_ID)
+            .holdings(new java.util.ArrayList<>()).build();
+        when(portfolioRepository.findByIdAndUserId(PORTFOLIO_ID, USER_ID)).thenReturn(Optional.of(portfolio));
+
+        assertThatThrownBy(() -> service.removeHolding(PORTFOLIO_ID, 9001L, USER_ID))
+            .isInstanceOf(com.marketai.common.exception.ResourceNotFoundException.class);
+        verify(holdingRepository, never()).deleteById(anyLong());
+    }
+
     @Test
     void sellHolding_computesPnlAndReducesQuantity() {
         Holding h = Holding.builder()
@@ -221,7 +270,7 @@ class PortfolioServiceTest {
             .build();
         Portfolio portfolio = Portfolio.builder().id(PORTFOLIO_ID).build();
         when(portfolioRepository.findByIdAndUserId(PORTFOLIO_ID, USER_ID)).thenReturn(Optional.of(portfolio));
-        when(holdingRepository.findById(5L)).thenReturn(Optional.of(h));
+        when(holdingRepository.findByIdAndPortfolioId(5L, PORTFOLIO_ID)).thenReturn(Optional.of(h));
         // quantity is now always re-derived by replaying the ledger (prior BUY + this SELL),
         // not by directly decrementing the field.
         when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L)).thenReturn(Arrays.asList(
@@ -255,7 +304,7 @@ class PortfolioServiceTest {
             .symbol("RELIANCE.NS").name("Reliance")
             .quantity(new BigDecimal("10")).averageCost(new BigDecimal("1000.00"))
             .build();
-        when(holdingRepository.findById(5L)).thenReturn(Optional.of(h));
+        when(holdingRepository.findByIdAndPortfolioId(5L, PORTFOLIO_ID)).thenReturn(Optional.of(h));
         when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L)).thenReturn(Arrays.asList(
             Transaction.builder().type(Transaction.TransactionType.BUY)
                 .quantity(new BigDecimal("10")).price(new BigDecimal("1000.00"))
@@ -283,7 +332,7 @@ class PortfolioServiceTest {
             .symbol("RELIANCE.NS").name("Reliance")
             .quantity(new BigDecimal("10")).averageCost(new BigDecimal("1000.00"))
             .build();
-        when(holdingRepository.findById(5L)).thenReturn(Optional.of(h));
+        when(holdingRepository.findByIdAndPortfolioId(5L, PORTFOLIO_ID)).thenReturn(Optional.of(h));
         when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L)).thenReturn(Arrays.asList(
             Transaction.builder().type(Transaction.TransactionType.BUY)
                 .quantity(new BigDecimal("10")).price(new BigDecimal("1000.00"))

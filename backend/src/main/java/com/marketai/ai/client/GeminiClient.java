@@ -23,6 +23,9 @@ public class GeminiClient {
     // Optional: Gemini is one of two providers behind LlmProviderRouter, and the default
     // (Ollama) needs no key at all. Declared with an empty default so a deployment that
     // never uses Gemini still starts.
+    /** Generous — hosted generation is slow — but finite. */
+    private static final java.time.Duration RESPONSE_TIMEOUT = java.time.Duration.ofSeconds(60);
+
     @Value("${app.gemini.api-key:}")
     private String apiKey;
 
@@ -79,7 +82,9 @@ public class GeminiClient {
                     .bodyValue(body)
                     .retrieve()
                     .bodyToMono(JsonNode.class)
-                    .block();
+                    // Bounded: a bare block() on a stalled socket pins the request thread
+                    // for the life of the process.
+                    .block(RESPONSE_TIMEOUT);
 
             return response.at("/candidates/0/content/parts/0/text").asText("No response from AI.");
 

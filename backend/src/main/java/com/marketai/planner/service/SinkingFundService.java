@@ -74,12 +74,24 @@ public class SinkingFundService {
         SinkingFund fund = fundRepository.findByIdAndUserId(fundId, userId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Fund not found"));
 
-        Map<String, SinkingFundEntry> byMonth = entryRepository.findByFundIdOrderByYearMonthAsc(fundId).stream()
+        List<SinkingFundEntry> allEntries = entryRepository.findByFundIdOrderByYearMonthAsc(fundId);
+        Map<String, SinkingFundEntry> byMonth = allEntries.stream()
             .collect(Collectors.toMap(SinkingFundEntry::getYearMonth, e -> e));
+
+        // A fund carrying ₹40,000 into January has ₹40,000 in January, not ₹0. Starting the
+        // running balance at zero reported a saved-up travel fund as empty every 1 January and
+        // made the year's ending balance wrong by the whole carry-over.
+        YearMonth firstOfYear = YearMonth.of(year, Month.JANUARY);
+        BigDecimal openingBalance = BigDecimal.ZERO;
+        for (SinkingFundEntry e : allEntries) {
+            YearMonth ym = parseYearMonth(e.getYearMonth());
+            if (ym == null || !ym.isBefore(firstOfYear)) continue;
+            openingBalance = openingBalance.add(nz(e.getAdded())).subtract(nz(e.getUsed()));
+        }
 
         List<SinkingFundLedgerRow> rows = new ArrayList<>();
         BigDecimal totalPlanned = BigDecimal.ZERO, totalAdded = BigDecimal.ZERO, totalUsed = BigDecimal.ZERO;
-        BigDecimal runningBalance = BigDecimal.ZERO;
+        BigDecimal runningBalance = openingBalance;
 
         for (Month m : Month.values()) {
             String ym = YearMonth.of(year, m).toString();
@@ -101,6 +113,7 @@ public class SinkingFundService {
         return SinkingFundLedgerResponse.builder()
             .fundId(fund.getId()).fundName(fund.getName()).year(year).rows(rows)
             .totalPlanned(totalPlanned).totalAdded(totalAdded).totalUsed(totalUsed)
+            .openingBalance(openingBalance)
             .endingBalance(runningBalance)
             .build();
     }
@@ -129,5 +142,14 @@ public class SinkingFundService {
             .id(f.getId()).name(f.getName()).monthlyPlanned(f.getMonthlyPlanned())
             .annualTarget(f.getAnnualTarget()).active(f.isActive())
             .build();
+    }
+
+    /** Entries store "2026-01"; a malformed value is skipped rather than aborting the ledger. */
+    private static YearMonth parseYearMonth(String value) {
+        try {
+            return value == null ? null : YearMonth.parse(value);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 }

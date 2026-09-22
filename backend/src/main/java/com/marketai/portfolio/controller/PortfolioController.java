@@ -110,9 +110,15 @@ public class PortfolioController {
 
     @PostMapping("/recalculate")
     @Operation(summary = "Force refresh all holding prices and recalculate portfolio metrics")
-    public ResponseEntity<Map<String, String>> recalculate(@AuthenticationPrincipal User user) {
-        portfolioService.refreshAllPrices(user.getId());
-        return ResponseEntity.ok(java.util.Collections.singletonMap("status", "recalculated"));
+    public ResponseEntity<Map<String, Object>> recalculate(@AuthenticationPrincipal User user) {
+        // Report what actually happened. A flat "recalculated" was returned even when every
+        // quote request failed, so a user whose prices were all stale was told they were fresh.
+        PortfolioService.RefreshOutcome outcome = portfolioService.refreshAllPrices(user.getId());
+        Map<String, Object> resp = new java.util.HashMap<>();
+        resp.put("status", outcome.completelyFailed() ? "no-prices-available" : "recalculated");
+        resp.put("symbolsAttempted", outcome.attempted());
+        resp.put("pricesUpdated", outcome.updated());
+        return ResponseEntity.ok(resp);
     }
 
     @GetMapping("/integrity-check")
@@ -137,10 +143,12 @@ public class PortfolioController {
     @Operation(summary = "Rebuild all holdings from transaction history — fixes quantity/avg cost mismatches and removes fully-sold stocks")
     public ResponseEntity<Map<String, Object>> rebuild(@AuthenticationPrincipal User user) {
         int fixed = portfolioService.rebuildHoldingsFromTransactions(user.getId());
-        portfolioService.refreshAllPrices(user.getId());
+        PortfolioService.RefreshOutcome outcome = portfolioService.refreshAllPrices(user.getId());
         Map<String, Object> resp = new java.util.HashMap<>();
         resp.put("status", "rebuilt");
         resp.put("holdingsFixed", fixed);
+        resp.put("symbolsAttempted", outcome.attempted());
+        resp.put("pricesUpdated", outcome.updated());
         return ResponseEntity.ok(resp);
     }
 

@@ -125,8 +125,16 @@ public class AiService {
                                .append(" | P&L: ").append(h.getPnlPercent()).append("%\n")
                 );
             }
+        } catch (com.marketai.common.exception.ResourceNotFoundException e) {
+            // Let this through as a 404. Swallowing it meant a request for a portfolio that isn't
+            // yours returned 200 with an AI-written "review" of nothing, and made a wrong id
+            // indistinguishable from a database failure.
+            throw e;
         } catch (Exception e) {
-            context.append("Could not load portfolio data.\n");
+            // Anything else is a genuine transient failure. Say so in the prompt rather than
+            // letting the model fill the gap, and log it — the exception used to be discarded.
+            log.warn("Portfolio {} data could not be loaded for AI review: {}", portfolioId, e.getMessage());
+            context.append("Could not load portfolio data — do not speculate about holdings.\n");
         }
 
         context.append("\nProvide: diversification analysis, underperformers to review, " +

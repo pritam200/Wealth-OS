@@ -9,9 +9,10 @@ import { scheduledInvestmentApi } from '../../api/scheduledInvestment';
 import type { RecurringInvestment } from '../../api/scheduledInvestment';
 import { StatTile } from '../../components/shared/StatTile';
 import { useMaskedText } from '../../components/shared/Amount';
+import { LoadFailure } from '../../components/shared/LoadFailure';
+import { formatINR } from '../../utils/currency';
 
-const fmtINR = (n: number) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
+const fmtINR = formatINR;
 
 export function Tab12Planning() {
   return (
@@ -144,7 +145,17 @@ export function RemindersPanel() {
   const maskText = useMaskedText();
   const [items, setItems] = useState<Reminder[]>([]);
   const [loading, setLoading] = useState(true);
-  useEffect(() => { reminderApi.list().then(r => setItems(r.data)).catch(() => {}).finally(() => setLoading(false)); }, []);
+  // An error here must not render as "Nothing due soon" — that tells someone with an overdue
+  // card bill the opposite of the truth.
+  const [failed, setFailed] = useState(false);
+  const load = useCallback(() => {
+    setLoading(true); setFailed(false);
+    reminderApi.list()
+      .then(r => setItems(r.data))
+      .catch(() => setFailed(true))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
 
   return (
     <div className="card">
@@ -155,6 +166,8 @@ export function RemindersPanel() {
       </div>
       {loading
         ? <div className="h-10 animate-pulse bg-surface-hover rounded" />
+        : failed
+        ? <LoadFailure what="your reminders" onRetry={load} />
         : !items.length
           ? <p className="text-gray-600 text-xs text-center py-4">Nothing due soon. FD maturities, RD installments and card bills will appear here automatically.</p>
           : (
@@ -192,7 +205,11 @@ function GoalsSection() {
   const blank = { name: '', category: 'Retirement', targetAmount: '', currentSaved: '', monthlyContribution: '', expectedReturn: '10', targetDate: '' };
   const [f, setF] = useState(blank);
 
-  const load = useCallback(async () => { try { setGoals((await goalApi.list()).data); } catch {} }, []);
+  const [failed, setFailed] = useState(false);
+  const load = useCallback(async () => {
+    try { setGoals((await goalApi.list()).data); setFailed(false); }
+    catch { setFailed(true); }
+  }, []);
   useEffect(() => { load(); }, [load]);
 
   const submit = async () => {
@@ -244,7 +261,9 @@ function GoalsSection() {
         </div>
       )}
 
-      {!goals.length
+      {failed
+        ? <LoadFailure what="your goals" onRetry={load} />
+        : !goals.length
         ? <p className="text-gray-600 text-xs text-center py-4">No goals yet. Add one to see if your SIP will get you there.</p>
         : (
           <div className="space-y-3">
@@ -291,7 +310,15 @@ function TaxSummary() {
   const maskText = useMaskedText();
   const [tax, setTax] = useState<TaxResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  useEffect(() => { taxApi.summary().then(r => setTax(r.data)).catch(() => {}).finally(() => setLoading(false)); }, []);
+  const [failed, setFailed] = useState(false);
+  const loadTax = useCallback(() => {
+    setLoading(true); setFailed(false);
+    taxApi.summary()
+      .then(r => setTax(r.data))
+      .catch(() => setFailed(true))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { loadTax(); }, [loadTax]);
 
   return (
     <div className="card">
@@ -300,7 +327,9 @@ function TaxSummary() {
         <h3 className="font-bold text-ink text-sm">Tax Summary</h3>
         {tax && <span className="text-2xs text-gray-600">{tax.fyLabel}</span>}
       </div>
-      {loading ? <div className="h-10 animate-pulse bg-surface-hover rounded" /> : !tax ? (
+      {loading ? <div className="h-10 animate-pulse bg-surface-hover rounded" /> : failed ? (
+        <LoadFailure what="your tax summary" onRetry={loadTax} />
+      ) : !tax ? (
         <p className="text-gray-600 text-xs text-center py-4">No taxable investment income recorded yet.</p>
       ) : (
         <>

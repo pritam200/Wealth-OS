@@ -16,6 +16,7 @@ import type { TrackingSummary } from '../../api/tracking';
 import { wealthApi } from '../../api/wealth';
 import type { PortfolioContext } from '../../api/wealth';
 import { PortfolioSection, NetWorthBar } from './Tab7RiskMatrix';
+import { LoadFailure } from '../../components/shared/LoadFailure';
 
 /* ─────────────────────────────────────────────────────────────
    MAIN TAB — MY WEALTH
@@ -25,9 +26,14 @@ export function Tab8MyWealth() {
   const [wealth, setWealth] = useState<PortfolioContext | null>(null);
   const [showImport, setShowImport] = useState(false);
 
+  // Both loads used to swallow their error, leaving wealth null — which renders a net worth of
+  // ₹0 and silently hides the trend chart, indistinguishable from a genuinely empty account.
+  const [failed, setFailed] = useState(false);
   const loadSummary = useCallback(async () => {
-    try { const { data } = await trackingApi.getSummary(); setSummary(data); } catch {}
-    try { const { data } = await wealthApi.getSummary(); setWealth(data); } catch {}
+    let anyFailed = false;
+    try { const { data } = await trackingApi.getSummary(); setSummary(data); } catch { anyFailed = true; }
+    try { const { data } = await wealthApi.getSummary(); setWealth(data); } catch { anyFailed = true; }
+    setFailed(anyFailed);
   }, []);
 
   useEffect(() => { loadSummary(); }, [loadSummary]);
@@ -60,9 +66,11 @@ export function Tab8MyWealth() {
         </button>
       </div>
 
-      <NetWorthBar wealth={wealth} emi={summary?.totalMonthlyEmi ?? 0} />
+      {failed
+        ? <LoadFailure what="your wealth summary" onRetry={loadSummary} />
+        : <NetWorthBar wealth={wealth} emi={summary?.totalMonthlyEmi ?? 0} />}
 
-      {totalAssets > 0 && <NetWorthTrend />}
+      {!failed && totalAssets > 0 && <NetWorthTrend />}
 
       {/* Asset breakdown — what you own, by class. Kept separate from the transaction
           ledger below it, which is the record of how it got that way. */}

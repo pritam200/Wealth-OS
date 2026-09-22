@@ -55,7 +55,10 @@ public class SpendAggregator {
 
     public SpendProfile aggregate(Long userId) {
         LocalDate to = LocalDate.now();
-        LocalDate from = to.minusDays(WINDOW_DAYS);
+        // WINDOW_DAYS - 1: the repository query is inclusive at both ends, so minusDays(90)
+        // actually spans 91 days while the annualisation below scales by 365/90 — overstating
+        // every projected annual spend by ~1.1%.
+        LocalDate from = to.minusDays(WINDOW_DAYS - 1);
 
         List<Expense> expenses =
             expenseRepository.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(userId, from, to);

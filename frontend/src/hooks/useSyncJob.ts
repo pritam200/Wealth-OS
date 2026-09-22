@@ -34,6 +34,14 @@ export function useSyncJob(onFinished?: (job: SyncJob) => void) {
 
   const poll = useCallback((id: number) => {
     const tick = async () => {
+      // Checked first, so it applies on the error path too. It used to sit only in the success
+      // branch, which meant a persistently failing poll re-armed itself every 4s forever —
+      // exactly what the cap above exists to prevent.
+      if (Date.now() - startedAt.current > MAX_POLL_MS) {
+        stop();
+        setError('Still running — stopped watching. Check sync history for the outcome.');
+        return;
+      }
       try {
         const { data } = await syncJobApi.get(id);
         setJob(data);
@@ -43,11 +51,6 @@ export function useSyncJob(onFinished?: (job: SyncJob) => void) {
           stop();
           if (data.status === 'FAILED') setError(data.lastError || 'Sync failed.');
           finishedRef.current?.(data);
-          return;
-        }
-        if (Date.now() - startedAt.current > MAX_POLL_MS) {
-          stop();
-          setError('Still running — stopped watching. Check sync history for the outcome.');
           return;
         }
         timer.current = window.setTimeout(tick, POLL_MS);

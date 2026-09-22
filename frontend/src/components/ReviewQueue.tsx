@@ -3,6 +3,7 @@ import { Inbox, Check, X, Pencil, Quote, ChevronDown, ChevronUp } from 'lucide-r
 import { reviewApi } from '../api/review';
 import type { EmailReviewItem } from '../api/review';
 import { useMaskedText } from './shared/Amount';
+import { LoadFailure } from './shared/LoadFailure';
 
 const fmt = (n: number | null | undefined) =>
   n == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -151,12 +152,15 @@ function ReviewRow({ item, onResolved }: { item: EmailReviewItem; onResolved: ()
 export function ReviewQueue() {
   const [items, setItems] = useState<EmailReviewItem[]>([]);
   const [loading, setLoading] = useState(true);
+  // Emptying the list on error told the user "Nothing waiting" — in the one place whose whole
+  // promise is that uncertain transactions land here instead of being dropped silently.
+  const [failed, setFailed] = useState(false);
 
   const load = useCallback(() => {
-    setLoading(true);
+    setLoading(true); setFailed(false);
     reviewApi.list()
       .then(r => setItems(r.data))
-      .catch(() => setItems([]))
+      .catch(() => setFailed(true))
       .finally(() => setLoading(false));
   }, []);
 
@@ -171,7 +175,9 @@ export function ReviewQueue() {
         {items.length > 0 && <span className="pill-neutral"><span className="font-mono tabular-nums">{items.length}</span> pending</span>}
       </div>
 
-      {items.length === 0 ? (
+      {failed ? (
+        <LoadFailure what="the review queue" onRetry={load} />
+      ) : items.length === 0 ? (
         <p className="text-xs text-gray-600 py-3">
           Nothing waiting. Emails whose financial content can't be read confidently land here
           instead of being dropped silently.

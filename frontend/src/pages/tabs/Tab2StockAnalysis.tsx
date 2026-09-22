@@ -2,11 +2,12 @@ import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { marketApi } from '../../api/market';
 import { portfolioApi } from '../../api/portfolio';
-import type { TechnicalAnalysis, Portfolio } from '../../types';
+import type { TechnicalAnalysis, Portfolio, PortfolioSummary } from '../../types';
 import { RefreshCw, Plus, X, Trash2, Upload, Download, LineChart } from 'lucide-react';
 import { format } from 'date-fns';
 import { HoldingTrendBadge } from '../../components/wealth/HoldingTrendBadge';
 import { useMaskedText } from '../../components/shared/Amount';
+import { LoadFailure } from '../../components/shared/LoadFailure';
 
 const DEFAULT_WATCHLIST = [
   'RELIANCE.NS','TCS.NS','HDFCBANK.NS','INFY.NS',
@@ -207,7 +208,8 @@ function MyPortfolioSection() {
   const maskText = useMaskedText();
   const navigate = useNavigate();
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
-  const [summary, setSummary] = useState<any>(null);
+  const [summary, setSummary] = useState<PortfolioSummary | null>(null);
+  const [failed, setFailed] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -222,14 +224,35 @@ function MyPortfolioSection() {
         setLoading(false);
         return;
       }
-      // pick the portfolio that actually holds positions (some may be empty duplicates)
+      // Merge every portfolio, matching Tab7RiskMatrix. This used to pick only the portfolio
+      // with the most rows, so holdings living in any other portfolio — a user can accumulate
+      // several, because each Gmail-import path resolves "the user's portfolio" independently —
+      // were silently dropped, and this screen reported a smaller invested/current total than
+      // Holdings & Signals did for the same account.
       const summaries = (await Promise.all(
         portfolios.map(pp => portfolioApi.getSummary(pp.id).then(r => ({ p: pp, s: r.data })).catch(() => null))
-      )).filter(Boolean) as { p: Portfolio; s: any }[];
-      const best = summaries.sort((a, b) => (b.s.holdings?.length ?? 0) - (a.s.holdings?.length ?? 0))[0];
-      setPortfolio(best?.p ?? portfolios[0]);
-      setSummary(best?.s ?? null);
-    } catch {}
+      )).filter(Boolean) as { p: Portfolio; s: PortfolioSummary }[];
+      if (!summaries.length) { setPortfolio(portfolios[0]); setSummary(null); setFailed(true); setLoading(false); return; }
+      const allHoldings = summaries.flatMap(x => x.s.holdings ?? []);
+      const totalInv = summaries.reduce((acc, x) => acc + (x.s.totalInvested ?? 0), 0);
+      const totalCur = summaries.reduce((acc, x) => acc + (x.s.currentValue ?? 0), 0);
+      // The portfolio identity still has to be a single one — it is what "add holding" posts to.
+      const primary = [...summaries].sort((a, b) => (b.s.holdings?.length ?? 0) - (a.s.holdings?.length ?? 0))[0];
+      setPortfolio(primary.p);
+      setSummary({
+        ...primary.s,
+        holdings: allHoldings,
+        totalInvested: totalInv,
+        currentValue: totalCur,
+        totalPnl: totalCur - totalInv,
+        totalPnlPercent: totalInv > 0 ? ((totalCur - totalInv) / totalInv) * 100 : 0,
+      });
+      setFailed(false);
+    } catch {
+      // A network failure used to render the "no holdings yet" empty state, which reads as a
+      // statement about the account rather than about the request.
+      setFailed(true);
+    }
     setLoading(false);
   };
 
@@ -238,9 +261,9 @@ function MyPortfolioSection() {
   if (loading) return <div className="card animate-pulse h-32" />;
 
   // Stock Analysis shows equities only — mutual funds live in the MF tab
-  const holdings = (summary?.holdings ?? []).filter((h: any) => !(h.symbol ?? '').endsWith('.MF'));
-  const totalInvested = holdings.reduce((s: number, h: any) => s + (h.investedValue ?? 0), 0);
-  const currentValue = holdings.reduce((s: number, h: any) => s + (h.currentValue ?? 0), 0);
+  const holdings = (summary?.holdings ?? []).filter(h => !(h.symbol ?? '').endsWith('.MF'));
+  const totalInvested = holdings.reduce((s, h) => s + (h.investedValue ?? 0), 0);
+  const currentValue = holdings.reduce((s, h) => s + (h.currentValue ?? 0), 0);
   const pnlPct = totalInvested > 0 ? ((currentValue - totalInvested) / totalInvested * 100) : 0;
 
   return (
@@ -272,9 +295,11 @@ function MyPortfolioSection() {
         </div>
       </div>
 
+      {failed && <div className="mb-3"><LoadFailure what="your holdings" onRetry={load} /></div>}
+
       {holdings.length === 0 ? (
         <div className="text-center py-10 text-gray-600">
-          <p className="text-sm">No stock holdings yet.</p>
+          <p className="text-sm">{failed ? 'Holdings could not be loaded.' : 'No stock holdings yet.'}</p>
           <p className="text-xs mt-1">Click "Add Stock Buy" to log your first purchase — past or present.</p>
         </div>
       ) : (
@@ -292,14 +317,14 @@ function MyPortfolioSection() {
               </tr>
             </thead>
             <tbody>
-              {holdings.map((h: any) => (
+              {holdings.map(h => (
                 <tr key={h.id} onClick={() => navigate(`/stock/${h.symbol}`)}>
                   <td>
                     <div className="font-mono text-ink font-medium">{h.symbol?.replace('.NS', '')}</div>
                     <div className="text-2xs text-gray-600 truncate max-w-[120px]">{h.name}</div>
                   </td>
                   <td className="text-right num text-gray-300">{maskText(h.quantity)}</td>
-                  <td className="text-right num text-gray-400">{maskText(fmtINR(h.avgPrice))}</td>
+                  <td className="text-right num text-gray-400">{maskText(fmtINR(h.averageCost))}</td>
                   <td className="text-right num text-ink">{maskText(fmtINR(h.currentPrice))}</td>
                   <td className="text-right num text-gray-400">{maskText(fmtINR(h.investedValue))}</td>
                   <td className="text-right num text-ink">{maskText(fmtINR(h.currentValue))}</td>

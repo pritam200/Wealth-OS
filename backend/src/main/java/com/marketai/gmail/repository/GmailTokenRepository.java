@@ -9,4 +9,7 @@ public interface GmailTokenRepository extends JpaRepository<GmailToken, Long> {
     Optional<GmailToken> findByUserId(Long userId);
     boolean existsByUserId(Long userId);
     List<GmailToken> findAll();
+
+    /** Resolves a push notification's mailbox without loading every connected account. */
+    Optional<GmailToken> findByConnectedEmailIgnoreCase(String connectedEmail);
 }

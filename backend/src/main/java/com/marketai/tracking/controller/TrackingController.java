@@ -37,7 +37,7 @@ public class TrackingController {
     }
 
     @PutMapping("/fd/{id}")
-    public ResponseEntity<FdResponse> updateFd(@AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody FdRequest req) {
+    public ResponseEntity<FdResponse> updateFd(@AuthenticationPrincipal User user, @PathVariable Long id, @Valid @RequestBody FdRequest req) {
         return ResponseEntity.ok(trackingService.updateFd(id, user.getId(), req));
     }
 
@@ -70,7 +70,7 @@ public class TrackingController {
     }
 
     @PutMapping("/rd/{id}")
-    public ResponseEntity<RdResponse> updateRd(@AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody RdRequest req) {
+    public ResponseEntity<RdResponse> updateRd(@AuthenticationPrincipal User user, @PathVariable Long id, @Valid @RequestBody RdRequest req) {
         return ResponseEntity.ok(trackingService.updateRd(id, user.getId(), req));
     }
 
@@ -103,7 +103,7 @@ public class TrackingController {
     }
 
     @PutMapping("/loan/{id}")
-    public ResponseEntity<LoanResponse> updateLoan(@AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody LoanRequest req) {
+    public ResponseEntity<LoanResponse> updateLoan(@AuthenticationPrincipal User user, @PathVariable Long id, @Valid @RequestBody LoanRequest req) {
         return ResponseEntity.ok(trackingService.updateLoan(id, user.getId(), req));
     }
 

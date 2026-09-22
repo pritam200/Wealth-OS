@@ -36,7 +36,7 @@ public class ExpenseController {
     @PostMapping
     public ResponseEntity<ExpenseResponse> addExpense(
             @AuthenticationPrincipal User user,
-            @RequestBody ExpenseRequest req) {
+            @RequestBody @jakarta.validation.Valid ExpenseRequest req) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(expenseService.addExpense(user.getId(), req));
     }
@@ -45,7 +45,7 @@ public class ExpenseController {
     public ResponseEntity<ExpenseResponse> updateExpense(
             @AuthenticationPrincipal User user,
             @PathVariable Long id,
-            @RequestBody ExpenseRequest req) {
+            @RequestBody @jakarta.validation.Valid ExpenseRequest req) {
         return ResponseEntity.ok(expenseService.updateExpense(user.getId(), id, req));
     }
 

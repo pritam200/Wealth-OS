@@ -30,6 +30,7 @@ class ImporterReferenceDedupTest {
 
     private ImportedTransactionFingerprintRepository fingerprintRepo;
     private com.marketai.portfolio.service.PortfolioService portfolioService;
+    private com.marketai.income.repository.IncomeRepository incomeRepo;
     private ParsedEmailImporter importer;
 
     private static final Long USER = 5L;
@@ -38,11 +39,12 @@ class ImporterReferenceDedupTest {
     void setUp() {
         fingerprintRepo = mock(ImportedTransactionFingerprintRepository.class);
         portfolioService = mock(com.marketai.portfolio.service.PortfolioService.class);
+        incomeRepo = mock(com.marketai.income.repository.IncomeRepository.class);
 
         importer = new ParsedEmailImporter(
             mock(com.marketai.tracking.service.TrackingService.class),
             portfolioService,
-            mock(com.marketai.income.repository.IncomeRepository.class),
+            incomeRepo,
             mock(com.marketai.expense.repository.ExpenseRepository.class),
             mock(com.marketai.card.repository.CreditCardRepository.class),
             mock(com.marketai.card.repository.CardStatementRepository.class),
@@ -116,7 +118,11 @@ class ImporterReferenceDedupTest {
         importer.importParsedEmail(USER, new User(), income("5000.00"), "msg-3",
             "Interest credited. UTR No: SBIN226091200999");
 
+        // The fingerprint being written proves dedup ran; only the income row proves the money
+        // was actually recorded. Asserting the fingerprint alone would pass even if the import
+        // silently dropped the ₹5,000.
         verify(fingerprintRepo).save(any());
+        assertThat(savedIncomeAmount()).isEqualByComparingTo("5000.00");
     }
 
     @Test
@@ -128,6 +134,7 @@ class ImporterReferenceDedupTest {
         // Behaviour must be identical to before this change when no reference is present.
         verify(fingerprintRepo).existsByUserIdAndFingerprint(eq(USER), anyString());
         verify(fingerprintRepo).save(any());
+        assertThat(savedIncomeAmount()).isEqualByComparingTo("5000.00");
     }
 
     @Test
@@ -137,6 +144,7 @@ class ImporterReferenceDedupTest {
 
         verify(fingerprintRepo).existsByUserIdAndFingerprint(eq(USER), anyString());
         verify(fingerprintRepo).save(any());
+        assertThat(savedIncomeAmount()).isEqualByComparingTo("5000.00");
     }
 
     @Test
@@ -154,5 +162,13 @@ class ImporterReferenceDedupTest {
         assertThat(saved.getValue().getExternalRef()).isNull();
         verify(fingerprintRepo, never())
             .findFirstByUserIdAndExternalRefAndExternalRefType(any(), any(), any());
+    }
+
+    /** The amount of the single Income row this import created. */
+    private java.math.BigDecimal savedIncomeAmount() {
+        ArgumentCaptor<com.marketai.income.entity.Income> captor =
+            ArgumentCaptor.forClass(com.marketai.income.entity.Income.class);
+        verify(incomeRepo).save(captor.capture());
+        return captor.getValue().getAmount();
     }
 }

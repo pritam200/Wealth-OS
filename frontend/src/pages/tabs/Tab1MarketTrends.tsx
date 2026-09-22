@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { marketApi } from '../../api/market';
 import type { MarketOverview, IndexQuote } from '../../types';
 import { TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react';
+import { LoadFailure } from '../../components/shared/LoadFailure';
 
 const fmtPct = (n: number | null | undefined) =>
   n == null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
@@ -121,11 +122,21 @@ export function Tab1MarketTrends() {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    marketApi.getOverview().then(r => setOverview(r.data)).finally(() => setLoading(false));
-    const t = setInterval(() => marketApi.getOverview().then(r => setOverview(r.data)).catch(() => {}), 60_000);
-    return () => clearInterval(t);
+  // This is the app's landing tab. The initial fetch had no .catch at all, so a failure was an
+  // unhandled rejection and the page rendered an empty ticker and no sectors with nothing said.
+  const [failed, setFailed] = useState(false);
+  const load = useCallback(() => {
+    marketApi.getOverview()
+      .then(r => { setOverview(r.data); setFailed(false); })
+      .catch(() => setFailed(true))
+      .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60_000);
+    return () => clearInterval(t);
+  }, [load]);
 
   if (loading) return (
     <div className="space-y-4">
@@ -144,6 +155,7 @@ export function Tab1MarketTrends() {
 
   return (
     <div className="space-y-4">
+      {failed && <LoadFailure what="live market data" onRetry={load} />}
       <TickerRibbon indices={[
         { label: 'NIFTY 50', index: overview?.nifty50 },
         { label: 'BANK NIFTY', index: overview?.bankNifty },

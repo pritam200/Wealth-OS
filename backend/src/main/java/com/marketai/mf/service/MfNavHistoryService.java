@@ -90,7 +90,7 @@ public class MfNavHistoryService {
                     .header("Accept", "application/json")
                     .retrieve()
                     .bodyToMono(JsonNode.class)
-                    .block();
+                    .block(java.time.Duration.ofSeconds(30));
 
             if (root == null) {
                 log.warn("MFAPI returned no body for scheme {}", schemeCode);
