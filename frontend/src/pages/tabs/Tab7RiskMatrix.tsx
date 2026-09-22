@@ -97,7 +97,7 @@ export function PortfolioSection({ onValues, showSignal = false, only }: { onVal
             title="Recalculate all holdings from transaction history — fixes quantity/P&L mismatches">
             {rebuilding ? 'Rebuilding…' : 'Rebuild'}
           </button>
-          <button onClick={() => load()} className="btn-icon"><RefreshCw size={12} /></button>
+          <button aria-label="Refresh" onClick={() => load()} className="btn-icon"><RefreshCw size={12} /></button>
         </div>
       </div>
       {loading

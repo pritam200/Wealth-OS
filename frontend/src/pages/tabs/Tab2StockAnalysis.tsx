@@ -132,7 +132,7 @@ function AddStockModal({ portfolioId, onClose, onAdded }: {
             <h3 className="font-semibold text-ink">Add Stock Holding</h3>
             <p className="text-2xs text-gray-600 mt-0.5">Log a historical or new purchase</p>
           </div>
-          <button onClick={onClose} className="btn-icon"><X size={16} /></button>
+          <button aria-label="Close" onClick={onClose} className="btn-icon"><X size={16} /></button>
         </div>
         <div className="p-6 space-y-4">
           {error && <p className="text-bear text-sm bg-bear/10 px-3 py-2 rounded">{error}</p>}
@@ -385,7 +385,7 @@ function WatchlistSection() {
             onKeyDown={e => e.key === 'Enter' && addSymbol()}
             placeholder="Add symbol…" className="input-field w-36 text-xs py-1" />
           <button onClick={addSymbol} className="btn-ghost text-xs py-1 px-2"><Plus size={13} /></button>
-          <button onClick={() => load(watchlist)} className="btn-icon"><RefreshCw size={13} /></button>
+          <button aria-label="Refresh" onClick={() => load(watchlist)} className="btn-icon"><RefreshCw size={13} /></button>
         </div>
       </div>
       {loading ? (
@@ -426,8 +426,14 @@ function WatchlistSection() {
                         can never show a different signal for a symbol than Stocks/MF or
                         AI Advisor do, closing the last independently-coded signal source. */}
                     <td className="text-center"><HoldingTrendBadge symbol={sym} /></td>
-                    <td onClick={e => { e.stopPropagation(); setWatchlist(wl => wl.filter(s => s !== sym)); }}>
-                      <button className="btn-icon text-gray-700 hover:text-bear"><Trash2 size={12} /></button>
+                    {/* The handler belongs on the button, not the cell: a keyboard user could
+                        not reach it before, and the button itself did nothing — it worked only
+                        because the click bubbled up from a decorative element. */}
+                    <td>
+                      <button
+                        aria-label={`Remove ${sym.replace('.NS', '')} from watchlist`}
+                        onClick={e => { e.stopPropagation(); setWatchlist(wl => wl.filter(s => s !== sym)); }}
+                        className="btn-icon text-gray-700 hover:text-bear"><Trash2 size={12} /></button>
                     </td>
                   </tr>
                 );

@@ -114,7 +114,7 @@ function ScheduledInvestmentsSection() {
                   <span className="text-ink text-xs font-medium truncate max-w-[160px]">{i.label}</span>
                   <span className="text-2xs text-gray-500 font-mono">{maskText(fmtINR(i.amount))}/mo</span>
                 </div>
-                <button onClick={async () => { await scheduledInvestmentApi.delete(i.id); load(); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                <button aria-label="Delete" onClick={async () => { await scheduledInvestmentApi.delete(i.id); load(); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
               </div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {i.installments.slice(-8).map((inst, idx) => (
@@ -280,7 +280,7 @@ function GoalsSection() {
                         {g.status === 'ON_TRACK' ? 'On track' : g.status === 'ACHIEVED' ? 'Achieved' : 'Shortfall'}
                       </span>
                     </div>
-                    <button onClick={async () => { await goalApi.delete(g.id); load(); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                    <button aria-label="Delete" onClick={async () => { await goalApi.delete(g.id); load(); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                   </div>
                   <div className="flex justify-between text-2xs text-gray-500 mb-1">
                     <span>{maskText(fmtINR(g.currentSaved))} of {maskText(fmtINR(g.targetAmount))}</span>
