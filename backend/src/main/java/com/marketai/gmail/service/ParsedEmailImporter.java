@@ -41,6 +41,7 @@ public class ParsedEmailImporter {
     private final com.marketai.gmail.repository.ImportedTransactionFingerprintRepository fingerprintRepo;
     private final com.marketai.document.identity.ReferenceHarvester referenceHarvester;
     private final TransactionMatchScorer matchScorer;
+    private final com.marketai.rent.service.RentService rentService;
 
     public void importParsedEmail(Long userId, User user, ParsedEmail pe) throws Exception {
         importParsedEmail(userId, user, pe, null);
@@ -360,6 +361,13 @@ public class ParsedEmailImporter {
             log.debug("Skipping duplicate expense: {} on {} for ₹{}", desc, date, pe.getAmount());
             return;
         }
+        if (looksLikeRent(merchant, desc, pe.getCategory())) {
+            // Rent has its own ledger (RentSchedule/Rent) so a schedule-generated "Upcoming"
+            // placeholder and its real payment stay one row, not a placeholder plus a second
+            // Expense row — see RentService.matchOrCreateFromGmail.
+            rentService.matchOrCreateFromGmail(userId, pe.getAmount(), date, merchant, gmailMessageId);
+            return;
+        }
         expenseRepo.save(com.marketai.expense.entity.Expense.builder()
             .userId(userId)
             .description(desc)
@@ -373,12 +381,29 @@ public class ParsedEmailImporter {
             .build());
     }
 
+    /** Rent detection is deliberately keyword-based, not a full classifier — a false negative
+     *  just means the payment lands as an ordinary Expense (already correct behaviour today),
+     *  so this only needs to catch the obvious cases without risking a false positive that
+     *  would silently reroute an unrelated expense into the rent ledger. */
+    private boolean looksLikeRent(String merchant, String description, String category) {
+        return containsRent(merchant) || containsRent(description) || containsRent(category);
+    }
+
+    private boolean containsRent(String s) {
+        return s != null && s.toLowerCase().contains("rent");
+    }
+
     private boolean isDuplicateExpense(Long userId, BigDecimal amount, LocalDate date, String merchant, String gmailMessageId) {
+        // Checked directly, not only via the same-day scan below. A parser that couldn't extract
+        // a transaction date falls back to "today" (see importExpense), so the same email
+        // re-synced on three different days previously produced three rows dated three different
+        // days — each one outside the other two's same-day window, so the amount/merchant check
+        // below never saw them and the gmailMessageId check on line below never ran against them.
+        if (gmailMessageId != null && expenseRepo.existsByUserIdAndSourceEmailId(userId, gmailMessageId)) return true;
         if (amount == null || date == null) return false;
         List<com.marketai.expense.entity.Expense> existing =
             expenseRepo.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(userId, date, date);
         for (com.marketai.expense.entity.Expense e : existing) {
-            if (gmailMessageId != null && gmailMessageId.equals(e.getSourceEmailId())) return true;
             if (e.getAmount().compareTo(amount) == 0) {
                 if (merchant != null && merchant.equalsIgnoreCase(e.getMerchant())) return true;
                 if (merchant != null && merchant.equalsIgnoreCase(e.getDescription())) return true;
@@ -388,11 +413,13 @@ public class ParsedEmailImporter {
     }
 
     private boolean isDuplicateIncome(Long userId, BigDecimal amount, LocalDate date, String desc, String gmailMessageId) {
+        // See isDuplicateExpense — same fix, same reason: a message-id match must not depend on
+        // the fallback-dated row still being inside today's date window.
+        if (gmailMessageId != null && incomeRepo.existsByUserIdAndSourceEmailId(userId, gmailMessageId)) return true;
         if (amount == null || date == null) return false;
         List<com.marketai.income.entity.Income> existing =
             incomeRepo.findByUserIdAndIncomeDateBetweenOrderByIncomeDateDesc(userId, date, date);
         for (com.marketai.income.entity.Income i : existing) {
-            if (gmailMessageId != null && gmailMessageId.equals(i.getSourceEmailId())) return true;
             if (i.getAmount().compareTo(amount) == 0 && desc != null && desc.equalsIgnoreCase(i.getDescription())) return true;
             if (i.getAmount().compareTo(amount) == 0 && com.marketai.income.entity.IncomeSource.DIVIDEND == i.getSource()
                     && desc != null && desc.toLowerCase().contains("dividend")) return true;
@@ -424,12 +451,44 @@ public class ParsedEmailImporter {
             return;
         }
 
+        // The document's own internal redundancy is the strongest available check on a
+        // statement figure — far stronger than the extractor's own confidence, because a
+        // misread digit almost always breaks the identity the statement itself asserts. Only
+        // run it when every operand was actually found; a statement template that omits the
+        // cycle debit/credit breakdown simply isn't checked, rather than treated as a failure.
+        //
+        // ArithmeticValidator.statementBalances(opening, credits, debits, closing) models a bank
+        // account, where a credit INCREASES the balance and a debit DECREASES it. A credit card
+        // is the opposite polarity: a purchase (cycleDebits) INCREASES what is owed, and a
+        // payment (cycleCredits) DECREASES it. So the card's "purchases" fill the generic
+        // method's "credits" slot and its "payments" fill the "debits" slot — previous +
+        // purchases − payments = new due is the same identity, just relabelled for debt instead
+        // of a balance.
+        Boolean arithmeticMismatch = null;
+        String arithmeticMismatchDetail = null;
+        if (pe.getPreviousBalance() != null && pe.getCycleCredits() != null
+                && pe.getCycleDebits() != null) {
+            com.marketai.document.confidence.ArithmeticValidator.Check check =
+                com.marketai.document.confidence.ArithmeticValidator.statementBalances(
+                    pe.getPreviousBalance(), pe.getCycleDebits(), pe.getCycleCredits(), pe.getAmount());
+            arithmeticMismatch = !check.passed();
+            arithmeticMismatchDetail = check.detail();
+            if (arithmeticMismatch) {
+                log.warn("Card statement arithmetic mismatch for card {} (source {}): {}",
+                    card.getName(), gmailMessageId, check.detail());
+            }
+        }
+
         cardStatementRepo.save(com.marketai.card.entity.CardStatement.builder()
             .cardId(card.getId())
             .userId(userId)
             .statementDate(pe.getStatementDate())
             .dueDate(pe.getDueDate())
             .totalDue(pe.getAmount())
+            .minimumDue(pe.getMinimumDue())
+            .previousBalance(pe.getPreviousBalance())
+            .arithmeticMismatch(arithmeticMismatch)
+            .arithmeticMismatchDetail(arithmeticMismatchDetail)
             .sourceEmailId(gmailMessageId)
             .build());
 

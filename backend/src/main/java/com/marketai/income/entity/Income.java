@@ -10,7 +10,14 @@ import java.time.LocalDateTime;
 @Table(name = "incomes", indexes = {
     @Index(name = "idx_income_user", columnList = "user_id"),
     @Index(name = "idx_income_date", columnList = "income_date")
-})
+    },
+    // NULL source_email_id (a manual entry) is not constrained by this — Postgres treats every
+    // NULL as distinct in a unique index, so only two rows citing the SAME email can collide.
+    // Safe to add only after the live cross-day-fallback duplicates were cleaned up (see
+    // docs/DUPLICATE_DATA_CLEANUP_2026-09-23.md) — the underlying dedup bug is fixed in
+    // ParsedEmailImporter.isDuplicateIncome.
+    uniqueConstraints = @UniqueConstraint(name = "uq_income_user_source_email",
+        columnNames = {"user_id", "source_email_id"}))
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 public class Income {
 

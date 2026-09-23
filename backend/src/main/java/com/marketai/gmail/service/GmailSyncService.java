@@ -59,6 +59,7 @@ public class GmailSyncService {
     private final com.marketai.ai.intel.EmailIntelAgent emailIntelAgent;
     private final com.marketai.ai.review.service.EmailReviewService emailReviewService;
     private final com.marketai.ai.llm.LlmProviderRouter llmRouter;
+    private final com.marketai.document.classify.SubjectPatternStage subjectPatternStage;
 
     @Value("${app.gmail.ai-fallback.enabled:true}")
     private boolean aiFallbackEnabled;
@@ -179,18 +180,34 @@ public class GmailSyncService {
                 String msgId = message.getId();
                 ProcessedEmail existing = processedRepo.findByUserIdAndGmailMessageId(userId, msgId).orElse(null);
                 if (existing != null) {
-                    if (!"FAILED".equals(existing.getStatus())) {
+                    // Only two outcomes are genuinely terminal: a completed import, and a sender
+                    // the user deliberately excluded. Everything else — FAILED (transient error),
+                    // SKIPPED/UNKNOWN (no parser matched at the time — a later parser or a
+                    // recovered LLM should get another chance), and REVIEW/REVIEW_REQUIRED
+                    // (sender-trust hold-back or low-confidence classification — re-running is
+                    // safe because EmailReviewService.enqueue() is a no-op once the user has
+                    // resolved the item) must be retried on every sync, or the underlying
+                    // transaction is silently and permanently dropped. A PDF already queued for
+                    // password resolution keeps its own retry lifecycle in PendingPdf, so it is
+                    // not re-queued here.
+                    // A SKIPPED row created when this email was queued for human review stays
+                    // SKIPPED forever even after the review item is resolved — decide() only
+                    // updates EmailReviewItem, never this row (see EmailReviewService.decide()).
+                    // Without checking the review queue directly, an already-judged email would
+                    // be re-fetched and re-parsed on every sync indefinitely.
+                    boolean permanentlyResolved = "IMPORTED".equals(existing.getStatus())
+                        || "EXCLUDED".equals(existing.getType())
+                        || "PendingPdf".equals(existing.getMatchedParser())
+                        || ("SKIPPED".equals(existing.getStatus()) && emailReviewService.isFullyResolved(userId, msgId));
+                    if (permanentlyResolved) {
                         skipped++;
                         duplicatesSkipped++;
                         continue;
                     }
-                    // A previous attempt at this email left it FAILED (transient error — parser
-                    // exception, DB hiccup). Unlike a genuinely-processed email, this must be
-                    // retried on every sync, not permanently skipped — otherwise the underlying
-                    // transaction is silently and permanently dropped. Fall through and reprocess;
                     // saveProcessed() below updates this same row rather than inserting a new one
                     // (the (user_id, gmail_message_id) unique constraint would otherwise reject it).
-                    log.info("Retrying previously FAILED email {} for user {}", msgId, userId);
+                    log.info("Retrying previously unresolved email {} for user {} (status={})",
+                        msgId, userId, existing.getStatus());
                 }
                 // A forwarded/resent email gets a NEW Gmail message id, so this check alone
                 // won't catch it — but ParsedEmailImporter's own content-keyed checks
@@ -346,10 +363,19 @@ public class GmailSyncService {
                         String providerKey = providerKeyOf(from);
                         String hint = passwordHintExtractor.extract(subject, body, providerKey);
                         if (hint == null) hint = pdfImportService.findKnownHint(userId, providerKey);
+                        // Best-effort subject-line classification, so password learning can
+                        // tell a card statement apart from a bank statement from the same
+                        // sender domain instead of assuming one password fits every statement
+                        // kind that institution ever sends.
+                        String documentType = subjectPatternStage
+                            .classify(com.marketai.document.classify.ClassificationCandidate.email(from, subject, null))
+                            .map(com.marketai.document.classify.DocumentClassification::docType)
+                            .orElse(null);
                         PendingPdf savedPdf = pendingPdfRepo.save(PendingPdf.builder()
                             .userId(userId).gmailMessageId(msgId).attachmentId(pdf.attachmentId)
                             .filename(pdf.filename).sender(from).subject(subject)
                             .providerKey(providerKey)
+                            .documentType(documentType)
                             .passwordHint(hint)
                             .build());
                         log.info("NEW PendingPdf created: id={}, file={}, provider={}, hint={}", savedPdf.getId(), pdf.filename, providerKey, hint);
@@ -419,19 +445,26 @@ public class GmailSyncService {
                     steps.add("Sender authority check failed: " + trust.detail());
                     log.warn("Blocked auto-import for user {} message {}: {}", userId, msgId, trust.detail());
 
-                    // Nothing is dropped. Each parsed item becomes a review row the user can
-                    // accept if the sender is in fact legitimate.
-                    for (ParsedEmail pe : parsed) {
-                        emailReviewService.enqueue(userId, msgId, from, subject,
+                    // Nothing is dropped. Each parsed item becomes its OWN review row — keyed by
+                    // (message, item index) rather than just the message id — the user can
+                    // accept if the sender is in fact legitimate. Previously every item in this
+                    // loop shared one key, so item N overwrote item N-1 and only the last of a
+                    // multi-trade contract note ever reached the queue.
+                    for (int itemIdx = 0; itemIdx < parsed.size(); itemIdx++) {
+                        ParsedEmail pe = parsed.get(itemIdx);
+                        String itemNote = parsed.size() > 1
+                            ? String.format(" (item %d of %d in this email)", itemIdx + 1, parsed.size())
+                            : "";
+                        emailReviewService.enqueue(userId, msgId, itemIdx, from, subject,
                             EmailIntelResult.builder()
                                 .outcome(EmailIntelResult.Outcome.REVIEW_REQUIRED)
                                 .type(EmailIntelType.UNKNOWN)
                                 .parsed(pe)
-                                .reviewReason("Sender could not be verified — " + trust.detail())
+                                .reviewReason("Sender could not be verified — " + trust.detail() + itemNote)
                                 .reasoning("Held back by the sender authority check rather than the "
                                     + "classifier. " + matchedParser + " read this email, but the "
                                     + "sending domain does not belong to the issuer the header claims. "
-                                    + "Accept only if you recognise this sender as genuine.")
+                                    + "Accept only if you recognise this sender as genuine." + itemNote)
                                 .build());
                         queuedForReview++;
                     }

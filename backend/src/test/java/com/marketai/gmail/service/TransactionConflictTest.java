@@ -52,7 +52,7 @@ class TransactionConflictTest {
             mock(com.marketai.tracking.repository.FixedDepositRepository.class),
             mock(com.marketai.tracking.repository.RecurringDepositRepository.class),
             new TransactionFingerprinter(), fpRepo, new ReferenceHarvester(),
-            mock(TransactionMatchScorer.class));
+            mock(TransactionMatchScorer.class), mock(com.marketai.rent.service.RentService.class));
 
         when(fpRepo.existsByUserIdAndFingerprint(any(), anyString())).thenReturn(false);
         when(fpRepo.save(any())).thenAnswer(i -> i.getArgument(0));

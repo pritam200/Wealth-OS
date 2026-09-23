@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface CardStatementRepository extends JpaRepository<CardStatement, Long> {
     List<CardStatement> findByCardIdOrderByDueDateDesc(Long cardId);
+    List<CardStatement> findByUserIdAndArithmeticMismatchTrue(Long userId);
 }

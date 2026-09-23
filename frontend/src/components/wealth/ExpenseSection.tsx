@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { ShoppingCart, Plus, Edit2, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { expenseApi, EXPENSE_CATEGORIES } from '../../api/expense';
 import type { ExpenseResponse, ExpenseSummary } from '../../api/expense';
+import { ledgerApi } from '../../api/ledger';
+import type { CashAccount } from '../../api/ledger';
 import { useMaskedText } from '../shared/Amount';
 import { TransactionDetail } from '../shared/TransactionDetail';
 import { categoryColor } from '../../theme/chartTheme';
@@ -17,10 +19,12 @@ export function ExpenseSection() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [items, setItems] = useState<ExpenseResponse[]>([]);
   const [summary, setSummary] = useState<ExpenseSummary | null>(null);
+  const [accounts, setAccounts] = useState<CashAccount[]>([]);
   const [open, setOpen]   = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const blank = { description: '', amount: '', category: 'Food', expenseDate: today(), note: '' };
+  const blank = { description: '', amount: '', category: 'Food', expenseDate: today(),
+    merchant: '', paymentMethod: '', cashAccountId: '', note: '' };
   const [f, setF] = useState(blank);
   const [editId, setEditId] = useState<number | null>(null);
   const [detail, setDetail] = useState<ExpenseResponse | null>(null);
@@ -37,6 +41,7 @@ export function ExpenseSection() {
   }, [year, month]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { ledgerApi.accounts().then(r => setAccounts(r.data)).catch(() => {}); }, []);
 
   const prevMonth = () => { if (month === 1) { setYear(y => y - 1); setMonth(12); } else setMonth(m => m - 1); };
   const nextMonth = () => { if (month === 12) { setYear(y => y + 1); setMonth(1); } else setMonth(m => m + 1); };
@@ -51,6 +56,9 @@ export function ExpenseSection() {
         amount: Number(f.amount),
         category: f.category,
         expenseDate: f.expenseDate || today(),
+        merchant: f.merchant || undefined,
+        paymentMethod: f.paymentMethod || undefined,
+        cashAccountId: f.cashAccountId ? Number(f.cashAccountId) : undefined,
         note: f.note || undefined,
       };
       if (editId) await expenseApi.update(editId, req); else await expenseApi.add(req);
@@ -62,7 +70,8 @@ export function ExpenseSection() {
   const startEdit = (e: ExpenseResponse) => {
     setEditId(e.id); setOpen(true);
     setF({ description: e.description, amount: String(e.amount), category: e.category,
-      expenseDate: e.expenseDate, note: e.note || '' });
+      expenseDate: e.expenseDate, merchant: e.merchant || '', paymentMethod: e.paymentMethod || '',
+      cashAccountId: e.cashAccountId ? String(e.cashAccountId) : '', note: e.note || '' });
   };
 
   const del = async (id: number) => {
@@ -114,6 +123,25 @@ export function ExpenseSection() {
               <label className="stat-label block mb-1 text-2xs">Date</label>
               <input type="date" value={f.expenseDate} onChange={e => setF(x => ({ ...x, expenseDate: e.target.value }))} className="input-field text-xs" />
             </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="stat-label block mb-1 text-2xs">Merchant</label>
+              <input value={f.merchant} onChange={e => setF(x => ({ ...x, merchant: e.target.value }))}
+                placeholder="Swiggy" className="input-field text-xs" />
+            </div>
+            <div>
+              <label className="stat-label block mb-1 text-2xs">Payment method</label>
+              <input value={f.paymentMethod} onChange={e => setF(x => ({ ...x, paymentMethod: e.target.value }))}
+                placeholder="UPI, Card, Cash…" className="input-field text-xs" />
+            </div>
+          </div>
+          <div>
+            <label className="stat-label block mb-1 text-2xs">Paid from account</label>
+            <select value={f.cashAccountId} onChange={e => setF(x => ({ ...x, cashAccountId: e.target.value }))} className="input-field text-xs w-full">
+              <option value="">Unspecified</option>
+              {accounts.map(a => <option key={a.id} value={a.id}>{a.name}{a.bank ? ` (${a.bank})` : ''}</option>)}
+            </select>
           </div>
           <input value={f.note} onChange={e => setF(x => ({ ...x, note: e.target.value }))}
             placeholder="Note (optional)" className="input-field text-xs w-full" />
@@ -195,6 +223,7 @@ export function ExpenseSection() {
             { label: 'Category', value: detail.category },
             { label: 'Date', value: detail.expenseDate },
             { label: 'Payment Method', value: detail.paymentMethod },
+            { label: 'Account', value: accounts.find(a => a.id === detail.cashAccountId)?.name },
             { label: 'Source', value: detail.sourceEmailId ? 'Auto-imported from email' : 'Manual entry' },
             { label: 'Note', value: detail.note },
           ]}

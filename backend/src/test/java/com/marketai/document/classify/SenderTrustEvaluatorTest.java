@@ -80,6 +80,22 @@ class SenderTrustEvaluatorTest {
         assertThat(a.detail()).contains("No parseable sender");
     }
 
+    @ParameterizedTest
+    @DisplayName("a genuine issuer domain variant missing from the registry is verified, not "
+        + "flagged as impersonation — these are real senders a live audit found blocked")
+    @ValueSource(strings = {
+        "\"Kotak Securities\" <noreply@kotaksecurities.com>",
+        "<statements@angelbroking.in>",
+        "<cas@camsonline.co.in>",
+        "\"HDFC Bank\" <alerts@hdfcbank.bank.in>"
+    })
+    void previouslyMissingIssuerDomainVariantsAreNowVerified(String from) {
+        var a = evaluator.evaluate(from);
+
+        assertThat(a.trust()).isEqualTo(SenderTrust.VERIFIED_DOMAIN);
+        assertThat(a.permitsAutoImport()).isTrue();
+    }
+
     @Test
     void subdomainsOfAKnownIssuerAreVerified() {
         assertThat(evaluator.evaluate("\"Zerodha\" <alerts@mail.zerodha.com>").trust())

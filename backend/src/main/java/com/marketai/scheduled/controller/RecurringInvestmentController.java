@@ -3,6 +3,7 @@ package com.marketai.scheduled.controller;
 import com.marketai.auth.entity.User;
 import com.marketai.scheduled.dto.RecurringInvestmentRequest;
 import com.marketai.scheduled.dto.RecurringInvestmentResponse;
+import com.marketai.scheduled.dto.RecurringInvestmentUpdateRequest;
 import com.marketai.scheduled.service.RecurringInvestmentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -28,6 +29,13 @@ public class RecurringInvestmentController {
     public ResponseEntity<RecurringInvestmentResponse> add(
             @AuthenticationPrincipal User user, @RequestBody RecurringInvestmentRequest req) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.add(user.getId(), req));
+    }
+
+    @PatchMapping("/{id}")
+    public ResponseEntity<RecurringInvestmentResponse> update(
+            @AuthenticationPrincipal User user, @PathVariable Long id,
+            @RequestBody RecurringInvestmentUpdateRequest req) {
+        return ResponseEntity.ok(service.update(user.getId(), id, req));
     }
 
     @DeleteMapping("/{id}")

@@ -31,6 +31,14 @@ public class ExpenseRequest {
 
     private LocalDate expenseDate;
 
+    @Size(max = 200)
+    private String merchant;
+
+    @Size(max = 100)
+    private String paymentMethod;
+
+    private Long cashAccountId;
+
     @Size(max = 500)
     private String note;
 }

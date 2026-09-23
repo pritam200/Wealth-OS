@@ -27,10 +27,13 @@ public class ExpenseService {
     @Transactional
     public ExpenseResponse addExpense(Long userId, ExpenseRequest req) {
         LocalDate date = req.getExpenseDate() != null ? req.getExpenseDate() : LocalDate.now();
-        // Normalise the merchant the same way the email-import path does, so a hand-typed
-        // "SWIGGY*BLR" and an imported "Swiggy" group together in analytics instead of
-        // splitting one merchant's spend across two labels.
-        String merchant = com.marketai.gmail.parser.SpendCategorizer.extractMerchant(req.getDescription());
+        // A merchant the user typed themselves is authoritative — only fall back to the
+        // email-import-style auto-derivation when they didn't name one, so a hand-typed
+        // "SWIGGY*BLR" and an imported "Swiggy" still group together in analytics when the
+        // user doesn't override it.
+        String merchant = req.getMerchant() != null && !req.getMerchant().isBlank()
+                ? req.getMerchant()
+                : com.marketai.gmail.parser.SpendCategorizer.extractMerchant(req.getDescription());
 
         Expense duplicate = findExistingDuplicate(userId, req.getAmount(), date, req.getDescription(), merchant);
         if (duplicate != null) {
@@ -47,6 +50,8 @@ public class ExpenseService {
                 .category(ExpenseCategory.fromLabel(req.getCategory()))
                 .expenseDate(date)
                 .merchant(merchant)
+                .paymentMethod(req.getPaymentMethod())
+                .cashAccountId(req.getCashAccountId())
                 .note(req.getNote())
                 .build();
         return toResponse(expenseRepository.save(expense));
@@ -97,6 +102,9 @@ public class ExpenseService {
         if (req.getAmount() != null) e.setAmount(req.getAmount());
         if (req.getCategory() != null) e.setCategory(ExpenseCategory.fromLabel(req.getCategory()));
         if (req.getExpenseDate() != null) e.setExpenseDate(req.getExpenseDate());
+        if (req.getMerchant() != null) e.setMerchant(req.getMerchant());
+        e.setPaymentMethod(req.getPaymentMethod());
+        e.setCashAccountId(req.getCashAccountId());
         e.setNote(req.getNote());
         return toResponse(expenseRepository.save(e));
     }
@@ -171,6 +179,7 @@ public class ExpenseService {
                 .expenseDate(e.getExpenseDate())
                 .merchant(e.getMerchant())
                 .paymentMethod(e.getPaymentMethod())
+                .cashAccountId(e.getCashAccountId())
                 .sourceEmailId(e.getSourceEmailId())
                 .note(e.getNote())
                 .planCategoryOverride(e.getPlanCategoryOverride())

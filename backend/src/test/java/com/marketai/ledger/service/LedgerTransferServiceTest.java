@@ -5,6 +5,7 @@ import com.marketai.ledger.entity.CashAccount;
 import com.marketai.ledger.entity.LedgerTransfer;
 import com.marketai.ledger.repository.CashAccountRepository;
 import com.marketai.ledger.repository.LedgerTransferRepository;
+import com.marketai.investmentplan.service.PlannedInvestmentMatcher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
@@ -38,7 +39,7 @@ class LedgerTransferServiceTest {
     void setup() {
         transferRepo = mock(LedgerTransferRepository.class);
         accountRepo = mock(CashAccountRepository.class);
-        service = new LedgerTransferService(transferRepo, accountRepo);
+        service = new LedgerTransferService(transferRepo, accountRepo, mock(PlannedInvestmentMatcher.class));
 
         user = new User();
         user.setId(USER_ID);

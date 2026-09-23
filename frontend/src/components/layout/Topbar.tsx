@@ -7,12 +7,13 @@ interface Props {
   userName?: string;
   marketOpen: boolean;
   onLogout: () => void;
+  onOpenSettings: () => void;
   liveTicker: React.ReactNode;
 }
 
 // Slim top bar — section title, a pill-shaped search (Stripe/Linear cmd-k style instead of
 // a bare input), live index strip, and account controls. Navigation itself lives in Sidebar.
-export function Topbar({ sectionLabel, userName, marketOpen, onLogout, liveTicker }: Props) {
+export function Topbar({ sectionLabel, userName, marketOpen, onLogout, onOpenSettings, liveTicker }: Props) {
   const now = new Date();
   const initials = (userName ?? 'U').trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase()).join('');
   const { masked, toggle } = usePrivacyStore();
@@ -39,9 +40,10 @@ export function Topbar({ sectionLabel, userName, marketOpen, onLogout, liveTicke
           <div className="text-xs font-medium text-gray-300">{userName}</div>
           <div className="text-2xs text-gray-600">{now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
         </div>
-        <div className="w-8 h-8 rounded-full bg-brand-gradient text-white text-xs font-bold flex items-center justify-center shrink-0" title={userName}>
+        <button onClick={onOpenSettings} title="Settings"
+          className="w-8 h-8 rounded-full bg-brand-gradient text-white text-xs font-bold flex items-center justify-center shrink-0 hover:opacity-85 transition-opacity">
           {initials || 'U'}
-        </div>
+        </button>
         <button onClick={toggle} title={masked ? 'Show amounts' : 'Hide amounts'}
           className={`p-1.5 rounded-lg transition-colors ${masked ? 'text-gray-500 hover:text-ink hover:bg-surface-hover' : 'text-brand-light bg-brand/10'}`}>
           {masked ? <EyeOff size={15} /> : <Eye size={15} />}

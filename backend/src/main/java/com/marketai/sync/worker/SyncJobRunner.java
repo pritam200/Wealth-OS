@@ -4,6 +4,7 @@ import com.google.api.services.gmail.Gmail;
 import com.marketai.gmail.dto.GmailSyncResult;
 import com.marketai.gmail.entity.GmailToken;
 import com.marketai.gmail.repository.GmailTokenRepository;
+import com.marketai.gmail.repository.ProcessedEmailRepository;
 import com.marketai.gmail.service.GmailClientService;
 import com.marketai.gmail.service.GmailIncrementalSyncService;
 import com.marketai.gmail.service.GmailSyncService;
@@ -36,6 +37,7 @@ public class SyncJobRunner {
     private final GmailClientService gmailClient;
     private final GmailSyncService gmailSyncService;
     private final GmailIncrementalSyncService incrementalService;
+    private final ProcessedEmailRepository processedEmailRepo;
 
     public void run(Long jobId) {
         SyncJob job = jobRepo.findById(jobId).orElse(null);
@@ -52,8 +54,10 @@ public class SyncJobRunner {
                 case GMAIL_INCREMENTAL_SYNC:
                     result = runIncremental(jobId, userId);
                     break;
-                case GMAIL_FULL_SYNC:
                 case GMAIL_RETRY_FAILED:
+                    result = runRetryBacklog(userId);
+                    break;
+                case GMAIL_FULL_SYNC:
                 default:
                     result = runFull(userId, job.getParameters());
                     break;
@@ -70,6 +74,24 @@ public class SyncJobRunner {
             log.error("Sync job {} threw: {}", jobId, e.getMessage(), e);
             jobService.fail(jobId, e.getClass().getSimpleName() + ": " + e.getMessage());
         }
+    }
+
+    /**
+     * Re-attempts every backlog email (FAILED, a genuine parser gap, or still awaiting review)
+     * directly by message id, with no date window — unlike {@link #runFull}, which only rescans
+     * a fixed lookback and would never reach a message that first failed months ago. Safe to run
+     * repeatedly: {@code doSyncForUser}'s own retry guard is what actually decides which of these
+     * ids get re-processed, and downstream dedup (fingerprints, {@code EmailReviewService}'s
+     * already-judged guard) prevents a successful retry from double-booking anything.
+     */
+    private GmailSyncResult runRetryBacklog(Long userId) {
+        List<String> messageIds = processedEmailRepo.findRetryableMessageIds(userId);
+        if (messageIds.isEmpty()) {
+            log.info("No backlog emails to retry for user {}", userId);
+            return null;
+        }
+        log.info("Retrying {} backlog email(s) for user {}", messageIds.size(), userId);
+        return gmailSyncService.syncSpecificMessages(userId, messageIds);
     }
 
     /** Full window scan. Captures a fresh baseline watermark so later runs can go incremental. */

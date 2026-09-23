@@ -34,4 +34,13 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
     boolean existsByIdAndUserId(Long id, Long userId);
 
     java.util.Optional<Expense> findByIdAndUserId(Long id, Long userId);
+
+    /**
+     * Whether this exact email has already produced an expense row — checked directly, not by
+     * scanning same-day rows. A parser that couldn't extract a transaction date falls back to
+     * "today," so the same email re-imported on three different sync days produced three rows
+     * dated three different days: each landed outside the other two's same-day dedup window and
+     * none of them ever saw each other.
+     */
+    boolean existsByUserIdAndSourceEmailId(Long userId, String sourceEmailId);
 }

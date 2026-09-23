@@ -96,7 +96,8 @@ class GmailSenderTrustGateTest {
             pendingPdfRepo, excludedSenderRepo,
             mock(PasswordHintExtractor.class), mock(PdfImportService.class),
             intelAgent, reviewService,
-            mock(com.marketai.ai.llm.LlmProviderRouter.class));
+            mock(com.marketai.ai.llm.LlmProviderRouter.class),
+            new com.marketai.document.classify.SubjectPatternStage());
 
         User user = new User();
         user.setId(USER_ID);
@@ -130,7 +131,7 @@ class GmailSenderTrustGateTest {
         // The parser matched — substring routing is what makes this reachable at all.
         // The gate is what stops the extracted trade from becoming a ledger row.
         verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
-        verify(reviewService).enqueue(eq(USER_ID), eq(MSG_ID),
+        verify(reviewService).enqueue(eq(USER_ID), eq(MSG_ID), eq(0),
             contains("attacker.example"), anyString(), any());
         assertThat(result.getImported()).isZero();
     }
@@ -143,7 +144,7 @@ class GmailSenderTrustGateTest {
         service.syncSpecificMessages(USER_ID, List.of(MSG_ID));
 
         verify(importer).importParsedEmail(eq(USER_ID), any(), any(ParsedEmail.class), eq(MSG_ID), any());
-        verify(reviewService, never()).enqueue(any(), any(), any(), any(), any());
+        verify(reviewService, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
     }
 
     @Test
@@ -161,6 +162,139 @@ class GmailSenderTrustGateTest {
         service.syncSpecificMessages(USER_ID, List.of(MSG_ID));
 
         verify(importer).importParsedEmail(any(), any(), any(), any(), any());
-        verify(reviewService, never()).enqueue(any(), any(), any(), any(), any());
+        verify(reviewService, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
+    }
+
+    /** Parses to several trades from one email — a multi-trade contract note. */
+    private static class MultiItemParser implements EmailParser {
+        @Override public boolean canParse(String from, String subject) {
+            return from != null && from.toLowerCase().contains("zerodha");
+        }
+        @Override public List<ParsedEmail> parse(String from, String subject, String body) {
+            return List.of(
+                ParsedEmail.builder().type(ParsedEmail.Type.TRADE_BUY).symbol("RELIANCE")
+                    .quantity(25).price(new BigDecimal("1412.50")).amount(new BigDecimal("35312.50"))
+                    .tradeDate(LocalDate.of(2026, 9, 12)).build(),
+                ParsedEmail.builder().type(ParsedEmail.Type.TRADE_BUY).symbol("TCS")
+                    .quantity(5).price(new BigDecimal("3800.00")).amount(new BigDecimal("19000.00"))
+                    .tradeDate(LocalDate.of(2026, 9, 12)).build());
+        }
+    }
+
+    @Test
+    @DisplayName("a multi-trade contract note held back by the sender-trust check queues "
+        + "ONE review row PER trade, not one row that the last trade silently overwrites")
+    void multiItemEmailQueuesOneReviewRowPerItem() throws Exception {
+        GmailSyncService multiItemService = new GmailSyncService(
+            tokenRepo, processedRepo, gmailClient, userRepo,
+            List.<EmailParser>of(new MultiItemParser()),
+            new SenderTrustEvaluator(),
+            new com.marketai.document.route.SelectionComparator(
+                new com.marketai.document.classify.DocumentClassifier(List.of(
+                    new com.marketai.document.classify.SenderDomainStage(),
+                    new com.marketai.document.classify.SubjectPatternStage())),
+                new com.marketai.document.route.ParserRouter()),
+            importer,
+            pendingPdfRepo, excludedSenderRepo,
+            mock(PasswordHintExtractor.class), mock(PdfImportService.class),
+            intelAgent, reviewService,
+            mock(com.marketai.ai.llm.LlmProviderRouter.class),
+            new com.marketai.document.classify.SubjectPatternStage());
+
+        when(gmailClient.getFrom(any())).thenReturn("\"Zerodha Alerts\" <noreply@attacker.example>");
+
+        multiItemService.syncSpecificMessages(USER_ID, List.of(MSG_ID));
+
+        verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
+        // Both trades reach the queue as distinct rows — item 0 and item 1 of the same email —
+        // instead of the second enqueue() call silently overwriting the first under one key.
+        verify(reviewService).enqueue(eq(USER_ID), eq(MSG_ID), eq(0),
+            anyString(), anyString(), argThat(r -> "RELIANCE".equals(r.getParsed().getSymbol())));
+        verify(reviewService).enqueue(eq(USER_ID), eq(MSG_ID), eq(1),
+            anyString(), anyString(), argThat(r -> "TCS".equals(r.getParsed().getSymbol())));
+    }
+
+    @Test
+    @DisplayName("an email previously SKIPPED because no parser matched is retried on the next "
+        + "sync, not permanently dropped — a parser shipped later must get a second chance")
+    void previouslyUnmatchedSkipIsRetried() throws Exception {
+        when(processedRepo.findByUserIdAndGmailMessageId(USER_ID, MSG_ID)).thenReturn(Optional.of(
+            com.marketai.gmail.entity.ProcessedEmail.builder()
+                .userId(USER_ID).gmailMessageId(MSG_ID)
+                .status("SKIPPED").type("UNKNOWN").matchedParser(null)
+                .build()));
+        when(gmailClient.getFrom(any())).thenReturn("noreply@zerodha.com");
+
+        GmailSyncResult result = service.syncSpecificMessages(USER_ID, List.of(MSG_ID));
+
+        verify(importer).importParsedEmail(eq(USER_ID), any(), any(ParsedEmail.class), eq(MSG_ID), any());
+        assertThat(result.getSkipped()).isZero();
+    }
+
+    @Test
+    @DisplayName("a sender the user explicitly excluded stays permanently skipped — it is not "
+        + "re-fetched or re-evaluated on every sync")
+    void excludedSenderStaysPermanentlySkipped() throws Exception {
+        when(processedRepo.findByUserIdAndGmailMessageId(USER_ID, MSG_ID)).thenReturn(Optional.of(
+            com.marketai.gmail.entity.ProcessedEmail.builder()
+                .userId(USER_ID).gmailMessageId(MSG_ID)
+                .status("SKIPPED").type("EXCLUDED").matchedParser(null)
+                .build()));
+
+        GmailSyncResult result = service.syncSpecificMessages(USER_ID, List.of(MSG_ID));
+
+        verify(gmailClient, never()).getFrom(any());
+        verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
+        assertThat(result.getSkipped()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("an already-completed import stays permanently skipped")
+    void importedEmailStaysPermanentlySkipped() throws Exception {
+        when(processedRepo.findByUserIdAndGmailMessageId(USER_ID, MSG_ID)).thenReturn(Optional.of(
+            com.marketai.gmail.entity.ProcessedEmail.builder()
+                .userId(USER_ID).gmailMessageId(MSG_ID)
+                .status("IMPORTED").type("TRADE_BUY").matchedParser("SubstringParser")
+                .build()));
+
+        service.syncSpecificMessages(USER_ID, List.of(MSG_ID));
+
+        verify(gmailClient, never()).getFrom(any());
+        verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("a SKIPPED email whose review item is still pending is retried — "
+        + "resolving it later is what should stop the retries, not the SKIPPED status alone")
+    void stillPendingReviewSkipIsRetried() throws Exception {
+        when(processedRepo.findByUserIdAndGmailMessageId(USER_ID, MSG_ID)).thenReturn(Optional.of(
+            com.marketai.gmail.entity.ProcessedEmail.builder()
+                .userId(USER_ID).gmailMessageId(MSG_ID)
+                .status("SKIPPED").type("REVIEW").matchedParser(null)
+                .build()));
+        when(reviewService.isFullyResolved(USER_ID, MSG_ID)).thenReturn(false);
+        when(gmailClient.getFrom(any())).thenReturn("noreply@zerodha.com");
+
+        service.syncSpecificMessages(USER_ID, List.of(MSG_ID));
+
+        verify(gmailClient).getFrom(any());
+    }
+
+    @Test
+    @DisplayName("a SKIPPED email whose review item has since been resolved (accepted/edited/"
+        + "rejected) stays permanently skipped — it must not be re-fetched on every sync forever")
+    void fullyResolvedReviewSkipIsNotRetried() throws Exception {
+        when(processedRepo.findByUserIdAndGmailMessageId(USER_ID, MSG_ID)).thenReturn(Optional.of(
+            com.marketai.gmail.entity.ProcessedEmail.builder()
+                .userId(USER_ID).gmailMessageId(MSG_ID)
+                .status("SKIPPED").type("REVIEW").matchedParser(null)
+                .build()));
+        when(reviewService.isFullyResolved(USER_ID, MSG_ID)).thenReturn(true);
+
+        GmailSyncResult result = service.syncSpecificMessages(USER_ID, List.of(MSG_ID));
+
+        verify(gmailClient, never()).getFrom(any());
+        verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
+        assertThat(result.getSkipped()).isEqualTo(1);
     }
 }

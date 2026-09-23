@@ -15,7 +15,11 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "card_statements", indexes = {
     @Index(name = "idx_card_statement_card", columnList = "card_id")
-})
+    },
+    // NULL source_email_id (a manual entry) is not constrained by this — Postgres treats every
+    // NULL as distinct in a unique index, so only two rows citing the SAME email can collide.
+    uniqueConstraints = @UniqueConstraint(name = "uq_card_statement_user_source_email",
+        columnNames = {"user_id", "source_email_id"}))
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 public class CardStatement {
 
@@ -43,6 +47,20 @@ public class CardStatement {
 
     @Column(name = "previous_balance", precision = 12, scale = 2)
     private BigDecimal previousBalance;
+
+    /**
+     * Set when the statement's own arithmetic doesn't hold — previous balance + this cycle's
+     * debits − this cycle's credits doesn't reconcile to {@link #totalDue} within ₹1, checked by
+     * {@code ArithmeticValidator.statementBalances}. This is the strongest available signal that
+     * a figure was misread (a hallucinated leading digit, an OCR error), because it uses the
+     * statement's own internal redundancy rather than trusting any single extracted number.
+     * Never silently corrected — the mismatch is surfaced, not "fixed."
+     */
+    @Column(name = "arithmetic_mismatch")
+    private Boolean arithmeticMismatch;
+
+    @Column(name = "arithmetic_mismatch_detail", length = 500)
+    private String arithmeticMismatchDetail;
 
     @Column(name = "source_email_id", length = 100)
     private String sourceEmailId;

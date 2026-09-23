@@ -18,6 +18,7 @@ public class ExpenseResponse {
     private LocalDate expenseDate;
     private String merchant;
     private String paymentMethod;
+    private Long cashAccountId;
     private String sourceEmailId;
     private String note;
     private String planCategoryOverride;

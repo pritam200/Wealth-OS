@@ -16,12 +16,14 @@ import java.time.LocalDateTime;
  * trace the user could see. Every uncertain extraction now becomes a visible row a human can
  * accept, correct, or reject.
  *
- * One row per (user, gmail message) so re-syncing the same email doesn't stack up duplicates
- * in the queue.
+ * One row per (user, gmail message, item index) so re-syncing the same email doesn't stack up
+ * duplicates in the queue — but a single email carrying several extracted items (e.g. a 5-trade
+ * contract note held back by the sender-trust check) still gets one row per item instead of
+ * every later item overwriting the previous one under the same key.
  */
 @Entity
 @Table(name = "email_review_items",
-       uniqueConstraints = @UniqueConstraint(columnNames = {"user_id", "gmail_message_id"}),
+       uniqueConstraints = @UniqueConstraint(columnNames = {"user_id", "gmail_message_id", "item_index"}),
        indexes = {
            @Index(name = "idx_eri_user_status", columnList = "user_id, status"),
            @Index(name = "idx_eri_user_created", columnList = "user_id, created_at")
@@ -37,6 +39,13 @@ public class EmailReviewItem {
 
     @Column(name = "gmail_message_id", length = 100)
     private String gmailMessageId;
+
+    /** Which extracted item within the email this row represents — 0 when the email yields a
+     *  single item. Together with (user_id, gmail_message_id) this is the uniqueness key, so a
+     *  multi-item email gets one row per item instead of the last item silently winning. */
+    @Column(name = "item_index", nullable = false)
+    @Builder.Default
+    private int itemIndex = 0;
 
     @Column(length = 320)
     private String sender;

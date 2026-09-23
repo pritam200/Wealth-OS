@@ -8,10 +8,14 @@ import com.marketai.portfolio.entity.Transaction;
 import com.marketai.portfolio.repository.HoldingRepository;
 import com.marketai.portfolio.repository.PortfolioRepository;
 import com.marketai.portfolio.repository.TransactionRepository;
+import com.marketai.scheduled.dto.AmountChange;
 import com.marketai.scheduled.dto.InstallmentStatus;
 import com.marketai.scheduled.dto.RecurringInvestmentRequest;
 import com.marketai.scheduled.dto.RecurringInvestmentResponse;
+import com.marketai.scheduled.dto.RecurringInvestmentUpdateRequest;
 import com.marketai.scheduled.entity.RecurringInvestment;
+import com.marketai.scheduled.entity.RecurringInvestmentHistory;
+import com.marketai.scheduled.repository.RecurringInvestmentHistoryRepository;
 import com.marketai.scheduled.repository.RecurringInvestmentRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -31,6 +35,7 @@ import java.util.stream.Collectors;
 public class RecurringInvestmentService {
 
     private final RecurringInvestmentRepository repo;
+    private final RecurringInvestmentHistoryRepository historyRepo;
     private final UserRepository userRepository;
     private final PortfolioRepository portfolioRepository;
     private final HoldingRepository holdingRepository;
@@ -44,12 +49,47 @@ public class RecurringInvestmentService {
             .type(RecurringInvestment.Type.valueOf(req.getType()))
             .label(req.getLabel())
             .linkedSymbol(req.getLinkedSymbol())
+            .sourceAccountId(req.getSourceAccountId())
             .amount(req.getAmount())
             .startDate(req.getStartDate() != null ? req.getStartDate() : LocalDate.now())
             .tenureMonths(req.getTenureMonths())
             .status(req.getStatus() != null ? req.getStatus() : "ACTIVE")
             .build();
         return toResponse(repo.save(ri));
+    }
+
+    /**
+     * Partial update (spec §18: edit/pause/resume/change amount/change bank/change
+     * destination). Every amount or status change is recorded to
+     * {@link RecurringInvestmentHistory} before being applied — the schedule row always
+     * holds only the current value, so a report can reconstruct "Jan–Jun ₹5,000, Jul–Sep
+     * ₹7,500" from history without ever rewriting a past period's committed amount.
+     */
+    @Transactional
+    public RecurringInvestmentResponse update(Long userId, Long id, RecurringInvestmentUpdateRequest req) {
+        RecurringInvestment ri = repo.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
+        if (!ri.getUser().getId().equals(userId)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found");
+
+        if (req.getAmount() != null && req.getAmount().compareTo(ri.getAmount()) != 0) {
+            recordChange(id, "amount", ri.getAmount().toPlainString(), req.getAmount().toPlainString());
+            ri.setAmount(req.getAmount());
+        }
+        if (req.getStatus() != null && !req.getStatus().equals(ri.getStatus())) {
+            recordChange(id, "status", ri.getStatus(), req.getStatus());
+            ri.setStatus(req.getStatus());
+        }
+        if (req.getSourceAccountId() != null) ri.setSourceAccountId(req.getSourceAccountId());
+        if (req.getLinkedSymbol() != null) ri.setLinkedSymbol(req.getLinkedSymbol());
+        if (req.getLabel() != null) ri.setLabel(req.getLabel());
+
+        return toResponse(repo.save(ri));
+    }
+
+    private void recordChange(Long recurringInvestmentId, String field, String oldValue, String newValue) {
+        historyRepo.save(RecurringInvestmentHistory.builder()
+            .recurringInvestmentId(recurringInvestmentId)
+            .field(field).oldValue(oldValue).newValue(newValue)
+            .build());
     }
 
     @Transactional
@@ -63,11 +103,17 @@ public class RecurringInvestmentService {
         return repo.findByUserIdOrderByCreatedAtDesc(userId).stream().map(this::toResponse).collect(Collectors.toList());
     }
 
+    private boolean linksToHolding(RecurringInvestment.Type type) {
+        return type == RecurringInvestment.Type.SIP
+            || type == RecurringInvestment.Type.STOCK_SIP
+            || type == RecurringInvestment.Type.ETF_SIP;
+    }
+
     private RecurringInvestmentResponse toResponse(RecurringInvestment ri) {
         List<InstallmentStatus> installments;
         int completed = 0, missed = 0;
 
-        if (ri.getType() == RecurringInvestment.Type.SIP && ri.getLinkedSymbol() != null) {
+        if (linksToHolding(ri.getType()) && ri.getLinkedSymbol() != null) {
             installments = buildSipInstallments(ri);
             for (InstallmentStatus s : installments) {
                 if ("COMPLETED".equals(s.getStatus())) completed++;
@@ -82,10 +128,18 @@ public class RecurringInvestmentService {
                 .status("UPCOMING").build());
         }
 
+        List<AmountChange> history = historyRepo.findByRecurringInvestmentIdOrderByChangedAtAsc(ri.getId())
+            .stream()
+            .map(h -> AmountChange.builder().changedAt(h.getChangedAt()).field(h.getField())
+                .oldValue(h.getOldValue()).newValue(h.getNewValue()).build())
+            .collect(Collectors.toList());
+
         return RecurringInvestmentResponse.builder()
             .id(ri.getId()).type(ri.getType().name()).label(ri.getLabel()).linkedSymbol(ri.getLinkedSymbol())
+            .sourceAccountId(ri.getSourceAccountId())
             .amount(ri.getAmount()).startDate(ri.getStartDate()).tenureMonths(ri.getTenureMonths()).status(ri.getStatus())
             .installments(installments).completedCount(completed).missedCount(missed)
+            .amountHistory(history)
             .build();
     }
 

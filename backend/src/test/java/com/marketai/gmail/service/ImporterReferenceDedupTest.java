@@ -54,7 +54,7 @@ class ImporterReferenceDedupTest {
             new TransactionFingerprinter(),
             fingerprintRepo,
             new ReferenceHarvester(),
-            mock(TransactionMatchScorer.class));
+            mock(TransactionMatchScorer.class), mock(com.marketai.rent.service.RentService.class));
 
         when(fingerprintRepo.existsByUserIdAndFingerprint(any(), anyString())).thenReturn(false);
         when(fingerprintRepo.findFirstByUserIdAndExternalRefAndExternalRefType(any(), any(), any()))

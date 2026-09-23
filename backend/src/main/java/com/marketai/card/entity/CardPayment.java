@@ -18,7 +18,11 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "card_payments", indexes = {
     @Index(name = "idx_card_payment_card", columnList = "card_id")
-})
+    },
+    // NULL source_email_id (a manual entry) is not constrained by this — Postgres treats every
+    // NULL as distinct in a unique index, so only two rows citing the SAME email can collide.
+    uniqueConstraints = @UniqueConstraint(name = "uq_card_payment_user_source_email",
+        columnNames = {"user_id", "source_email_id"}))
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 public class CardPayment {
 

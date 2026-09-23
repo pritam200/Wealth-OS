@@ -29,14 +29,20 @@ public class RecurringInvestment {
     private User user;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 10)
-    private Type type; // SIP | PPF | NPS
+    @Column(nullable = false, length = 20)
+    private Type type; // SIP | PPF | NPS | STOCK_SIP | ETF_SIP | BROKER_RECURRING
 
     @Column(nullable = false, length = 200)
     private String label; // fund name, or "PPF - SBI", etc.
 
     @Column(name = "linked_symbol")
-    private String linkedSymbol; // set for SIP only — the .MF Holding symbol
+    private String linkedSymbol; // set for SIP/STOCK_SIP/ETF_SIP only — the Holding symbol
+
+    // Which CashAccount this schedule debits from, when the user chooses to say — bare Long
+    // rather than a JPA relation, consistent with the rest of this session's additive fields
+    // (Expense.cashAccountId, Rent*.cashAccountId). Nullable: existing rows never set it.
+    @Column(name = "source_account_id")
+    private Long sourceAccountId;
 
     @Column(nullable = false, precision = 15, scale = 2)
     private BigDecimal amount;
@@ -55,5 +61,5 @@ public class RecurringInvestment {
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
 
-    public enum Type { SIP, PPF, NPS }
+    public enum Type { SIP, PPF, NPS, STOCK_SIP, ETF_SIP, BROKER_RECURRING }
 }

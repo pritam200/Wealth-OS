@@ -1,5 +1,6 @@
 package com.marketai.auth.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.*;
 import org.springframework.security.core.GrantedAuthority;
@@ -45,6 +46,11 @@ public class User implements UserDetails {
     @Column(nullable = false, unique = true, length = 150)
     private String email;
 
+    // Never serialized — several entities carry a `User user` FK (CashAccount, LedgerTransfer,
+    // RecurringInvestment, ...) and some controllers return those entities directly rather than
+    // a DTO. Without @JsonIgnore here, any such response leaks the bcrypt hash to the client
+    // (confirmed live: POST /api/ledger/accounts' response body included this field verbatim).
+    @JsonIgnore
     @Column(nullable = false)
     private String password;
 

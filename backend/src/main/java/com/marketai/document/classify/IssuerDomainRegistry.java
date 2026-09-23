@@ -34,13 +34,18 @@ public final class IssuerDomainRegistry {
         put("Zerodha",       "zerodha.com", "zerodha.net", "kite.trade");
         put("Groww",         "groww.in");
         put("Upstox",        "upstox.com");
-        put("Angel One",     "angelone.in", "angelbroking.com");
+        // Angel One trades under both its current brand domain and its legacy
+        // Angel Broking domains (.com AND .in — a real 2026 sender audit found live mail
+        // from angelbroking.in misclassified as impersonation because only .com was listed).
+        put("Angel One",     "angelone.in", "angelbroking.com", "angelbroking.in");
         put("ICICI Direct",  "icicidirect.com");
         put("m.Stock",       "mstock.com");
         put("Dhan",          "dhan.co");
 
         // Registrars / MF infrastructure
-        put("CAMS",          "camsonline.com", "cams.com");
+        // camsonline.co.in is CAMS's own .co.in mail domain, distinct from camsonline.com —
+        // both are genuine, and only listing one caused real CAMS mail to be flagged.
+        put("CAMS",          "camsonline.com", "cams.com", "camsonline.co.in");
         put("KFintech",      "kfintech.com", "karvy.com");
         put("MF Central",    "mfcentral.com");
 
@@ -49,11 +54,16 @@ public final class IssuerDomainRegistry {
         put("NSDL",          "nsdl.co.in", "nsdl.com");
 
         // Banks
-        put("HDFC Bank",     "hdfcbank.com", "hdfcbank.net");
+        // hdfcbank.bank.in is HDFC's domain under RBI's .bank.in TLD — a genuine issuer domain,
+        // not a lookalike; it was previously missing and caused real HDFC mail to be blocked.
+        put("HDFC Bank",     "hdfcbank.com", "hdfcbank.net", "hdfcbank.bank.in");
         put("ICICI Bank",    "icicibank.com");
         put("Axis Bank",     "axisbank.com");
         put("SBI",           "sbi.co.in", "onlinesbi.com", "sbicard.com");
-        put("Kotak",         "kotak.com");
+        // kotaksecurities.com is Kotak's brokerage arm — already trusted by
+        // ProviderPasswordRules for password derivation, but previously absent here, so the
+        // system would derive a password for a domain it simultaneously flagged as an attacker.
+        put("Kotak",         "kotak.com", "kotaksecurities.com");
         put("IDFC First",    "idfcfirstbank.com");
         put("Yes Bank",      "yesbank.in");
     }

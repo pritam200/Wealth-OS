@@ -61,7 +61,10 @@ public class CardStatementController {
         return StatementResponse.builder()
             .id(s.getId()).statementDate(s.getStatementDate()).dueDate(s.getDueDate())
             .totalDue(s.getTotalDue()).minimumDue(s.getMinimumDue())
-            .previousBalance(s.getPreviousBalance()).sourceEmailId(s.getSourceEmailId()).build();
+            .previousBalance(s.getPreviousBalance())
+            .arithmeticMismatch(s.getArithmeticMismatch())
+            .arithmeticMismatchDetail(s.getArithmeticMismatchDetail())
+            .sourceEmailId(s.getSourceEmailId()).build();
     }
 
     private PaymentResponse toDto(CardPayment p) {

@@ -51,6 +51,28 @@ public class GmailSyncScheduler {
     }
 
     /**
+     * Backlog sweep. A message that failed, hit a parser gap, or is still sitting in review
+     * only ever gets another chance when re-scanned — and {@link #scheduledSync} above only
+     * ever looks forward from the last watermark, so a message that first failed weeks ago
+     * would otherwise sit un-retried forever even after a parser fix ships. Runs far less often
+     * than the incremental poll: these ids don't go stale by the hour, and re-fetching every
+     * backlog message from Gmail on every run would burn quota for no benefit between parser
+     * changes.
+     */
+    @Scheduled(fixedDelay = 604_800_000, initialDelay = 300_000)
+    public void scheduledRetrySweep() {
+        for (GmailToken token : tokenRepo.findAll()) {
+            try {
+                if (token.getUser() == null) continue;
+                jobService.enqueue(token.getUser(), SyncJobType.GMAIL_RETRY_FAILED,
+                    SyncTrigger.SCHEDULED, null);
+            } catch (Exception e) {
+                log.error("Could not queue backlog retry sweep for token {}: {}", token.getId(), e.getMessage());
+            }
+        }
+    }
+
+    /**
      * Renews Gmail push registrations.
      *
      * A watch expires after 7 days and then simply stops delivering, with no error and no

@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useState, lazy, Suspense } from 'react';
-import { LayoutDashboard, Activity, TrendingUp, PieChart, Wallet, Receipt, Target, CreditCard, Brain, Coins, RefreshCw, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, Activity, TrendingUp, PieChart, Wallet, Receipt, Target, CreditCard, Brain, Coins, RefreshCw, ClipboardList, Settings as SettingsIcon } from 'lucide-react';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { Sidebar } from './components/layout/Sidebar';
@@ -35,6 +35,7 @@ const Tab16TodaysActions    = lazy(() => import('./pages/tabs/Tab16TodaysActions
 const Tab17FinancialPlanner = lazy(() => import('./pages/tabs/Tab17FinancialPlanner').then(m => ({ default: m.Tab17FinancialPlanner })));
 const DashboardPage         = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
 const DataSyncPage          = lazy(() => import('./pages/DataSyncPage').then(m => ({ default: m.DataSyncPage })));
+const SettingsPage          = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 const StockPage             = lazy(() => import('./pages/StockPage').then(m => ({ default: m.StockPage })));
 
 // Single-responsibility IA: My Wealth is holdings/net-worth only (no recommendations —
@@ -104,6 +105,10 @@ const NAV_SECTIONS: readonly NavSection[] = [
   {
     id: 'datasync', label: 'Data Sync', Icon: RefreshCw,
     tabs: [{ id: 15, label: 'Email & Statement Sync' }],
+  },
+  {
+    id: 'settings', label: 'Settings', Icon: SettingsIcon,
+    tabs: [{ id: 18, label: 'Settings' }],
   },
 ] as const;
 
@@ -224,6 +229,7 @@ function TabContent({ tab, onNavigate }: { tab: number; onNavigate: (tabId: numb
     case 15: return <DataSyncPage />;
     case 16: return <Tab16TodaysActions />;
     case 17: return <Tab17FinancialPlanner />;
+    case 18: return <SettingsPage />;
     default: return <Tab1MarketTrends />;
   }
 }
@@ -251,6 +257,7 @@ function AppShell() {
           userName={user?.name}
           marketOpen={marketOpen}
           onLogout={handleLogout}
+          onOpenSettings={() => setActiveTab(18)}
           liveTicker={<LiveTicker />}
         />
 

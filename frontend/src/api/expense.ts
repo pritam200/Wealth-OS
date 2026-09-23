@@ -5,6 +5,9 @@ export interface ExpenseRequest {
   amount: number;
   category: string;
   expenseDate: string;
+  merchant?: string;
+  paymentMethod?: string;
+  cashAccountId?: number;
   note?: string;
 }
 
@@ -16,6 +19,7 @@ export interface ExpenseResponse {
   expenseDate: string;
   merchant: string | null;
   paymentMethod: string | null;
+  cashAccountId: number | null;
   sourceEmailId: string | null;
   note: string | null;
   createdAt: string;

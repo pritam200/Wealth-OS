@@ -22,4 +22,7 @@ public interface IncomeRepository extends JpaRepository<Income, Long> {
 
     @Query("SELECT i.source, COALESCE(SUM(i.amount), 0) FROM Income i WHERE i.userId = :uid AND i.incomeDate BETWEEN :from AND :to GROUP BY i.source")
     List<Object[]> sumBySource(@Param("uid") Long userId, @Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    /** See {@code ExpenseRepository.existsByUserIdAndSourceEmailId} — same fix, same reason. */
+    boolean existsByUserIdAndSourceEmailId(Long userId, String sourceEmailId);
 }

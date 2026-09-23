@@ -12,6 +12,7 @@ public class RecurringInvestmentResponse {
     private String type;
     private String label;
     private String linkedSymbol;
+    private Long sourceAccountId;
     private BigDecimal amount;
     private LocalDate startDate;
     private Integer tenureMonths;
@@ -19,4 +20,5 @@ public class RecurringInvestmentResponse {
     private List<InstallmentStatus> installments; // recent history + near-future, upcoming/completed/missed
     private int completedCount;
     private int missedCount;
+    private List<AmountChange> amountHistory; // amount/status changes over time, oldest first
 }

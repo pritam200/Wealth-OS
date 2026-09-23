@@ -5,6 +5,7 @@ import com.marketai.ledger.entity.CashAccount;
 import com.marketai.ledger.entity.LedgerTransfer;
 import com.marketai.ledger.repository.CashAccountRepository;
 import com.marketai.ledger.repository.LedgerTransferRepository;
+import com.marketai.investmentplan.service.PlannedInvestmentMatcher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -32,6 +33,7 @@ public class LedgerTransferService {
 
     private final LedgerTransferRepository transferRepo;
     private final CashAccountRepository accountRepo;
+    private final PlannedInvestmentMatcher plannedInvestmentMatcher;
 
     @Transactional
     public LedgerTransfer record(User user, Long sourceAccountId, Long destinationAccountId,
@@ -69,7 +71,11 @@ public class LedgerTransferService {
             .build());
 
         applyCashEffect(transfer);
-        return transferRepo.save(transfer);
+        LedgerTransfer saved = transferRepo.save(transfer);
+        // Spec §7: automatic reconciliation — a plan line is never marked complete by the
+        // user, only by real activity like this transfer being matched onto it.
+        plannedInvestmentMatcher.matchTransfer(user.getId(), saved);
+        return saved;
     }
 
     /**

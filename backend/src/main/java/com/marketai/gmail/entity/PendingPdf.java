@@ -45,6 +45,14 @@ public class PendingPdf {
     @Column(length = 200)
     private String providerKey;
 
+    // Best-effort guess from the subject line (see SubjectPatternStage), one of
+    // com.marketai.document.classify.DocTypes, or null when unclassifiable. Lets password
+    // learning distinguish "this is a card-statement password" from "this is a bank-statement
+    // password" for the same sender domain, instead of treating every statement from an
+    // institution as needing the same password.
+    @Column(name = "document_type", length = 40)
+    private String documentType;
+
     // Best-effort guess at the password format, extracted from the email body (e.g. "PAN
     // (uppercase) + Date of Birth DDMMYYYY"). Null when it can't be determined — shown to
     // the user as "format unknown" rather than silently omitted.

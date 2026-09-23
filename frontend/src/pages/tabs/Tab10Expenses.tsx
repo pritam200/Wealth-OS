@@ -3,6 +3,9 @@ import { AlertTriangle, Trash2, Loader2, Receipt } from 'lucide-react';
 import { ExpenseSection } from '../../components/wealth/ExpenseSection';
 import { IncomeSection, SavingsRatioCard } from '../../components/wealth/IncomeSection';
 import { MerchantSpendSection } from '../../components/wealth/MerchantSpendSection';
+import { RentCard } from '../../components/wealth/RentCard';
+import { MonthlyInvestmentPlanCard } from '../../components/wealth/MonthlyInvestmentPlanCard';
+import { ScheduledInvestmentsCard } from '../../components/wealth/ScheduledInvestmentsCard';
 import { expenseApi } from '../../api/expense';
 import type { ExpenseResponse } from '../../api/expense';
 import { useMaskedText } from '../../components/shared/Amount';
@@ -75,6 +78,13 @@ export function Tab10Expenses() {
         <IncomeSection />
         <ExpenseSection />
       </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <MonthlyInvestmentPlanCard />
+        <ScheduledInvestmentsCard />
+      </div>
+
+      <RentCard />
 
       <MerchantSpendSection />
     </div>

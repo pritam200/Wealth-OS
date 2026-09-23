@@ -17,6 +17,8 @@ public class CardStatementDtos {
         private BigDecimal totalDue;
         private BigDecimal minimumDue;
         private BigDecimal previousBalance;
+        private Boolean arithmeticMismatch;
+        private String arithmeticMismatchDetail;
         private String sourceEmailId;
     }
 

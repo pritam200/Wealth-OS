@@ -50,7 +50,7 @@ class WeightedDuplicateImportTest {
             mock(com.marketai.card.repository.CardPaymentRepository.class),
             mock(com.marketai.tracking.repository.FixedDepositRepository.class),
             mock(com.marketai.tracking.repository.RecurringDepositRepository.class),
-            new TransactionFingerprinter(), fingerprintRepo, new ReferenceHarvester(), matchScorer);
+            new TransactionFingerprinter(), fingerprintRepo, new ReferenceHarvester(), matchScorer, mock(com.marketai.rent.service.RentService.class));
 
         when(fingerprintRepo.existsByUserIdAndFingerprint(any(), anyString())).thenReturn(false);
         when(fingerprintRepo.findFirstByUserIdAndExternalRefAndExternalRefType(any(), any(), any()))

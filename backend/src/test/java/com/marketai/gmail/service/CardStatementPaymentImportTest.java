@@ -57,7 +57,7 @@ class CardStatementPaymentImportTest {
             mock(com.marketai.tracking.repository.FixedDepositRepository.class),
             mock(com.marketai.tracking.repository.RecurringDepositRepository.class),
             new TransactionFingerprinter(), fingerprintRepo, new ReferenceHarvester(),
-            mock(TransactionMatchScorer.class));
+            mock(TransactionMatchScorer.class), mock(com.marketai.rent.service.RentService.class));
 
         when(fingerprintRepo.existsByUserIdAndFingerprint(any(), anyString())).thenReturn(false);
         when(fingerprintRepo.findFirstByUserIdAndExternalRefAndExternalRefType(any(), any(), any()))
@@ -101,6 +101,80 @@ class CardStatementPaymentImportTest {
         ArgumentCaptor<CreditCard> cardCaptor = ArgumentCaptor.forClass(CreditCard.class);
         verify(cardRepo).save(cardCaptor.capture());
         assertThat(cardCaptor.getValue().getCurrentDue()).isEqualByComparingTo("5000.00");
+    }
+
+    @Test
+    @DisplayName("a card bill whose own arithmetic doesn't reconcile is flagged, not silently trusted")
+    void cardBillArithmeticMismatchIsFlagged() throws Exception {
+        CreditCard card = CreditCard.builder().id(51L).userId(USER).name("HDFC Card").lastFour("1234").build();
+        when(cardRepo.findByUserIdAndLastFour(USER, "1234")).thenReturn(List.of(card));
+
+        // previous 12,000 + debits 33,230 - credits 0 = 45,230, but the parsed "total due" reads
+        // 1,45,230 — a hallucinated leading digit, exactly the kind of error the statement's own
+        // arithmetic catches even though the model was confident about the figure it extracted.
+        ParsedEmail bill = ParsedEmail.builder()
+            .type(ParsedEmail.Type.CARD_BILL)
+            .bank("HDFC").cardLast4("1234")
+            .amount(new BigDecimal("145230.00"))
+            .previousBalance(new BigDecimal("12000.00"))
+            .cycleDebits(new BigDecimal("33230.00"))
+            .cycleCredits(BigDecimal.ZERO)
+            .dueDate(LocalDate.of(2026, 3, 25))
+            .sourceDescription("HDFC card bill")
+            .build();
+
+        importer.importParsedEmail(USER, user(), bill, "msg-mismatch");
+
+        ArgumentCaptor<CardStatement> captor = ArgumentCaptor.forClass(CardStatement.class);
+        verify(statementRepo).save(captor.capture());
+        CardStatement saved = captor.getValue();
+        assertThat(saved.getArithmeticMismatch()).isTrue();
+        assertThat(saved.getArithmeticMismatchDetail()).contains("45230.00").contains("145230.00");
+    }
+
+    @Test
+    @DisplayName("a card bill whose arithmetic DOES reconcile is not flagged")
+    void cardBillArithmeticMatchIsNotFlagged() throws Exception {
+        CreditCard card = CreditCard.builder().id(52L).userId(USER).name("HDFC Card").lastFour("1234").build();
+        when(cardRepo.findByUserIdAndLastFour(USER, "1234")).thenReturn(List.of(card));
+
+        ParsedEmail bill = ParsedEmail.builder()
+            .type(ParsedEmail.Type.CARD_BILL)
+            .bank("HDFC").cardLast4("1234")
+            .amount(new BigDecimal("45230.00"))
+            .previousBalance(new BigDecimal("12000.00"))
+            .cycleDebits(new BigDecimal("33230.00"))
+            .cycleCredits(BigDecimal.ZERO)
+            .dueDate(LocalDate.of(2026, 3, 25))
+            .sourceDescription("HDFC card bill")
+            .build();
+
+        importer.importParsedEmail(USER, user(), bill, "msg-match");
+
+        ArgumentCaptor<CardStatement> captor = ArgumentCaptor.forClass(CardStatement.class);
+        verify(statementRepo).save(captor.capture());
+        assertThat(captor.getValue().getArithmeticMismatch()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a card bill statement template without the cycle debit/credit breakdown is not checked at all")
+    void cardBillWithoutCycleFiguresIsNotChecked() throws Exception {
+        CreditCard card = CreditCard.builder().id(53L).userId(USER).name("HDFC Card").lastFour("1234").build();
+        when(cardRepo.findByUserIdAndLastFour(USER, "1234")).thenReturn(List.of(card));
+
+        ParsedEmail bill = ParsedEmail.builder()
+            .type(ParsedEmail.Type.CARD_BILL)
+            .bank("HDFC").cardLast4("1234")
+            .amount(new BigDecimal("5000.00"))
+            .dueDate(LocalDate.of(2026, 3, 25))
+            .sourceDescription("HDFC card bill")
+            .build();
+
+        importer.importParsedEmail(USER, user(), bill, "msg-no-breakdown");
+
+        ArgumentCaptor<CardStatement> captor = ArgumentCaptor.forClass(CardStatement.class);
+        verify(statementRepo).save(captor.capture());
+        assertThat(captor.getValue().getArithmeticMismatch()).isNull();
     }
 
     @Test

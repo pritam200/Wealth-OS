@@ -37,13 +37,29 @@ public class EmailReviewService {
     private final EmailReviewItemRepository repo;
     private final ParsedEmailImporter importer;
 
-    /** Queues an uncertain extraction. Idempotent per gmail message — a re-sync updates the
-     *  existing pending row instead of adding another, and never resurrects a resolved one. */
+    /** Queues an uncertain extraction as item 0 of its email. Idempotent per gmail message — a
+     *  re-sync updates the existing pending row instead of adding another, and never resurrects
+     *  a resolved one. */
     @Transactional
     public void enqueue(Long userId, String gmailMessageId, String sender, String subject,
                         EmailIntelResult result) {
+        enqueue(userId, gmailMessageId, 0, sender, subject, result);
+    }
+
+    /**
+     * Queues an uncertain extraction. Idempotent per (email, item index) — a re-sync updates the
+     * existing pending row instead of adding another, and never resurrects a resolved one.
+     *
+     * <p>{@code itemIndex} exists because one email can yield several extracted items — a
+     * 5-trade contract note held back by the sender-trust check, for example. Keying only on
+     * the gmail message id meant every item after the first silently overwrote the one before
+     * it, so only the last trade in the email ever reached the queue.
+     */
+    @Transactional
+    public void enqueue(Long userId, String gmailMessageId, int itemIndex, String sender, String subject,
+                        EmailIntelResult result) {
         EmailReviewItem existing = gmailMessageId == null ? null
-            : repo.findByUserIdAndGmailMessageId(userId, gmailMessageId).orElse(null);
+            : repo.findByUserIdAndGmailMessageIdAndItemIndex(userId, gmailMessageId, itemIndex).orElse(null);
 
         if (existing != null && existing.getStatus() != ReviewStatus.PENDING) {
             // Already judged by the user — re-queueing would ask the same question twice.
@@ -51,7 +67,7 @@ public class EmailReviewService {
         }
 
         EmailReviewItem item = existing != null ? existing : EmailReviewItem.builder()
-            .userId(userId).gmailMessageId(gmailMessageId).build();
+            .userId(userId).gmailMessageId(gmailMessageId).itemIndex(itemIndex).build();
 
         item.setSender(trim(sender, 320));
         item.setSubject(trim(subject, 500));
@@ -83,6 +99,21 @@ public class EmailReviewService {
 
     public long pendingCount(Long userId) {
         return repo.countByUserIdAndStatus(userId, ReviewStatus.PENDING);
+    }
+
+    /**
+     * Whether every item queued from this email has reached a final decision (ACCEPTED, EDITED
+     * or REJECTED) — false if none were ever queued, or if any are still PENDING.
+     *
+     * <p>Used by {@code GmailSyncService}'s retry guard: {@code ProcessedEmail.status} is set to
+     * {@code SKIPPED} the moment an item is queued here and is never revisited afterward, so
+     * without this check a fully-judged email (accepted, edited, or rejected by a human) would
+     * be re-fetched and re-run through the whole pipeline on every single sync, forever — safe
+     * (this service's own idempotency guards prevent double-booking), but pure wasted work.
+     */
+    public boolean isFullyResolved(Long userId, String gmailMessageId) {
+        return repo.existsByUserIdAndGmailMessageId(userId, gmailMessageId)
+            && !repo.existsByUserIdAndGmailMessageIdAndStatus(userId, gmailMessageId, ReviewStatus.PENDING);
     }
 
     @Transactional

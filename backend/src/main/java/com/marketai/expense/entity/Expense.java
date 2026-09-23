@@ -10,7 +10,14 @@ import java.time.LocalDateTime;
 @Table(name = "expenses", indexes = {
     @Index(name = "idx_expense_user", columnList = "user_id"),
     @Index(name = "idx_expense_date", columnList = "expense_date")
-})
+    },
+    // NULL source_email_id (a manual entry) is not constrained by this — Postgres treats every
+    // NULL as distinct in a unique index, so only two rows citing the SAME email can collide.
+    // Safe to add only after the live cross-day-fallback duplicates were cleaned up (see
+    // docs/DUPLICATE_DATA_CLEANUP_2026-09-23.md) — the underlying dedup bug is fixed in
+    // ParsedEmailImporter.isDuplicateExpense.
+    uniqueConstraints = @UniqueConstraint(name = "uq_expense_user_source_email",
+        columnNames = {"user_id", "source_email_id"}))
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 public class Expense {
 
@@ -37,6 +44,12 @@ public class Expense {
 
     @Column(name = "payment_method", length = 100)
     private String paymentMethod;
+
+    // Which CashAccount this was paid from, when the user chooses to say — bare Long rather
+    // than a JPA relation, consistent with this entity's existing user_id/source_email_id
+    // style. Nullable: most historical rows and quick manual entries never set this.
+    @Column(name = "cash_account_id")
+    private Long cashAccountId;
 
     @Column(name = "source_email_id", length = 100)
     private String sourceEmailId;

@@ -31,6 +31,10 @@ public class ParsedEmail {
     private LocalDate paymentDate;     // card payment confirmation date (CARD_PAYMENT)
     private String paymentReference;   // bank/UPI reference/RRN quoted in a payment confirmation
     private String paymentStatus;      // "CONFIRMED" | "REVERSED" — set by CardPaymentParser
+    private BigDecimal previousBalance; // card bill: previous cycle's closing balance, when stated
+    private BigDecimal minimumDue;      // card bill: minimum amount due, when stated
+    private BigDecimal cycleDebits;     // card bill: "purchases/debits this cycle", when stated
+    private BigDecimal cycleCredits;    // card bill: "payments/credits this cycle", when stated
 
     // FD
     private String bank;

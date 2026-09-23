@@ -27,6 +27,18 @@ public class CardBillParser implements EmailParser {
         Pattern.CASE_INSENSITIVE);
     private static final Pattern LAST4 = Pattern.compile(
         "(?:card\\s*(?:no|number|ending|xx+)[^\\d]{0,8}|\\*{2,}\\s*)(\\d{4})\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern MINIMUM_DUE = Pattern.compile(
+        "(?:minimum\\s+(?:amount\\s+)?due|min\\.?\\s*amount\\s+due|min\\s+due)[^\\d]{0,20}(?:Rs\\.?\\s*|INR\\s*|₹\\s*)?([\\d,]+\\.?\\d{0,2})",
+        Pattern.CASE_INSENSITIVE);
+    private static final Pattern PREVIOUS_BALANCE = Pattern.compile(
+        "(?:previous\\s+balance|previous\\s+outstanding|opening\\s+balance|prev(?:ious)?\\.?\\s*due)[^\\d]{0,20}(?:Rs\\.?\\s*|INR\\s*|₹\\s*)?([\\d,]+\\.?\\d{0,2})",
+        Pattern.CASE_INSENSITIVE);
+    private static final Pattern CYCLE_DEBITS = Pattern.compile(
+        "(?:purchases\\s*(?:&|and)?\\s*(?:other\\s*)?debits|total\\s+debits|total\\s+purchases)[^\\d]{0,20}(?:Rs\\.?\\s*|INR\\s*|₹\\s*)?([\\d,]+\\.?\\d{0,2})",
+        Pattern.CASE_INSENSITIVE);
+    private static final Pattern CYCLE_CREDITS = Pattern.compile(
+        "(?:payments\\s*(?:&|and)?\\s*(?:other\\s*)?credits|total\\s+credits|total\\s+payments)[^\\d]{0,20}(?:Rs\\.?\\s*|INR\\s*|₹\\s*)?([\\d,]+\\.?\\d{0,2})",
+        Pattern.CASE_INSENSITIVE);
 
     private static final String[] ISSUERS = { "hdfc", "sbi", "icici", "axis", "amex", "americanexpress", "kotak", "citi", "hsbc", "rbl", "idfc" };
 
@@ -47,6 +59,10 @@ public class CardBillParser implements EmailParser {
         LocalDate dueDate = ParserUtil.parseDate(ParserUtil.findFirst(text, DUE_DATE));
         LocalDate statementDate = ParserUtil.parseDate(ParserUtil.findFirst(text, STATEMENT_DATE));
         String last4 = ParserUtil.findFirst(text, LAST4);
+        BigDecimal minimumDue = ParserUtil.parseMoney(ParserUtil.findFirst(text, MINIMUM_DUE));
+        BigDecimal previousBalance = ParserUtil.parseMoney(ParserUtil.findFirst(text, PREVIOUS_BALANCE));
+        BigDecimal cycleDebits = ParserUtil.parseMoney(ParserUtil.findFirst(text, CYCLE_DEBITS));
+        BigDecimal cycleCredits = ParserUtil.parseMoney(ParserUtil.findFirst(text, CYCLE_CREDITS));
 
         String issuer = "Card";
         for (String is : ISSUERS) {
@@ -63,6 +79,10 @@ public class CardBillParser implements EmailParser {
             .amount(due)
             .dueDate(dueDate)
             .statementDate(statementDate)
+            .minimumDue(minimumDue)
+            .previousBalance(previousBalance)
+            .cycleDebits(cycleDebits)
+            .cycleCredits(cycleCredits)
             .sourceDescription(String.format("%s card bill: ₹%.0f due%s", issuer, due,
                 dueDate != null ? " by " + dueDate : ""))
             .build());

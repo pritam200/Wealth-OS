@@ -204,8 +204,12 @@ public class PdfImportService {
     public void tryAutoUnlock(Long userId, PendingPdf pdf) {
         if (pdf.getProviderKey() == null) return;
 
-        // 1. Try exact-match: saved password for this specific sender domain
-        SavedPdfPassword saved = savedPasswordRepo.findByUserIdAndProviderKey(userId, pdf.getProviderKey()).orElse(null);
+        // 1. Try exact-match: saved password for this specific sender domain AND document
+        // type — a password learned from a card statement must not be assumed to work on a
+        // bank statement from the same institution, and vice versa.
+        SavedPdfPassword saved = savedPasswordRepo
+            .findByUserIdAndProviderKeyAndDocumentType(userId, pdf.getProviderKey(), pdf.getDocumentType())
+            .orElse(null);
 
         // 2. Cross-provider PAN sharing: try ALL saved PAN-domain passwords (multi-PAN households)
         List<SavedPdfPassword> panCandidates = new ArrayList<>();
@@ -278,10 +282,13 @@ public class PdfImportService {
                     candidate.setLastUsedAt(LocalDateTime.now());
                     savedPasswordRepo.save(candidate);
                     if (!candidate.getProviderKey().equals(pdf.getProviderKey())) {
-                        SavedPdfPassword providerCopy = savedPasswordRepo.findByUserIdAndProviderKey(userId, pdf.getProviderKey()).orElse(null);
+                        SavedPdfPassword providerCopy = savedPasswordRepo
+                            .findByUserIdAndProviderKeyAndDocumentType(userId, pdf.getProviderKey(), pdf.getDocumentType())
+                            .orElse(null);
                         if (providerCopy == null) {
                             savedPasswordRepo.save(SavedPdfPassword.builder()
                                 .userId(userId).providerKey(pdf.getProviderKey())
+                                .documentType(pdf.getDocumentType())
                                 .encryptedPassword(candidate.getEncryptedPassword())
                                 .passwordHint(pdf.getPasswordHint() != null ? pdf.getPasswordHint() : candidate.getPasswordHint())
                                 .lastUsedAt(LocalDateTime.now())
@@ -305,9 +312,10 @@ public class PdfImportService {
                     // Persist the working credential so the next statement from this provider
                     // opens without re-deriving. Stored encrypted; the plaintext never leaves
                     // this method.
-                    if (savedPasswordRepo.findByUserIdAndProviderKey(userId, pdf.getProviderKey()).isEmpty()) {
+                    if (savedPasswordRepo.findByUserIdAndProviderKeyAndDocumentType(userId, pdf.getProviderKey(), pdf.getDocumentType()).isEmpty()) {
                         savedPasswordRepo.save(SavedPdfPassword.builder()
                             .userId(userId).providerKey(pdf.getProviderKey())
+                            .documentType(pdf.getDocumentType())
                             .encryptedPassword(passwordCipher.encrypt(candidate.value()))
                             .passwordHint(candidate.strategy().describe())
                             .lastUsedAt(LocalDateTime.now())
@@ -371,8 +379,10 @@ public class PdfImportService {
 
         if (result.unlocked && pdf.getProviderKey() != null && mayStore) {
             String encrypted = passwordCipher.encrypt(password);
-            SavedPdfPassword saved = savedPasswordRepo.findByUserIdAndProviderKey(userId, pdf.getProviderKey())
-                .orElse(SavedPdfPassword.builder().userId(userId).providerKey(pdf.getProviderKey()).build());
+            SavedPdfPassword saved = savedPasswordRepo
+                .findByUserIdAndProviderKeyAndDocumentType(userId, pdf.getProviderKey(), pdf.getDocumentType())
+                .orElse(SavedPdfPassword.builder().userId(userId).providerKey(pdf.getProviderKey())
+                    .documentType(pdf.getDocumentType()).build());
             saved.setEncryptedPassword(encrypted);
             saved.setPasswordHint(pdf.getPasswordHint());
             saved.setUpdatedAt(LocalDateTime.now());
@@ -385,7 +395,12 @@ public class PdfImportService {
             boolean isPanPassword = PAN_PASSWORD_DOMAINS.contains(pdf.getProviderKey());
             for (PendingPdf sibling : allPending) {
                 if (sibling.getId().equals(pdf.getId())) continue;
-                boolean sameProvider = pdf.getProviderKey().equals(sibling.getProviderKey());
+                // Same provider is no longer sufficient on its own: this institution may use a
+                // different password convention for a different statement kind, so a sibling
+                // only counts as "the same case" when its document type matches too. Two nulls
+                // (both unclassified) are treated as matching, same as before this field existed.
+                boolean sameProvider = pdf.getProviderKey().equals(sibling.getProviderKey())
+                    && java.util.Objects.equals(pdf.getDocumentType(), sibling.getDocumentType());
                 boolean panCrossProvider = isPanPassword && sibling.getProviderKey() != null
                     && PAN_PASSWORD_DOMAINS.contains(sibling.getProviderKey());
                 if (!sameProvider && !panCrossProvider) continue;
@@ -395,10 +410,13 @@ public class PdfImportService {
                         autoUnlocked++;
                         // Save password for the sibling's provider too
                         if (!sameProvider && sibling.getProviderKey() != null) {
-                            SavedPdfPassword sibSaved = savedPasswordRepo.findByUserIdAndProviderKey(userId, sibling.getProviderKey()).orElse(null);
+                            SavedPdfPassword sibSaved = savedPasswordRepo
+                                .findByUserIdAndProviderKeyAndDocumentType(userId, sibling.getProviderKey(), sibling.getDocumentType())
+                                .orElse(null);
                             if (sibSaved == null) {
                                 savedPasswordRepo.save(SavedPdfPassword.builder()
                                     .userId(userId).providerKey(sibling.getProviderKey())
+                                    .documentType(sibling.getDocumentType())
                                     .encryptedPassword(encrypted)
                                     .passwordHint(sibling.getPasswordHint() != null ? sibling.getPasswordHint() : pdf.getPasswordHint())
                                     .lastUsedAt(LocalDateTime.now())
@@ -452,12 +470,20 @@ public class PdfImportService {
             byte[] bytes = gmailClient.downloadAttachment(gmail, pdf.getGmailMessageId(), pdf.getAttachmentId());
             steps.add(step("pdf_downloaded", "OK", bytes.length + " bytes"));
 
-            // Content identity, computed before parsing. The table's unique constraint only
-            // covers (user, message id, attachment id), which misses the same statement arriving
-            // as a forward, re-sent by the provider, or on a second thread — and Gmail can return
-            // a different attachment id for the same physical file across fetches. Hashing the
-            // bytes is the only identifier that survives all of those.
-            String contentHash = sha256(bytes);
+            try (PDDocument doc = Loader.loadPDF(bytes, password)) {
+                text = new PDFTextStripper().getText(doc);
+            }
+            steps.add(step("pdf_unlocked", "OK", text.length() + " chars extracted"));
+
+            // Content identity, computed from the DECRYPTED text, not the encrypted bytes.
+            // Hashing the ciphertext meant the same statement encrypted twice by the provider —
+            // most PDF encryption embeds a random salt/ID per file — produced two different
+            // hashes, defeating the exact case this check exists for: a statement re-sent as a
+            // forward or on a second thread. The table's unique constraint only covers (user,
+            // message id, attachment id), which also misses that case, and Gmail can return a
+            // different attachment id for the same physical file across fetches — so this is the
+            // only identifier that actually survives all three.
+            String contentHash = sha256(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             pdf.setContentHash(contentHash);
 
             PendingPdf alreadyImported = pendingPdfRepo
@@ -466,7 +492,7 @@ public class PdfImportService {
                 .orElse(null);
 
             if (alreadyImported != null) {
-                // Same bytes, already parsed and imported. Re-parsing would push identical
+                // Same content, already parsed and imported. Re-parsing would push identical
                 // transactions back through the importer; they would be caught by the
                 // transaction fingerprint, but marking it here keeps the reason visible and
                 // saves the work.
@@ -480,11 +506,6 @@ public class PdfImportService {
                 pendingPdfRepo.save(pdf);
                 return new PdfUnlockResult(false, "This statement has already been imported.");
             }
-
-            try (PDDocument doc = Loader.loadPDF(bytes, password)) {
-                text = new PDFTextStripper().getText(doc);
-            }
-            steps.add(step("pdf_unlocked", "OK", text.length() + " chars extracted"));
         } catch (org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException e) {
             steps.add(step("pdf_unlocked", "FAIL", "Incorrect password"));
             pdf.setPipelineSteps(toJson(steps));
@@ -617,7 +638,11 @@ public class PdfImportService {
         List<String> summaries = new ArrayList<>();
         for (ParsedEmail pe : parsed) {
             try {
-                importer.importParsedEmail(userId, user, pe, pdf.getGmailMessageId());
+                // Passing the decrypted text (not the 4-arg overload) lets tier-1 rail-reference
+                // dedup run on this import — contract notes and statements are exactly the
+                // documents most likely to carry a UTR/RRN, so skipping it here disabled the
+                // strongest dedup signal for the whole PDF path.
+                importer.importParsedEmail(userId, user, pe, pdf.getGmailMessageId(), text);
                 summaries.add(pe.getSourceDescription());
                 imported++;
             } catch (Exception e) {
