@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useState, lazy, Suspense } from 'react';
-import { LayoutDashboard, Activity, TrendingUp, PieChart, Wallet, Receipt, Target, CreditCard, Brain, Coins, RefreshCw, ClipboardList, Settings as SettingsIcon } from 'lucide-react';
+import { LayoutDashboard, TrendingUp, Activity, Receipt, Target, AlertCircle, Settings as SettingsIcon } from 'lucide-react';
 import { LoginPage } from './pages/auth/LoginPage';
 import { RegisterPage } from './pages/auth/RegisterPage';
 import { Sidebar } from './components/layout/Sidebar';
@@ -37,34 +37,31 @@ const DashboardPage         = lazy(() => import('./pages/DashboardPage').then(m 
 const DataSyncPage          = lazy(() => import('./pages/DataSyncPage').then(m => ({ default: m.DataSyncPage })));
 const SettingsPage          = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 const StockPage             = lazy(() => import('./pages/StockPage').then(m => ({ default: m.StockPage })));
+const ReviewQueue           = lazy(() => import('./components/ReviewQueue').then(m => ({ default: m.ReviewQueue })));
 
-// Single-responsibility IA: My Wealth is holdings/net-worth only (no recommendations —
-// see the badge-free PortfolioSection default). Stocks and Mutual Funds are the only two
-// places BUY/SELL/HOLD/BOOK_PROFIT signals render (Holdings & Signals sub-tabs).
+// Nav is grouped into broad workflow groups rather than by single-responsibility domain
+// (Stocks/Mutual Funds merged into one Investments group) per explicit user request, with
+// Markets kept as its own group (trends/forecast/news aren't holdings). BUY/SELL/HOLD/
+// BOOK_PROFIT signals still only render on the Holdings & Signals sub-tabs (unchanged) —
+// only the nav grouping changed, not what each tab renders.
 const NAV_SECTIONS: readonly NavSection[] = [
   {
-    id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard,
-    tabs: [{ id: 0, label: 'Dashboard' }],
+    id: 'overview', label: 'Dashboard', Icon: LayoutDashboard,
+    tabs: [
+      { id: 0, label: 'Dashboard' },
+      { id: 7, label: 'Net Worth & Risk' },
+      { id: 9, label: 'Daily Actions' },
+      { id: 16, label: "Today's Investment Actions" },
+    ],
   },
   {
-    id: 'wealth', label: 'My Wealth', Icon: Wallet,
+    id: 'investments', label: 'Investments', Icon: TrendingUp,
     tabs: [
       { id: 8, label: 'Portfolio & Assets' },
-      { id: 7, label: 'Net Worth & Risk' },
-    ],
-  },
-  {
-    id: 'stocks', label: 'Stocks', Icon: TrendingUp,
-    tabs: [
-      { id: 13, label: 'Holdings & Signals' },
+      { id: 13, label: 'Stocks: Holdings & Signals' },
       { id: 2, label: 'Stock Insights' },
       { id: 4, label: 'Price Projections' },
-    ],
-  },
-  {
-    id: 'mutualfunds', label: 'Mutual Funds', Icon: PieChart,
-    tabs: [
-      { id: 6, label: 'Holdings & Signals' },
+      { id: 6, label: 'Mutual Funds: Holdings & Signals' },
     ],
   },
   {
@@ -76,39 +73,30 @@ const NAV_SECTIONS: readonly NavSection[] = [
     ],
   },
   {
-    id: 'income', label: 'Income & Expenses', Icon: Receipt,
-    tabs: [{ id: 10, label: 'Income & Expenses' }],
-  },
-  {
-    id: 'household-plan', label: 'Household Plan', Icon: ClipboardList,
-    tabs: [{ id: 17, label: 'Financial Planner' }],
-  },
-  {
-    id: 'dividends', label: 'Dividends', Icon: Coins,
-    tabs: [{ id: 14, label: 'Dividends' }],
-  },
-  {
-    id: 'planning', label: 'Financial Planning', Icon: Target,
-    tabs: [{ id: 12, label: 'Financial Planning' }],
-  },
-  {
-    id: 'cards', label: 'Cards & Rewards', Icon: CreditCard,
-    tabs: [{ id: 11, label: 'Cards & Rewards' }],
-  },
-  {
-    id: 'advisor', label: 'AI Advisor', Icon: Brain,
+    id: 'transactions', label: 'Transactions', Icon: Receipt,
     tabs: [
-      { id: 9, label: 'Daily Actions' },
-      { id: 16, label: "Today's Investment Actions" },
+      { id: 10, label: 'Income & Expenses' },
+      { id: 11, label: 'Cards & Rewards' },
+      { id: 14, label: 'Dividends' },
     ],
   },
   {
-    id: 'datasync', label: 'Data Sync', Icon: RefreshCw,
-    tabs: [{ id: 15, label: 'Email & Statement Sync' }],
+    id: 'needs-review', label: 'Needs Review', Icon: AlertCircle,
+    tabs: [{ id: 19, label: 'Needs Review' }],
   },
   {
-    id: 'settings', label: 'Settings', Icon: SettingsIcon,
-    tabs: [{ id: 18, label: 'Settings' }],
+    id: 'analytics', label: 'Analytics & Reports', Icon: Target,
+    tabs: [
+      { id: 17, label: 'Financial Planner' },
+      { id: 12, label: 'Financial Planning' },
+    ],
+  },
+  {
+    id: 'settings', label: 'Settings & Integrations', Icon: SettingsIcon,
+    tabs: [
+      { id: 18, label: 'Settings' },
+      { id: 15, label: 'Email & Statement Sync' },
+    ],
   },
 ] as const;
 
@@ -230,6 +218,7 @@ function TabContent({ tab, onNavigate }: { tab: number; onNavigate: (tabId: numb
     case 16: return <Tab16TodaysActions />;
     case 17: return <Tab17FinancialPlanner />;
     case 18: return <SettingsPage />;
+    case 19: return <ReviewQueue />;
     default: return <Tab1MarketTrends />;
   }
 }

@@ -1,3 +1,10 @@
+import type { LucideIcon } from 'lucide-react';
+import {
+  Banknote, Laptop, Coins, Percent, Home, Briefcase, Tag, Utensils, Plane, Zap,
+  Clapperboard, HeartPulse, ShoppingBag, CreditCard, TrendingUp, Bike, ShoppingCart,
+  UtensilsCrossed, ArrowLeftRight,
+} from 'lucide-react';
+
 /**
  * Single source of truth for chart colours.
  *
@@ -97,3 +104,19 @@ export const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export const categoryColor = (key: string) => CATEGORY_COLORS[key] ?? '#475569';
+
+/**
+ * Icon per income source / expense category, for the badge next to each transaction row.
+ * Purely decorative — falls back to a generic tag icon for any category not listed here
+ * (e.g. a custom category added via the planner's editable-keywords UI).
+ */
+export const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  Salary: Banknote, Freelance: Laptop, Dividend: Coins, Interest: Percent,
+  Rental: Home, Business: Briefcase, Other: Tag,
+  Food: Utensils, Travel: Plane, Utilities: Zap, Entertainment: Clapperboard,
+  Health: HeartPulse, Shopping: ShoppingBag, EMI: CreditCard, Investment: TrendingUp,
+  'Food Delivery': Bike, Groceries: ShoppingCart, 'Restaurant / Outing': UtensilsCrossed,
+  'Account Transfer': ArrowLeftRight,
+};
+
+export const categoryIcon = (key: string): LucideIcon => CATEGORY_ICONS[key] ?? Tag;

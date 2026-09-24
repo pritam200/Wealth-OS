@@ -8,17 +8,22 @@ export default {
         // Light theme, but no longer a flat grey sheet: the page sits on a faintly tinted
         // cool base with a soft colour mesh painted in index.css, so white cards read as
         // genuinely raised panels and the surface itself has some life to it.
+        // Theme-dependent tokens (surface/ink/gray) are CSS variables, not literal hex —
+        // `:root` / `.dark` in index.css hold the two palettes, and the `dark` class on
+        // <html> (see themeStore.ts) swaps between them without touching a component.
+        // The `<alpha-value>` placeholder is what keeps opacity modifiers (`bg-surface/50`)
+        // working with a CSS-variable colour.
         surface: {
-          DEFAULT: '#F4F6FC',   // page background (faint indigo cast, not neutral grey)
-          card:    '#FFFFFF',
-          panel:   '#FFFFFF',
-          border:  '#E2E7F3',
-          hover:   '#EEF2FE',   // indigo-tinted hover/fill instead of slate grey
-          muted:   '#F1F4FD',
+          DEFAULT: 'rgb(var(--surface) / <alpha-value>)',
+          card:    'rgb(var(--surface-card) / <alpha-value>)',
+          panel:   'rgb(var(--surface-panel) / <alpha-value>)',
+          border:  'rgb(var(--surface-border) / <alpha-value>)',
+          hover:   'rgb(var(--surface-hover) / <alpha-value>)',
+          muted:   'rgb(var(--surface-muted) / <alpha-value>)',
         },
         // Primary text. Named `ink` rather than reusing `white` so the class actually says
         // what it means — `text-ink` is the highest-emphasis text colour in either theme.
-        ink: '#101635',
+        ink: 'rgb(var(--ink) / <alpha-value>)',
 
         // Indigo→violet is the identity colour. `light` is deliberately DARKER than DEFAULT:
         // "light" here means the variant used for text/icons, which needs MORE contrast on a
@@ -37,7 +42,7 @@ export default {
         bull:            '#047857',   // emerald — positive / buy
         'bull-vivid':    '#10B981',
         bear:            '#E11D48',   // rose — negative / sell
-        'bear-vivid':    '#F43F5E',
+        'bear-vivid':    '#EF4444',
         neutral:         '#B45309',   // amber — warning / watch
         'neutral-vivid': '#F59E0B',
         accent:          '#0E7490',   // cyan — informational
@@ -49,19 +54,20 @@ export default {
         // more prominent, which is how all ~660 existing usages read (gray-500/600 for muted
         // captions, gray-200/300 for near-primary text). Inverting the values here flips the
         // whole app to light mode without touching a single component.
+        // NOTE: this is a TEXT-EMPHASIS scale, not a lightness scale — a lower number means
+        // more prominent, which is how all ~660 existing usages read (gray-500/600 for muted
+        // captions, gray-200/300 for near-primary text). Values are CSS variables so dark
+        // mode gets its own emphasis scale (see index.css) without renumbering call sites.
         gray: {
-          100: '#101635',   // highest emphasis
-          200: '#1E2647',
-          300: '#333C63',
-          400: '#4A5478',
-          // Every text tier clears WCAG AA (>=4.5:1) against both the white card and the
-          // page background — the faint tiers are used at 0.72rem, where a 3.5:1 grey is
-          // genuinely hard to read.
-          500: '#5C6689',   // muted body/caption
-          600: '#66708F',   // faint
-          700: '#6B7594',   // faintest / labels
-          800: '#E2E7F3',   // borders
-          900: '#EEF2FE',   // subtle fills
+          100: 'rgb(var(--gray-100) / <alpha-value>)',
+          200: 'rgb(var(--gray-200) / <alpha-value>)',
+          300: 'rgb(var(--gray-300) / <alpha-value>)',
+          400: 'rgb(var(--gray-400) / <alpha-value>)',
+          500: 'rgb(var(--gray-500) / <alpha-value>)',
+          600: 'rgb(var(--gray-600) / <alpha-value>)',
+          700: 'rgb(var(--gray-700) / <alpha-value>)',
+          800: 'rgb(var(--gray-800) / <alpha-value>)',
+          900: 'rgb(var(--gray-900) / <alpha-value>)',
         },
       },
       fontFamily: {

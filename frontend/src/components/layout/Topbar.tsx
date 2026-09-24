@@ -1,6 +1,12 @@
-import { LogOut, Eye, EyeOff } from 'lucide-react';
+import { LogOut, Eye, EyeOff, Sun, Moon, Monitor } from 'lucide-react';
 import { StockSearch } from '../market/StockSearch';
 import { usePrivacyStore } from '../../store/privacyStore';
+import { useThemeStore } from '../../store/themeStore';
+import type { Theme } from '../../store/themeStore';
+
+const THEME_CYCLE: Record<Theme, Theme> = { light: 'dark', dark: 'system', system: 'light' };
+const THEME_ICON: Record<Theme, typeof Sun> = { light: Sun, dark: Moon, system: Monitor };
+const THEME_LABEL: Record<Theme, string> = { light: 'Light', dark: 'Dark', system: 'System default' };
 
 interface Props {
   sectionLabel: string;
@@ -17,6 +23,8 @@ export function Topbar({ sectionLabel, userName, marketOpen, onLogout, onOpenSet
   const now = new Date();
   const initials = (userName ?? 'U').trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase()).join('');
   const { masked, toggle } = usePrivacyStore();
+  const { theme, setTheme } = useThemeStore();
+  const ThemeIcon = THEME_ICON[theme];
   return (
     <header className="flex items-stretch h-14 bg-surface-card/80 backdrop-blur-md border-b border-surface-border shrink-0">
       <div className="flex items-center px-5 shrink-0">
@@ -47,6 +55,10 @@ export function Topbar({ sectionLabel, userName, marketOpen, onLogout, onOpenSet
         <button onClick={toggle} title={masked ? 'Show amounts' : 'Hide amounts'}
           className={`p-1.5 rounded-lg transition-colors ${masked ? 'text-gray-500 hover:text-ink hover:bg-surface-hover' : 'text-brand-light bg-brand/10'}`}>
           {masked ? <EyeOff size={15} /> : <Eye size={15} />}
+        </button>
+        <button onClick={() => setTheme(THEME_CYCLE[theme])} title={`Theme: ${THEME_LABEL[theme]} (click to change)`}
+          className="p-1.5 rounded-lg text-gray-500 hover:text-ink hover:bg-surface-hover transition-colors">
+          <ThemeIcon size={15} />
         </button>
         <button onClick={onLogout} title="Sign out" className="text-gray-600 hover:text-bear transition-colors p-1.5 rounded-lg hover:bg-bear/10">
           <LogOut size={15} />

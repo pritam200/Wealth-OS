@@ -6,7 +6,7 @@ import { ledgerApi } from '../../api/ledger';
 import type { CashAccount } from '../../api/ledger';
 import { useMaskedText } from '../shared/Amount';
 import { TransactionDetail } from '../shared/TransactionDetail';
-import { categoryColor } from '../../theme/chartTheme';
+import { categoryColor, categoryIcon } from '../../theme/chartTheme';
 
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
@@ -187,15 +187,19 @@ export function ExpenseSection() {
             {items.map(e => {
               const displayName = e.merchant || e.description;
               const subtitle = [e.category, e.paymentMethod, e.expenseDate].filter(Boolean).join(' · ');
+              const CatIcon = categoryIcon(e.category);
+              const catColor = categoryColor(e.category);
               return (
                 <div key={e.id} className="flex items-center justify-between py-1.5 cursor-pointer hover:bg-surface-hover/50 rounded -mx-1 px-1 transition-colors"
                      onClick={() => setDetail(e)}>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: categoryColor(e.category) }} />
-                      <span className="text-ink text-xs font-medium truncate">{displayName}</span>
+                  <div className="min-w-0 flex-1 flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: `${catColor}1A` }}>
+                      <CatIcon size={12} style={{ color: catColor }} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <span className="text-ink text-xs font-medium truncate block">{displayName}</span>
+                      <div className="text-2xs text-gray-600 truncate">{subtitle}</div>
                     </div>
-                    <div className="text-2xs text-gray-600 ml-3 truncate">{subtitle}</div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
                     <span className="text-bear text-xs font-mono font-semibold">{maskText(fmtINR(e.amount))}</span>

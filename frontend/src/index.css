@@ -5,6 +5,55 @@
 @tailwind utilities;
 
 @layer base {
+  /* Light palette (default). Values are "R G B" triplets, not hex — that's what lets
+     tailwind.config.js wrap them as `rgb(var(--x) / <alpha-value>)` so opacity modifiers
+     (`bg-surface/50`) keep working on a CSS-variable colour. */
+  :root {
+    --surface:        244 246 252;
+    --surface-card:    255 255 255;
+    --surface-panel:   255 255 255;
+    --surface-border:  226 231 243;
+    --surface-hover:   238 242 254;
+    --surface-muted:   241 244 253;
+    --ink:             16 22 53;
+
+    --gray-100: 16 22 53;
+    --gray-200: 30 38 71;
+    --gray-300: 51 60 99;
+    --gray-400: 74 84 120;
+    --gray-500: 92 102 137;
+    --gray-600: 102 112 143;
+    --gray-700: 107 117 148;
+    --gray-800: 226 231 243;
+    --gray-900: 238 242 254;
+  }
+
+  /* Dark palette — toggled via the `dark` class on <html> (see themeStore.ts). Same
+     semantics as light (surface = page bg, ink = highest-emphasis text, gray-100..900 =
+     emphasis scale, low number = more prominent), just inverted for a dark background.
+     Semantic accents (brand/bull/bear/neutral/accent/gold) are left as-is — they were
+     already chosen to hold contrast on a light surface AND read fine as saturated accents
+     on a dark one, so there's no separate dark variant for those. */
+  .dark {
+    --surface:        11 15 31;
+    --surface-card:    19 24 41;
+    --surface-panel:   19 24 41;
+    --surface-border:  42 51 82;
+    --surface-hover:   28 35 64;
+    --surface-muted:   23 28 52;
+    --ink:             238 241 250;
+
+    --gray-100: 243 245 252;
+    --gray-200: 221 225 240;
+    --gray-300: 185 192 222;
+    --gray-400: 147 155 192;
+    --gray-500: 122 130 168;
+    --gray-600: 102 111 146;
+    --gray-700: 86 94 128;
+    --gray-800: 42 51 82;
+    --gray-900: 28 35 64;
+  }
+
   * { box-sizing: border-box; }
   body {
     @apply bg-surface text-ink font-sans antialiased m-0;
@@ -21,7 +70,7 @@
   h1,h2,h3,h4 { letter-spacing: -0.4px; }
   ::-webkit-scrollbar { width: 7px; height: 7px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #C7CEEB; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--gray-800)); border-radius: 9999px; }
   ::-webkit-scrollbar-thumb:hover { @apply bg-brand; }
   ::selection { background: rgba(124,58,237,0.18); }
 }

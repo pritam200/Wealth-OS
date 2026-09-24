@@ -41,6 +41,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
+    private final EmailOtpService emailOtpService;
 
     @Value("${app.jwt.refresh-expiration-ms}")
     private long refreshExpirationMs;
@@ -53,6 +54,8 @@ public class AuthService {
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new DuplicateResourceException("User", "email", request.getEmail());
         }
+
+        emailOtpService.assertEmailVerified(request.getEmail(), request.getOtpVerificationToken());
 
         Role userRole = roleRepository.findByName(Role.RoleName.ROLE_USER)
                 .orElseGet(() -> roleRepository.save(new Role(Role.RoleName.ROLE_USER)));

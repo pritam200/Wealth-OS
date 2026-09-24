@@ -19,4 +19,10 @@ public class RegisterRequest {
     @NotBlank(message = "Password is required")
     @Size(min = 8, message = "Password must be at least 8 characters")
     private String password;
+
+    // Proof this email address was actually verified via the request-otp/verify-otp pair —
+    // see EmailOtpService. Required so registration can't be completed for an email nobody
+    // has proven they control.
+    @NotBlank(message = "Email verification is required — request and verify a code first")
+    private String otpVerificationToken;
 }

@@ -39,6 +39,25 @@ spring:
   cache:
     type: simple
 
+  # Generic SMTP relay for outbound mail (registration OTP today). No default host on
+  # purpose — same convention as app.security.pdf-password-key below: an unset relay must
+  # fail loudly when something tries to send mail, never silently pretend to succeed.
+  # Point these at whatever relay you have (a company relay, Mailtrap for local testing,
+  # a provider's SMTP endpoint, etc).
+  mail:
+    host: ${MAIL_HOST:}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          connectiontimeout: 5000
+          timeout: 5000
+
 server:
   port: 8080
 
@@ -149,6 +168,19 @@ app:
     # Base64, 32-byte AES-256 key used to encrypt saved statement-unlock passwords.
     # Generate one with: openssl rand -base64 32
     pdf-password-key: ${PDF_PASSWORD_ENC_KEY:}
+
+  # Registration email-OTP verification (EmailOtpService). The code itself is never stored
+  # in plaintext — hashed with the same BCrypt encoder as passwords — so a DB read can't
+  # recover it.
+  otp:
+    from: ${MAIL_FROM:MarketAI <no-reply@marketai.local>}
+    expiry-minutes: 10
+    resend-cooldown-seconds: 45
+    max-attempts: 5
+    # How long a verified-email token stays valid before the actual /register call must use
+    # it — long enough to fill in name/password, short enough that a leaked token is useless
+    # by the time anyone else could find it.
+    verification-token-ttl-minutes: 20
 
 gmail:
   client-id: ${GMAIL_CLIENT_ID:}

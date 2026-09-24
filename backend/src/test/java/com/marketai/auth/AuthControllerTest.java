@@ -52,6 +52,7 @@ class AuthControllerTest {
         req.setName("Test User");
         req.setEmail("test@example.com");
         req.setPassword("password123");
+        req.setOtpVerificationToken("verified-token");
 
         mockMvc.perform(post("/api/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
