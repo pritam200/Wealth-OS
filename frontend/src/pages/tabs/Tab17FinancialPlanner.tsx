@@ -2,15 +2,18 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   ChevronLeft, ChevronRight, ShoppingCart, Fuel, Plane, Home as HomeIcon,
   ChevronDown, ChevronUp, ArrowRightLeft, Pencil, Check, X, PiggyBank, ClipboardList,
-  Wallet, Target, TrendingDown, Sparkles, HeartPulse, Sofa, Receipt,
+  Wallet, Target, TrendingDown, Sparkles, HeartPulse, Sofa, Receipt, Plus, AlertCircle,
 } from 'lucide-react';
 import {
   plannerApi, sinkingFundApi, moveExpenseToCategory,
 } from '../../api/planner';
 import type {
   MonthlyPlanResponse, CategoryPlanLine, PlanTransaction, GroupSummary,
-  SinkingFundResponse, SinkingFundLedgerResponse, ReflectionResponse, PlanStatus,
+  SinkingFundResponse, SinkingFundLedgerResponse, ReflectionResponse, PlanStatus, CategoryResponse,
 } from '../../api/planner';
+import { expenseApi } from '../../api/expense';
+import { ledgerApi } from '../../api/ledger';
+import type { CashAccount } from '../../api/ledger';
 import { useMaskedText } from '../../components/shared/Amount';
 
 const fmtINR = (n: number) =>
@@ -71,6 +74,11 @@ export function Tab17FinancialPlanner() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  // Bumped after a quick-add spend so every section below re-fetches the plan it already
+  // reads independently — cheaper than lifting one shared plan state through four sections
+  // that each also need to refetch on their own triggers (limit edits, moving a transaction).
+  const [refreshToken, setRefreshToken] = useState(0);
+  const bumpRefresh = () => setRefreshToken(t => t + 1);
 
   const goPrev = () => { if (month === 1) { setMonth(12); setYear(y => y - 1); } else setMonth(m => m - 1); };
   const goNext = () => { if (month === 12) { setMonth(1); setYear(y => y + 1); } else setMonth(m => m + 1); };
@@ -78,17 +86,151 @@ export function Tab17FinancialPlanner() {
   return (
     <div className="space-y-6 animate-fade-rise">
       <PlanHeaderSection year={year} month={month} monthLabel={`${MONTH_NAMES[month - 1]} ${year}`}
-        onPrev={goPrev} onNext={goNext} />
-      <CategoryBoxGrid year={year} month={month} />
+        onPrev={goPrev} onNext={goNext} refreshToken={refreshToken} />
+      <QuickAddSpendCard year={year} month={month} onAdded={bumpRefresh} />
+      <CategoryBoxGrid year={year} month={month} refreshToken={refreshToken} />
       <TravelFundTracker />
-      <MonthEndReview year={year} month={month} />
+      <MonthEndReview year={year} month={month} refreshToken={refreshToken} />
+    </div>
+  );
+}
+
+/* ── Quick Add Spend: pick a planned category, log an amount against it directly ── */
+function QuickAddSpendCard({ year, month, onAdded }: { year: number; month: number; onAdded: () => void }) {
+  const today = () => new Date().toISOString().slice(0, 10);
+  const [categories, setCategories] = useState<CategoryPlanLine[]>([]);
+  const [accounts, setAccounts] = useState<CashAccount[]>([]);
+  const [categoryKey, setCategoryKey] = useState('');
+  const [amount, setAmount] = useState('');
+  const [description, setDescription] = useState('');
+  const [expenseDate, setExpenseDate] = useState(today());
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [cashAccountId, setCashAccountId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    plannerApi.getPlan(year, month).then(r => {
+      setCategories(r.data.categories.filter(c => !c.linkedToSinkingFund));
+      setCategoryKey(prev => prev || r.data.categories[0]?.key || '');
+    }).catch(() => {});
+  }, [year, month]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { ledgerApi.accounts().then(r => setAccounts(r.data)).catch(() => {}); }, []);
+
+  const grouped = useMemo(() => {
+    const byGroup = new Map<string, CategoryPlanLine[]>();
+    for (const c of categories) {
+      const g = c.groupName || 'Ungrouped';
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g)!.push(c);
+    }
+    return Array.from(byGroup.entries());
+  }, [categories]);
+
+  const submit = async () => {
+    setError(null);
+    const amt = parseFloat(amount);
+    if (!categoryKey) { setError('Choose a category'); return; }
+    if (!amount || Number.isNaN(amt) || amt <= 0) { setError('Enter an amount greater than 0'); return; }
+    if (!description.trim()) { setError('Say what this was for'); return; }
+
+    setSaving(true);
+    try {
+      const { data: created } = await expenseApi.add({
+        description: description.trim(),
+        amount: amt,
+        category: 'Uncategorized', // separate axis from the planner category picked below
+        expenseDate,
+        merchant: description.trim(),
+        paymentMethod: paymentMethod || undefined,
+        cashAccountId: cashAccountId ? Number(cashAccountId) : undefined,
+      });
+      // Force it into the chosen planner box rather than leaving it to keyword matching,
+      // which could easily land a hand-picked category in "Miscellaneous" instead.
+      await moveExpenseToCategory(created.id, categoryKey);
+      setAmount('');
+      setDescription('');
+      setPaymentMethod('');
+      onAdded();
+    } catch {
+      setError('Could not save — please try again');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (categories.length === 0) return null;
+
+  return (
+    <div className="card">
+      <div className="flex items-center gap-2.5 mb-3">
+        <div className="icon-badge-bear"><Receipt size={15} /></div>
+        <div>
+          <h3 className="font-bold text-sm text-ink">Log a Spend</h3>
+          <p className="text-2xs text-gray-500">Pick the plan category and record what you spent — it counts against that box immediately</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mb-2">
+        <div>
+          <label className="stat-label block mb-1 text-2xs">Category *</label>
+          <select value={categoryKey} onChange={e => setCategoryKey(e.target.value)} className="input-field text-xs w-full">
+            {grouped.map(([groupName, cats]) => (
+              <optgroup key={groupName} label={groupName}>
+                {cats.map(c => <option key={c.key} value={c.key}>{c.name}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="stat-label block mb-1 text-2xs">Amount (₹) *</label>
+          <input type="number" value={amount} onChange={e => setAmount(e.target.value)}
+            placeholder="500" className="input-field text-xs w-full" />
+        </div>
+        <div>
+          <label className="stat-label block mb-1 text-2xs">What was it for? *</label>
+          <input value={description} onChange={e => setDescription(e.target.value)}
+            placeholder="Groceries, electricity bill…" className="input-field text-xs w-full" />
+        </div>
+        <div>
+          <label className="stat-label block mb-1 text-2xs">Date</label>
+          <input type="date" value={expenseDate} onChange={e => setExpenseDate(e.target.value)} className="input-field text-xs w-full" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+        <div>
+          <label className="stat-label block mb-1 text-2xs">Payment method</label>
+          <input value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}
+            placeholder="UPI, Card, Cash…" className="input-field text-xs w-full" />
+        </div>
+        <div>
+          <label className="stat-label block mb-1 text-2xs">Paid from account</label>
+          <select value={cashAccountId} onChange={e => setCashAccountId(e.target.value)} className="input-field text-xs w-full">
+            <option value="">Unspecified</option>
+            {accounts.map(a => <option key={a.id} value={a.id}>{a.name}{a.bank ? ` (${a.bank})` : ''}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {error && (
+        <div className="text-2xs text-bear flex items-center gap-1.5 mb-2">
+          <AlertCircle size={12} /> {error}
+        </div>
+      )}
+
+      <button onClick={submit} disabled={saving} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 disabled:opacity-50">
+        <Plus size={12} /> {saving ? 'Saving…' : 'Add Spend'}
+      </button>
     </div>
   );
 }
 
 /* ── Section 1: Monthly Plan hero ── */
-function PlanHeaderSection({ year, month, monthLabel, onPrev, onNext }: {
-  year: number; month: number; monthLabel: string; onPrev: () => void; onNext: () => void;
+function PlanHeaderSection({ year, month, monthLabel, onPrev, onNext, refreshToken }: {
+  year: number; month: number; monthLabel: string; onPrev: () => void; onNext: () => void; refreshToken?: number;
 }) {
   const maskText = useMaskedText();
   const [plan, setPlan] = useState<MonthlyPlanResponse | null>(null);
@@ -97,7 +239,7 @@ function PlanHeaderSection({ year, month, monthLabel, onPrev, onNext }: {
 
   const load = useCallback(async () => {
     try { setPlan((await plannerApi.getPlan(year, month)).data); } catch { /* ignore */ }
-  }, [year, month]);
+  }, [year, month, refreshToken]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -238,14 +380,19 @@ function HeroMetric({ Icon, label, value, emphasis, onEdit }: {
 }
 
 /* ── Section 2: PDF-style category boxes, grouped and colour-coded ── */
-function CategoryBoxGrid({ year, month }: { year: number; month: number }) {
+function CategoryBoxGrid({ year, month, refreshToken }: { year: number; month: number; refreshToken?: number }) {
   const maskText = useMaskedText();
   const [plan, setPlan] = useState<MonthlyPlanResponse | null>(null);
+  const [categoriesByKey, setCategoriesByKey] = useState<Record<string, CategoryResponse>>({});
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    try { setPlan((await plannerApi.getPlan(year, month)).data); } catch { /* ignore */ }
-  }, [year, month]);
+    try {
+      const [planRes, catRes] = await Promise.all([plannerApi.getPlan(year, month), plannerApi.getCategories()]);
+      setPlan(planRes.data);
+      setCategoriesByKey(Object.fromEntries(catRes.data.map(c => [c.key, c])));
+    } catch { /* ignore */ }
+  }, [year, month, refreshToken]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -287,6 +434,7 @@ function CategoryBoxGrid({ year, month }: { year: number; month: number }) {
                   expanded={expandedKey === c.key}
                   onToggle={() => setExpandedKey(expandedKey === c.key ? null : c.key)}
                   allCategories={plan.categories}
+                  categoryMeta={categoriesByKey[c.key]}
                   onChanged={load}
                 />
               ))}
@@ -298,11 +446,12 @@ function CategoryBoxGrid({ year, month }: { year: number; month: number }) {
   );
 }
 
-function CategoryBox({ line, tone, expanded, onToggle, allCategories, onChanged }: {
+function CategoryBox({ line, tone, expanded, onToggle, allCategories, categoryMeta, onChanged }: {
   line: CategoryPlanLine; tone: Tone; expanded: boolean; onToggle: () => void;
-  allCategories: CategoryPlanLine[]; onChanged: () => void;
+  allCategories: CategoryPlanLine[]; categoryMeta?: CategoryResponse; onChanged: () => void;
 }) {
   const maskText = useMaskedText();
+  const [editingKeywords, setEditingKeywords] = useState(false);
   const pct = line.planned > 0 ? Math.min(100, Math.round((line.actual / line.planned) * 100)) : 0;
   // "Over" is an overspend warning, which only makes sense for consumption categories —
   // contributing more than planned to a savings fund is not a problem to flag in red.
@@ -333,6 +482,12 @@ function CategoryBox({ line, tone, expanded, onToggle, allCategories, onChanged 
               over ? 'bg-bear/10 text-bear' : nearLimit ? 'bg-gold/10 text-gold' : `${tone.soft} ${tone.text}`}`}>
               {pct}%
             </span>
+            {!line.linkedToSinkingFund && categoryMeta && (
+              <button className="btn-icon p-1" onClick={() => setEditingKeywords(v => !v)}
+                title="Teach this category which merchants/descriptions belong to it">
+                <Pencil size={12} />
+              </button>
+            )}
             {!line.linkedToSinkingFund && line.transactions.length > 0 && (
               <button className="btn-icon p-1" onClick={onToggle} title={expanded ? 'Hide transactions' : 'Show transactions'}>
                 {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -340,6 +495,10 @@ function CategoryBox({ line, tone, expanded, onToggle, allCategories, onChanged 
             )}
           </div>
         </div>
+
+        {editingKeywords && categoryMeta && (
+          <KeywordEditor category={categoryMeta} onSaved={() => { setEditingKeywords(false); onChanged(); }} />
+        )}
 
         <div className="meter mb-3">
           <div className={`meter-fill ${over ? 'bg-bear-gradient' : tone.bar}`} style={{ width: `${pct}%` }} />
@@ -365,6 +524,52 @@ function CategoryBox({ line, tone, expanded, onToggle, allCategories, onChanged 
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Classification runs on plain keyword substring matching against merchant/description
+ * (PlanCategoryClassifier, backend) — a transaction lands here only if one of these words
+ * appears in its text, and falls into Miscellaneous otherwise. This is the only place to
+ * widen that vocabulary; there's no AI step to "fix" separately.
+ */
+function KeywordEditor({ category, onSaved }: { category: CategoryResponse; onSaved: () => void }) {
+  const [value, setValue] = useState(category.keywords || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await plannerApi.updateCategory(category.id, { keywords: value });
+      onSaved();
+    } catch {
+      setError('Could not save — please try again');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-2.5 mb-1 p-2.5 rounded-lg bg-surface-hover/70 border border-surface-border">
+      <div className="text-2xs text-gray-500 mb-1.5">
+        {category.fallback
+          ? 'This is the fallback category — a transaction lands here whenever no other category\'s keywords match. Keywords here are ignored.'
+          : `Comma-separated words to match in a transaction's merchant/description — any of these will auto-file it under "${category.name}" instead of Miscellaneous.`}
+      </div>
+      <textarea className="input-field w-full text-2xs" rows={2} value={value} disabled={category.fallback}
+        placeholder="e.g. amazon, flipkart, myntra"
+        onChange={e => setValue(e.target.value)} />
+      {error && <div className="text-2xs text-bear mt-1">{error}</div>}
+      {!category.fallback && (
+        <div className="flex gap-2 mt-2">
+          <button onClick={save} disabled={saving} className="btn-primary text-2xs px-2.5 py-1">
+            {saving ? 'Saving…' : 'Save keywords'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -584,7 +789,7 @@ const FINAL_STATUS_TONE: Record<string, string> = {
   OVER: 'bg-bear-gradient shadow-glow-bear',
 };
 
-function MonthEndReview({ year, month }: { year: number; month: number }) {
+function MonthEndReview({ year, month, refreshToken }: { year: number; month: number; refreshToken?: number }) {
   const maskText = useMaskedText();
   const [plan, setPlan] = useState<MonthlyPlanResponse | null>(null);
   const [reflection, setReflection] = useState<ReflectionResponse | null>(null);
@@ -605,7 +810,7 @@ function MonthEndReview({ year, month }: { year: number; month: number }) {
         finalStatus: reflRes.data.finalStatus || reflRes.data.suggestedStatus,
       });
     } catch { /* ignore */ }
-  }, [year, month]);
+  }, [year, month, refreshToken]);
 
   useEffect(() => { load(); }, [load]);
 

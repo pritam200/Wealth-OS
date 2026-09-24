@@ -56,6 +56,11 @@ public class ParsedEmail {
     private String folio;       // MF folio number
     private String provider;    // AMC name: SBI, HDFC, ICICI Pru, Nippon, etc.
 
+    // Asset identifiers (MF and/or EQUITY) — null unless the source clearly states them
+    private String isin;        // ISIN, MF scheme or listed equity
+    private String dpId;        // demat Depository Participant id (EQUITY)
+    private String clientId;    // broker client id (EQUITY)
+
     // Human-readable description for UI
     private String sourceDescription;
 }

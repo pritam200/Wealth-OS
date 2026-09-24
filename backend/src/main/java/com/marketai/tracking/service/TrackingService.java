@@ -40,6 +40,8 @@ public class TrackingService {
             .autoRenew(req.isAutoRenew())
             .startDate(req.getStartDate())
             .maturityDate(req.getMaturityDate())
+            .accountNumber(req.getAccountNumber())
+            .accountLast4(resolveAccountLast4(req.getAccountNumber(), req.getAccountLast4()))
             .build();
         fd = fdRepo.save(fd);
         markMaturedIfAlreadyPast(fd);
@@ -173,6 +175,7 @@ public class TrackingService {
             .closedDate(fd.getClosedDate())
             .renewedToId(fd.getRenewedToId())
             .renewedFromId(fd.getRenewedFromId())
+            .accountLast4(fd.getAccountLast4())
             .build();
     }
 
@@ -531,7 +534,22 @@ public class TrackingService {
         fd.setAutoRenew(req.isAutoRenew());
         if (req.getStartDate() != null) fd.setStartDate(req.getStartDate());
         if (req.getMaturityDate() != null) fd.setMaturityDate(req.getMaturityDate());
+        if (req.getAccountNumber() != null) {
+            fd.setAccountNumber(req.getAccountNumber());
+            fd.setAccountLast4(resolveAccountLast4(req.getAccountNumber(), req.getAccountLast4()));
+        } else if (req.getAccountLast4() != null) {
+            fd.setAccountLast4(req.getAccountLast4());
+        }
         return toFdResponse(fdRepo.save(fd));
+    }
+
+    /** Derives the display-safe last 4 digits from the full account number when it's supplied and
+     *  no explicit last4 was given — mirrors the {@code CreditCard.lastFour} masking convention. */
+    private static String resolveAccountLast4(String accountNumber, String explicitLast4) {
+        if (explicitLast4 != null && !explicitLast4.isBlank()) return explicitLast4;
+        if (accountNumber == null) return null;
+        String digits = accountNumber.trim();
+        return digits.length() <= 4 ? digits : digits.substring(digits.length() - 4);
     }
 
     @Transactional

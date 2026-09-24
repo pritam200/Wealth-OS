@@ -33,4 +33,8 @@ public class AddHoldingRequest {
 
     private String broker;  // provider/AMC for MF, broker for stocks
     private String folio;   // MF folio number
+
+    private String isin;      // MF scheme or listed equity ISIN
+    private String dpId;      // demat Depository Participant id (equity)
+    private String clientId;  // broker client id (equity)
 }

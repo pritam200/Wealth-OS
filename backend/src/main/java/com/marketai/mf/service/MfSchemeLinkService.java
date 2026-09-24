@@ -100,6 +100,32 @@ public class MfSchemeLinkService {
         return candidate.getSchemeCode();
     }
 
+    /**
+     * Resolves an AMFI scheme code from a bare fund name (no {@link Holding} involved), using the
+     * exact same confidence rule as {@link #resolve} — a name that doesn't clear
+     * {@link #MIN_CONFIDENCE} against its best AMFI candidate is left unresolved rather than
+     * guessed.
+     *
+     * <p>Used by the LLM-based transaction extraction path ({@code EmailLLMParserService}) to
+     * validate a scheme name the model returned before any transaction referencing it is booked
+     * — an unresolved scheme name must route to review, never be imported under a fabricated
+     * or approximate code.
+     */
+    public java.util.Optional<String> resolveSchemeCodeByFundName(String fundName) {
+        if (fundName == null || fundName.trim().length() < 3) return java.util.Optional.empty();
+
+        AmfiNavResult candidate = amfiNavService.findByName(fundName);
+        if (candidate == null) return java.util.Optional.empty();
+
+        double conf = confidence(fundName, candidate.getSchemeName());
+        if (conf < MIN_CONFIDENCE) {
+            log.debug("LLM-provided fund name '{}' left unresolved: best AMFI candidate '{}' scored {} (< {})",
+                    fundName, candidate.getSchemeName(), String.format("%.2f", conf), MIN_CONFIDENCE);
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(candidate.getSchemeCode());
+    }
+
     /** Attempt to link every MF holding that has no scheme code yet. @return number newly linked */
     @Transactional
     public int linkUnlinkedHoldings() {

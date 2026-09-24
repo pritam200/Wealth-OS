@@ -58,7 +58,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       JWT_SECRET: ${JWT_SECRET}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
       # AI provider. Only GEMINI_API_KEY used to be passed through, so a containerised
       # backend resolved the default Ollama URL to localhost INSIDE the container and the
       # local model was always reported unavailable. host.docker.internal reaches the Ollama

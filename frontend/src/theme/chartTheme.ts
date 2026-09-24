@@ -92,6 +92,8 @@ export const CATEGORY_COLORS: Record<string, string> = {
   Food: '#B45309', Travel: '#2563EB', Utilities: '#6D28D9',
   Entertainment: '#A21CAF', Health: '#047857', Shopping: '#DC2626',
   EMI: '#DC2626', Investment: '#0E7490',
+  'Food Delivery': '#EA580C', Groceries: '#65A30D', 'Restaurant / Outing': '#C2410C',
+  'Account Transfer': '#64748B',
 };
 
 export const categoryColor = (key: string) => CATEGORY_COLORS[key] ?? '#475569';

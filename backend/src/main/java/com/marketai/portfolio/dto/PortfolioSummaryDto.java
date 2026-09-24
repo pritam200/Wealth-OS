@@ -47,6 +47,9 @@ public class PortfolioSummaryDto {
         private BigDecimal weightPercent;
         private String broker;
         private String folio;
+        private String isin;
+        private String dpId;
+        private String clientId;
         private java.time.LocalDate buyDate;
         private BigDecimal xirr;
     }

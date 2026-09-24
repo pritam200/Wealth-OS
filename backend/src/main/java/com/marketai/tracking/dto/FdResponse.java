@@ -27,4 +27,5 @@ public class FdResponse {
     // FixedDeposit.renewedToId/renewedFromId for what each means.
     private Long renewedToId;
     private Long renewedFromId;
+    private String accountLast4;
 }

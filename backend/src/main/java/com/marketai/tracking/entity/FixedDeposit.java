@@ -68,6 +68,15 @@ public class FixedDeposit {
     @Column(name = "renewed_from_id")
     private Long renewedFromId;
 
+    /** Full FD certificate/account number, when the user or a statement supplies it. Nullable. */
+    @Column(name = "account_number", length = 40)
+    private String accountNumber;
+
+    /** Last 4 digits of {@link #accountNumber}, for display without exposing the full number —
+     *  same masking convention as {@code CreditCard.lastFour}. Nullable. */
+    @Column(name = "account_last4", length = 4)
+    private String accountLast4;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();

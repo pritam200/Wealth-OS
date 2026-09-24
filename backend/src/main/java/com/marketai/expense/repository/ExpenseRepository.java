@@ -21,7 +21,10 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
     List<Expense> findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(
             Long userId, LocalDate from, LocalDate to);
 
-    @Query("SELECT SUM(e.amount) FROM Expense e WHERE e.userId = :userId AND e.expenseDate >= :from AND e.expenseDate <= :to")
+    // Excludes ACCOUNT_TRANSFER: a CRED/CC-bill debit settles a debt already spent against
+    // elsewhere, so counting it here would double the real spend it's paying off.
+    @Query("SELECT SUM(e.amount) FROM Expense e WHERE e.userId = :userId AND e.expenseDate >= :from "
+        + "AND e.expenseDate <= :to AND e.category <> com.marketai.expense.entity.ExpenseCategory.ACCOUNT_TRANSFER")
     BigDecimal sumByUserIdAndDateRange(@Param("userId") Long userId,
                                        @Param("from") LocalDate from,
                                        @Param("to") LocalDate to);

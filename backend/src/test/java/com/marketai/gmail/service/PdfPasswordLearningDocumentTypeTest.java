@@ -3,15 +3,14 @@ package com.marketai.gmail.service;
 import com.google.api.services.gmail.Gmail;
 import com.marketai.auth.entity.User;
 import com.marketai.auth.repository.UserRepository;
-import com.marketai.gmail.ai.AiEmailExtractor;
 import com.marketai.gmail.entity.GmailToken;
 import com.marketai.gmail.entity.PendingPdf;
 import com.marketai.gmail.entity.SavedPdfPassword;
-import com.marketai.gmail.parser.EmailParser;
 import com.marketai.gmail.repository.GmailTokenRepository;
 import com.marketai.gmail.repository.PendingPdfRepository;
 import com.marketai.gmail.repository.SavedPdfPasswordRepository;
 import com.marketai.gmail.security.PasswordCipher;
+import com.marketai.identity.service.FinancialIdentityService;
 import com.marketai.document.classify.DocTypes;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -47,6 +46,7 @@ class PdfPasswordLearningDocumentTypeTest {
     private UserRepository userRepo;
     private GmailClientService gmailClient;
     private PasswordCipher passwordCipher;
+    private EmailLLMParserService emailLlmParserService;
     private PdfImportService service;
     private byte[] plainPdfBytes;
 
@@ -58,15 +58,17 @@ class PdfPasswordLearningDocumentTypeTest {
         userRepo = mock(UserRepository.class);
         gmailClient = mock(GmailClientService.class);
         passwordCipher = mock(PasswordCipher.class);
+        emailLlmParserService = mock(EmailLLMParserService.class);
+        when(emailLlmParserService.process(any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(EmailLLMParserService.Result.builder()
+                .outcome(EmailLLMParserService.Outcome.NOT_FINANCIAL).build());
 
         service = new PdfImportService(
             pendingPdfRepo,
-            mock(com.marketai.identity.service.PasswordCandidateResolver.class),
-            mock(com.marketai.identity.service.FinancialIdentityService.class),
+            mock(FinancialIdentityService.class),
             savedPasswordRepo, tokenRepo, userRepo, gmailClient,
-            List.<EmailParser>of(), mock(AiEmailExtractor.class),
-            mock(ParsedEmailImporter.class), passwordCipher,
-            mock(PasswordHintExtractor.class));
+            passwordCipher,
+            emailLlmParserService);
 
         // An unencrypted PDF opens with PDFBox regardless of the password supplied — good
         // enough to exercise the unlock/save-password/sibling-sweep logic without needing a

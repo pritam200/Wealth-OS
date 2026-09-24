@@ -9,6 +9,9 @@ package com.marketai.expense.entity;
  */
 public enum ExpenseCategory {
     FOOD("Food"),
+    FOOD_DELIVERY("Food Delivery"),
+    GROCERIES("Groceries"),
+    RESTAURANT_OUTING("Restaurant / Outing"),
     SHOPPING("Shopping"),
     TRAVEL("Travel"),
     FUEL("Fuel"),
@@ -18,6 +21,12 @@ public enum ExpenseCategory {
     EMI("EMI"),
     UPI("UPI"),
     INVESTMENT("Investment"),
+    // A credit-card bill payment (CRED, "pay CC bill" bank debits) moves money from a bank
+    // account to a card issuer to settle a debt already spent against — booking it as spend
+    // again here would double-count whatever purchases the card statement itself covers. Still
+    // persisted (it's a real cash movement a user should be able to see), just excluded from
+    // spend totals — see ExpenseRepository.sumByUserIdAndDateRange.
+    ACCOUNT_TRANSFER("Account Transfer"),
     UNCATEGORIZED("Uncategorized");
 
     private final String label;

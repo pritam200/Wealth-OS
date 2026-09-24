@@ -94,7 +94,7 @@ docker compose up -d
 | `OLLAMA_MODEL` | Optional | Local model name, default `qwen2.5:7b` — **change this to switch models** |
 | `OLLAMA_BASE_URL` | Optional | Default `http://localhost:11434` |
 | `GEMINI_API_KEY` | Optional | Only for `LLM_PROVIDER=gemini`. Free key: https://aistudio.google.com/apikey |
-| `GEMINI_MODEL` | Optional | Default `gemini-2.0-flash` |
+| `GEMINI_MODEL` | Optional | Default `gemini-3.6-flash` |
 | `NEWS_API_KEY` | Optional | NewsAPI.org key for news feed |
 | `REDIS_HOST` | ✓ | Redis host |
 

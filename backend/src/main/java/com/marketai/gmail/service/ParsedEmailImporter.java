@@ -603,6 +603,9 @@ public class ParsedEmailImporter {
         req.setTransactionDate(date);
         req.setCharges(BigDecimal.ZERO);
         req.setBroker(pe.getExchange());
+        req.setIsin(pe.getIsin());
+        req.setDpId(pe.getDpId());
+        req.setClientId(pe.getClientId());
 
         portfolioService.addHolding(portfolio.getId(), userId, req);
     }
@@ -722,6 +725,7 @@ public class ParsedEmailImporter {
         req.setCharges(BigDecimal.ZERO);
         req.setBroker(pe.getProvider());
         req.setFolio(pe.getFolio());
+        req.setIsin(pe.getIsin());
 
         portfolioService.addHolding(portfolio.getId(), userId, req);
     }

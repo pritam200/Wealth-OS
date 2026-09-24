@@ -100,6 +100,33 @@ public class FinancialIdentityService {
         });
     }
 
+    /**
+     * Derives the statement password for one specific {@link PasswordStrategy}, from the user's
+     * stored PAN/DOB. Returns empty when the strategy's required input isn't stored, or when the
+     * strategy is {@link PasswordStrategy#CUSTOM_SAVED} (not derivable from identity at all).
+     *
+     * <p>This is the only way a caller outside this package can turn a strategy into an actual
+     * password. It exists for the LLM-driven password flow ({@code EmailLLMParserService} /
+     * {@code PdfImportService}): the model only ever decides <em>which</em> strategy applies —
+     * it never sees or produces PAN, DOB, or the derived password itself. The value is produced
+     * here, deterministically, from the vault.
+     */
+    public Optional<String> derivePassword(Long userId, PasswordStrategy strategy) {
+        if (strategy == null || strategy == PasswordStrategy.CUSTOM_SAVED) return Optional.empty();
+
+        String pan = null;
+        if (strategy.needsPan()) {
+            pan = resolvePan(userId).orElse(null);
+            if (pan == null) return Optional.empty();
+        }
+        LocalDate dob = null;
+        if (strategy.needsDob()) {
+            dob = resolveDob(userId).orElse(null);
+            if (dob == null) return Optional.empty();
+        }
+        return Optional.ofNullable(strategy.derive(pan, dob));
+    }
+
     // --- Narrow plaintext access, for the password engine only ---
 
     Optional<String> resolvePan(Long userId) {

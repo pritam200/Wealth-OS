@@ -42,6 +42,7 @@ public class PortfolioService {
     private final UserRepository userRepository;
     private final MarketDataService marketDataService;
     private final RedemptionService redemptionService;
+    private final com.marketai.mf.service.MfNavHistoryService mfNavHistoryService;
 
     @Transactional
     public Portfolio createPortfolio(Long userId, String name, String description) {
@@ -93,6 +94,15 @@ public class PortfolioService {
             if (holding.getFolio() == null && req.getFolio() != null) {
                 holding.setFolio(req.getFolio());
             }
+            if (holding.getIsin() == null && req.getIsin() != null) {
+                holding.setIsin(req.getIsin());
+            }
+            if (holding.getDpId() == null && req.getDpId() != null) {
+                holding.setDpId(req.getDpId());
+            }
+            if (holding.getClientId() == null && req.getClientId() != null) {
+                holding.setClientId(req.getClientId());
+            }
             // Update buyDate if the new transaction is earlier
             if (req.getTransactionDate() != null) {
                 if (holding.getBuyDate() == null || req.getTransactionDate().isBefore(holding.getBuyDate())) {
@@ -112,6 +122,15 @@ public class PortfolioService {
             }
             if (req.getFolio() != null) {
                 holding.setFolio(req.getFolio());
+            }
+            if (req.getIsin() != null) {
+                holding.setIsin(req.getIsin());
+            }
+            if (req.getDpId() != null) {
+                holding.setDpId(req.getDpId());
+            }
+            if (req.getClientId() != null) {
+                holding.setClientId(req.getClientId());
             }
             holding.setBuyDate(req.getTransactionDate());
         }
@@ -149,7 +168,20 @@ public class PortfolioService {
             List<Holding> holdings = holdingRepository.findByPortfolioId(portfolio.getId());
             for (Holding h : holdings) {
                 String sym = h.getSymbol();
-                if (sym == null || sym.endsWith(".MF")) continue;
+                if (sym == null) continue;
+                if (sym.endsWith(".MF")) {
+                    // No live quote feed for MFs — re-apply the latest stored AMFI NAV instead
+                    // of skipping outright, so "Refresh" isn't a no-op for mutual funds.
+                    String schemeCode = h.getAmfiSchemeCode();
+                    if (schemeCode == null) continue;
+                    attempted++;
+                    try {
+                        if (mfNavHistoryService.syncHoldingValuations(schemeCode) > 0) updated++;
+                    } catch (Exception e) {
+                        log.warn("NAV refresh failed for {}: {}", sym, e.getMessage());
+                    }
+                    continue;
+                }
                 attempted++;
                 try {
                     QuoteDto quote = marketDataService.getQuote(sym);
@@ -364,6 +396,9 @@ public class PortfolioService {
                             .weightPercent(weight)
                             .broker(h.getBroker())
                             .folio(h.getFolio())
+                            .isin(h.getIsin())
+                            .dpId(h.getDpId())
+                            .clientId(h.getClientId())
                             .buyDate(h.getBuyDate())
                             .xirr(computeRealXirr(h, txnsByHolding.getOrDefault(h.getId(), List.of())))
                             .build();

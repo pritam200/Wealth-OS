@@ -4,16 +4,15 @@ import com.google.api.services.gmail.Gmail;
 import com.google.api.services.gmail.model.Message;
 import com.marketai.auth.entity.User;
 import com.marketai.auth.repository.UserRepository;
-import com.marketai.gmail.ai.AiEmailExtractor;
 import com.marketai.gmail.entity.GmailToken;
 import com.marketai.gmail.entity.PendingPdf;
 import com.marketai.gmail.entity.SavedPdfPassword;
-import com.marketai.gmail.parser.EmailParser;
-import com.marketai.gmail.parser.ParsedEmail;
 import com.marketai.gmail.repository.GmailTokenRepository;
 import com.marketai.gmail.repository.PendingPdfRepository;
 import com.marketai.gmail.repository.SavedPdfPasswordRepository;
 import com.marketai.gmail.security.PasswordCipher;
+import com.marketai.identity.service.FinancialIdentityService;
+import com.marketai.identity.service.PasswordStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
@@ -33,8 +32,8 @@ import java.util.Set;
 
 /**
  * Decrypts a password-protected PDF (broker contract note, margin/account statement) and
- * runs its extracted text through the exact same parser chain + AI fallback that normal
- * email bodies go through.
+ * runs its extracted text through the same {@link EmailLLMParserService} extraction path that
+ * normal email bodies go through.
  *
  * On a successful manual unlock, the password is encrypted (AES-GCM, see PasswordCipher)
  * and saved per sender-domain (providerKey) — future statements from the same institution
@@ -66,17 +65,13 @@ public class PdfImportService {
     ));
 
     private final PendingPdfRepository pendingPdfRepo;
-    private final com.marketai.identity.service.PasswordCandidateResolver passwordCandidateResolver;
-    private final com.marketai.identity.service.FinancialIdentityService financialIdentityService;
+    private final FinancialIdentityService financialIdentityService;
     private final SavedPdfPasswordRepository savedPasswordRepo;
     private final GmailTokenRepository tokenRepo;
     private final UserRepository userRepo;
     private final GmailClientService gmailClient;
-    private final List<EmailParser> parsers;
-    private final AiEmailExtractor aiEmailExtractor;
-    private final ParsedEmailImporter importer;
     private final PasswordCipher passwordCipher;
-    private final PasswordHintExtractor passwordHintExtractor;
+    private final EmailLLMParserService emailLlmParserService;
 
     public List<PendingPdf> list(Long userId) {
         List<PendingPdf> items = pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, PENDING_STATUSES);
@@ -154,13 +149,17 @@ public class PdfImportService {
                 pdf.setProviderKey(providerKeyOf(pdf.getSender()));
                 changed = true;
             }
-            // Always re-extract from the email body so improved extraction logic
-            // automatically corrects previously-wrong hints.
+            // Always re-classify from the email body so an improved model/prompt automatically
+            // corrects previously-wrong hints. The hint stored here is a PasswordStrategy enum
+            // name (e.g. "PAN_UPPERCASE_PLUS_DOB_DDMMYYYY") — the model only ever names the
+            // strategy, never a password.
             if (gmail != null) {
                 try {
                     Message message = gmailClient.getMessage(gmail, pdf.getGmailMessageId());
                     String body = gmailClient.getBodyText(message);
-                    String fresh = passwordHintExtractor.extract(pdf.getSubject(), body, pdf.getProviderKey());
+                    EmailLLMParserService.Classification cls =
+                        emailLlmParserService.classify(pdf.getSender(), pdf.getSubject(), body);
+                    String fresh = cls.passwordHintType() != null ? cls.passwordHintType().name() : null;
                     if (fresh != null && !fresh.equals(pdf.getPasswordHint())) {
                         pdf.setPasswordHint(fresh);
                         changed = true;
@@ -250,21 +249,22 @@ public class PdfImportService {
             }
         }
 
-        // Passwords derived from the user's own PAN/date of birth, using the provider's
-        // published convention and any instruction in the email body.
+        // A password derived from the user's own PAN/date of birth, using the ONE strategy the
+        // LLM classification step identified for this email (see EmailLLMParserService#classify)
+        // — never a guessed or brute-forced set. pdf.getPasswordHint() stores that strategy's
+        // enum name, written when the PDF was queued (GmailSyncService) and refreshed by
+        // backfillHints(). A hint that doesn't parse to a known strategy (legacy free-text hint,
+        // or a hint the model couldn't map — see EmailLLMParserService#mapPasswordHint) yields no
+        // derived candidate at all, which is the fail-safe behaviour: no password guess.
         //
         // This is what the method previously lacked entirely: it returned early whenever no
         // saved password existed, so a first-time user — who by definition has saved nothing —
         // could never auto-unlock a single statement, even though the email said in plain words
         // that the password was their PAN. Every locked document required manual entry once,
         // per provider, forever.
-        //
-        // The candidate list is bounded and rule-driven, never a brute-force search: see
-        // PasswordCandidateResolver.MAX_ATTEMPTS.
-        String savedPlaintextForResolver = null;
-        List<com.marketai.identity.service.PasswordCandidate> derived =
-            passwordCandidateResolver.resolve(userId, pdf.getProviderKey(),
-                pdf.getPasswordHint(), savedPlaintextForResolver);
+        PasswordStrategy strategy = parseStrategy(pdf.getPasswordHint());
+        String derivedPassword = strategy == null ? null
+            : financialIdentityService.derivePassword(userId, strategy).orElse(null);
 
         try {
             Gmail gmail = gmailClient.buildGmailService(token.getAccessToken(), token.getRefreshToken());
@@ -303,9 +303,9 @@ public class PdfImportService {
                     return;
                 }
             }
-            // Saved credentials exhausted (or none existed) — try the derived candidates.
-            for (com.marketai.identity.service.PasswordCandidate candidate : derived) {
-                PdfUnlockResult result = attemptUnlock(userId, pdf, user, gmail, candidate.value(), true);
+            // Saved credentials exhausted (or none existed) — try the one derived candidate.
+            if (strategy != null && derivedPassword != null) {
+                PdfUnlockResult result = attemptUnlock(userId, pdf, user, gmail, derivedPassword, true);
                 if (result.unlocked) {
                     financialIdentityService.recordSuccessfulUse(userId);
 
@@ -316,31 +316,61 @@ public class PdfImportService {
                         savedPasswordRepo.save(SavedPdfPassword.builder()
                             .userId(userId).providerKey(pdf.getProviderKey())
                             .documentType(pdf.getDocumentType())
-                            .encryptedPassword(passwordCipher.encrypt(candidate.value()))
-                            .passwordHint(candidate.strategy().describe())
+                            .encryptedPassword(passwordCipher.encrypt(derivedPassword))
+                            .passwordHint(strategy.describe())
                             .lastUsedAt(LocalDateTime.now())
                             .build());
                     }
 
                     // Records the strategy that worked, never the password itself.
-                    pdf.setResultSummary(truncate("Auto-unlocked using " + candidate.strategy().describe()
+                    pdf.setResultSummary(truncate("Auto-unlocked using " + strategy.describe()
                         + " — " + (pdf.getResultSummary() != null ? pdf.getResultSummary() : "")));
                     pendingPdfRepo.save(pdf);
                     log.info("Auto-unlocked pending PDF {} for user {} via strategy {}",
-                        pdf.getId(), userId, candidate.strategy());
+                        pdf.getId(), userId, strategy);
                     return;
                 }
             }
 
             // Nothing worked. The message states what is missing and what would fix it, and
             // never mentions a value.
-            String reason = passwordCandidateResolver.explainFailure(userId, pdf.getProviderKey());
             pdf.setStatus("PASSWORD_FAILED");
-            pdf.setResultSummary(truncate(reason));
+            pdf.setResultSummary(truncate(explainFailure(userId, strategy)));
             pendingPdfRepo.save(pdf);
         } catch (Exception e) {
             log.warn("Auto-unlock attempt failed for pending {}: {}", pdf.getId(), e.getMessage());
         }
+    }
+
+    /** {@link PasswordStrategy#valueOf}, tolerant of a null/legacy/unrecognised hint string. */
+    private static PasswordStrategy parseStrategy(String hint) {
+        if (hint == null || hint.isBlank()) return null;
+        try {
+            return PasswordStrategy.valueOf(hint.trim());
+        } catch (IllegalArgumentException e) {
+            return null; // a free-text legacy hint, or one the classifier's mapping refused
+        }
+    }
+
+    /** What to tell the user when nothing could be resolved — never mentions a value. */
+    private String explainFailure(Long userId, PasswordStrategy strategy) {
+        if (strategy == null) {
+            return "Statement locked — the password format could not be determined from the "
+                + "email, or it was identified as one the user chose when requesting the "
+                + "statement (which cannot be derived). Enter it once to save it for future statements.";
+        }
+        boolean hasPan = financialIdentityService.hasPan(userId);
+        boolean hasDob = financialIdentityService.hasDob(userId);
+        if (strategy.needsPan() && !hasPan) {
+            return "Statement locked — this statement's password format uses PAN, which is not saved yet. "
+                + "Add it under Financial Identity, or enter the password once.";
+        }
+        if (strategy.needsDob() && !hasDob) {
+            return "Statement locked — this statement's password format uses date of birth, which is not "
+                + "saved yet. Add it under Financial Identity, or enter the password once.";
+        }
+        return "Statement locked — the saved PAN and date of birth did not open it. Check they are "
+            + "correct, or enter the password once to save it for this provider.";
     }
 
     @Transactional
@@ -529,103 +559,22 @@ public class PdfImportService {
         pdf.setTextSnippet(truncate(text, 4000));
         pdf.setUnlockedAt(LocalDateTime.now());
 
-        // Step: parse — try all matching parsers (not just the first match)
-        log.info("PDF PARSE START — file: {}, sender: {}, subject: {}, textLen: {}, first200: [{}]",
+        // Step: extract + import — the single LLM-based path now handles everything the 18
+        // regex parsers, the direct ContractNoteHelper fallback and the AI extractor fallback
+        // used to split across three cascaded attempts: extraction, span verification,
+        // instrument resolution, confidence gating, persistence, and review-queue routing.
+        log.info("PDF EXTRACT START — file: {}, sender: {}, subject: {}, textLen: {}, first200: [{}]",
             pdf.getFilename(), pdf.getSender(), pdf.getSubject(), text.length(),
             text.substring(0, Math.min(200, text.length())).replace("\n", " | "));
 
-        List<ParsedEmail> parsed = new ArrayList<>();
-        String matchedParserName = null;
-        for (EmailParser parser : parsers) {
-            String pName = parser.getClass().getSimpleName();
-            boolean canParse = false;
-            try {
-                canParse = parser.canParse(pdf.getSender(), pdf.getSubject());
-                log.info("PDF PARSER CHECK — {} canParse={} for sender={}, subject={}",
-                    pName, canParse, pdf.getSender(), pdf.getSubject());
-                if (canParse) {
-                    List<ParsedEmail> parserResult = parser.parse(pdf.getSender(), pdf.getSubject(), text);
-                    log.info("PDF PARSER RESULT — {} returned {} trade(s)", pName, parserResult.size());
-                    if (!parserResult.isEmpty()) {
-                        parsed.addAll(parserResult);
-                        matchedParserName = pName;
-                        steps.add(step("trades_extracted", "OK",
-                            matchedParserName + " found " + parserResult.size() + " trade(s)"));
-                        for (ParsedEmail pe : parserResult) {
-                            log.info("PDF TRADE — {} {} x {} @ {} on {}",
-                                pe.getType(), pe.getSymbol(), pe.getQuantity(), pe.getPrice(), pe.getTradeDate());
-                        }
-                        break;
-                    } else {
-                        steps.add(step("parser_tried", "EMPTY",
-                            pName + " matched but found 0 trades"));
-                    }
-                }
-            } catch (Exception e) {
-                steps.add(step("parser_tried", "ERROR",
-                    pName + ": " + e.getMessage()));
-                log.warn("Parser {} failed on PDF {}: {}", pName, pdf.getFilename(), e.getMessage());
-            }
-        }
+        EmailLLMParserService.Result result = emailLlmParserService.process(
+            userId, user, pdf.getSender(), pdf.getSubject(), text, pdf.getGmailMessageId(), null);
 
-        // Direct ContractNoteHelper fallback — if no parser matched via canParse,
-        // try parsing the raw PDF text as a contract note anyway (the PDF is already
-        // unlocked, so we know it's a financial document from a broker)
-        if (parsed.isEmpty()) {
-            log.info("PDF CN FALLBACK — no parser matched, trying ContractNoteHelper directly");
-            try {
-                String broker = pdf.getProviderKey() != null ? pdf.getProviderKey().replace(".com","").replace(".in","") : "Broker";
-                List<ParsedEmail> cnResult = com.marketai.gmail.parser.ContractNoteHelper.parseContractNoteRows(text, pdf.getSubject(), broker);
-                if (!cnResult.isEmpty()) {
-                    parsed.addAll(cnResult);
-                    matchedParserName = "ContractNoteHelper (direct)";
-                    steps.add(step("trades_extracted", "OK",
-                        "Direct CN parser found " + cnResult.size() + " trade(s)"));
-                    for (ParsedEmail pe : cnResult) {
-                        log.info("PDF CN TRADE — {} {} x {} @ {} on {}",
-                            pe.getType(), pe.getSymbol(), pe.getQuantity(), pe.getPrice(), pe.getTradeDate());
-                    }
-                } else {
-                    steps.add(step("parser_tried", "EMPTY",
-                        "ContractNoteHelper direct parse found 0 trades in " + text.length() + " chars"));
-                    log.info("PDF CN FALLBACK — found 0 trades. Dumping lines with B/S for debug:");
-                    for (String line : text.split("\\n")) {
-                        String t = line.trim();
-                        if (t.length() >= 10 && (t.contains(" B ") || t.contains(" S ") || t.toUpperCase().contains("BUY") || t.toUpperCase().contains("SELL"))) {
-                            log.info("PDF CN LINE — [{}]", t);
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                steps.add(step("parser_tried", "ERROR", "ContractNoteHelper direct: " + e.getMessage()));
-                log.warn("Direct ContractNoteHelper failed: {}", e.getMessage());
-            }
-        }
+        pdf.setTradesExtracted(result.getImported() + result.getQueuedForReview() + result.getRejected());
+        pdf.setTradesImported(result.getImported());
 
-        // AI fallback
-        if (parsed.isEmpty()) {
-            try {
-                List<ParsedEmail> aiResult = aiEmailExtractor.extract(pdf.getSender(), pdf.getSubject(), text);
-                if (!aiResult.isEmpty()) {
-                    parsed.addAll(aiResult);
-                    matchedParserName = "AI Extractor";
-                    steps.add(step("trades_extracted", "OK",
-                        "AI fallback found " + aiResult.size() + " trade(s)"));
-                } else {
-                    steps.add(step("trades_extracted", "FAIL",
-                        "AI fallback also found 0 trades in " + text.length() + " chars of text"));
-                }
-            } catch (Exception e) {
-                steps.add(step("trades_extracted", "FAIL",
-                    "AI extraction failed: " + e.getMessage()));
-                log.debug("AI extraction on PDF text failed: {}", e.getMessage());
-            }
-        }
-
-        pdf.setTradesExtracted(parsed.size());
-
-        if (parsed.isEmpty()) {
-            steps.add(step("holdings_updated", "SKIP", "No trades to import"));
+        if (result.getImported() == 0 && result.getQueuedForReview() == 0) {
+            steps.add(step("holdings_updated", "SKIP", "No transactions found"));
             pdf.setPipelineSteps(toJson(steps));
             pdf.setStatus("FAILED");
             pdf.setResultSummary("Unlocked successfully but no transactions were found in the statement text.");
@@ -633,49 +582,25 @@ public class PdfImportService {
             return new PdfUnlockResult(true, "Unlocked, but no transactions could be identified in this statement.");
         }
 
-        // Step: import trades into portfolio
-        int imported = 0, failedCount = 0;
-        List<String> summaries = new ArrayList<>();
-        for (ParsedEmail pe : parsed) {
-            try {
-                // Passing the decrypted text (not the 4-arg overload) lets tier-1 rail-reference
-                // dedup run on this import — contract notes and statements are exactly the
-                // documents most likely to carry a UTR/RRN, so skipping it here disabled the
-                // strongest dedup signal for the whole PDF path.
-                importer.importParsedEmail(userId, user, pe, pdf.getGmailMessageId(), text);
-                summaries.add(pe.getSourceDescription());
-                imported++;
-            } catch (Exception e) {
-                failedCount++;
-                log.warn("Import from PDF failed for {}: {}", pe.getSourceDescription(), e.getMessage());
-            }
-        }
-
-        pdf.setTradesImported(imported);
-
-        if (imported > 0) {
-            steps.add(step("holdings_updated", "OK",
-                imported + " trade(s) imported" + (failedCount > 0 ? ", " + failedCount + " failed" : "")));
+        if (result.getImported() > 0) {
+            steps.add(step("trades_extracted", "OK", result.getImported() + " transaction(s) extracted and imported"));
+            steps.add(step("holdings_updated", "OK", result.getImported() + " transaction(s) imported"
+                + (result.getQueuedForReview() > 0 ? ", " + result.getQueuedForReview() + " queued for review" : "")));
             steps.add(step("dashboard_updated", "OK", "Portfolio recalculated"));
         } else {
-            steps.add(step("holdings_updated", "FAIL",
-                "All " + parsed.size() + " trade(s) failed to import (duplicates or errors)"));
+            steps.add(step("trades_extracted", "OK", result.getQueuedForReview() + " transaction(s) queued for review"));
+            steps.add(step("holdings_updated", "SKIP", "Nothing auto-imported — see review queue"));
         }
 
         pdf.setPipelineSteps(toJson(steps));
-
-        if (imported > 0 && failedCount == 0) {
-            pdf.setStatus("IMPORTED");
-        } else if (imported > 0) {
-            pdf.setStatus("IMPORTED");
-            log.warn("Partial import for PDF {}: {} imported, {} failed", pdf.getFilename(), imported, failedCount);
-        } else {
-            pdf.setStatus("FAILED");
-        }
-        String summary = imported + " item(s) imported" + (failedCount > 0 ? ", " + failedCount + " failed" : "") + ": " + String.join("; ", summaries);
+        pdf.setStatus(result.getImported() > 0 ? "IMPORTED" : "FAILED");
+        String summary = result.getImported() + " item(s) imported"
+            + (result.getQueuedForReview() > 0 ? ", " + result.getQueuedForReview() + " queued for review" : "")
+            + (result.getRejected() > 0 ? ", " + result.getRejected() + " rejected" : "")
+            + ": " + String.join("; ", result.getSummaries());
         pdf.setResultSummary(truncate(summary));
         pendingPdfRepo.save(pdf);
-        return new PdfUnlockResult(true, imported + " item(s) imported from " + pdf.getFilename());
+        return new PdfUnlockResult(true, result.getImported() + " item(s) imported from " + pdf.getFilename());
     }
 
     private static String step(String name, String status, String detail) {
@@ -813,15 +738,6 @@ public class PdfImportService {
                 }
             }
             result.put("linesWithBuySell", tradeLines);
-
-            // Try parsing
-            List<ParsedEmail> cnResult = com.marketai.gmail.parser.ContractNoteHelper.parseContractNoteRows(text, pdf.getSubject(), "MStock");
-            List<String> trades = new ArrayList<>();
-            for (ParsedEmail pe : cnResult) {
-                trades.add(pe.getType() + " " + pe.getSymbol() + " x" + pe.getQuantity() + " @ " + pe.getPrice() + " on " + pe.getTradeDate());
-            }
-            result.put("parsedTrades", trades);
-            result.put("parsedCount", cnResult.size());
 
         } catch (Exception e) {
             result.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());

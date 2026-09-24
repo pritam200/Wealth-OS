@@ -46,15 +46,18 @@ public class MfNavHistoryScheduler {
 
         int updated = 0;
         int failed = 0;
+        int holdingsSynced = 0;
         for (String code : codes) {
             // Per-scheme isolation: one dead scheme code must not abort the rest of the run.
             try {
                 updated += navHistoryService.fetchAndStoreHistory(code);
+                holdingsSynced += navHistoryService.syncHoldingValuations(code);
             } catch (Exception e) {
                 failed++;
                 log.warn("NAV history refresh failed for scheme {}: {}", code, e.getMessage());
             }
         }
-        log.info("MF NAV history refresh: {} schemes, {} new rows, {} failed", codes.size(), updated, failed);
+        log.info("MF NAV history refresh: {} schemes, {} new rows, {} holdings revalued, {} failed",
+                codes.size(), updated, holdingsSynced, failed);
     }
 }

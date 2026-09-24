@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -137,85 +136,42 @@ class FinancialIdentityVaultTest {
         assertThat(status.toString()).doesNotContain(PAN);
     }
 
-    // --- The behaviour the audit found missing ---
+    // --- The behaviour the audit found missing, now exposed via derivePassword() for the
+    // LLM-driven flow (EmailLLMParserService only ever names a PasswordStrategy; this is where
+    // that strategy actually becomes a password) ---
 
     @Test
-    @DisplayName("with a stored PAN, a CAMS statement password is derived without any saved credential")
+    @DisplayName("with a stored PAN, a PAN-uppercase password is derived without any saved credential")
     void derivesPasswordForFirstTimeUser() {
         when(repo.findByUserId(USER)).thenReturn(Optional.of(FinancialIdentity.builder()
             .userId(USER).encryptedPan(cipher.encrypt(PAN)).encryptedDob(cipher.encrypt(DOB.toString()))
             .build()));
 
-        List<PasswordCandidate> candidates = new PasswordCandidateResolver(service)
-            .resolve(USER, "camsonline.com", "PAN (uppercase)", null);
-
-        // Previously this list would have been empty for a user who had never saved a password,
-        // and the statement stayed locked forever.
-        assertThat(candidates).isNotEmpty();
-        assertThat(candidates.getFirst().value()).isEqualTo("ABCDE1234F");
+        // Previously this would have been empty for a user who had never saved a password, and
+        // the statement stayed locked forever.
+        assertThat(service.derivePassword(USER, PasswordStrategy.PAN_UPPERCASE)).contains("ABCDE1234F");
+        assertThat(service.derivePassword(USER, PasswordStrategy.PAN_UPPERCASE_PLUS_DOB_DDMMYYYY))
+            .contains("ABCDE1234F07031990");
     }
 
     @Test
-    @DisplayName("a saved credential is always tried first — it needs no inference")
-    void savedCredentialTakesPrecedence() {
+    @DisplayName("a strategy needing PAN yields nothing when only DOB is stored")
+    void derivePasswordRespectsMissingInputs() {
         when(repo.findByUserId(USER)).thenReturn(Optional.of(FinancialIdentity.builder()
-            .userId(USER).encryptedPan(cipher.encrypt(PAN)).build()));
+            .userId(USER).encryptedDob(cipher.encrypt(DOB.toString())).build()));
 
-        var candidates = new PasswordCandidateResolver(service)
-            .resolve(USER, "camsonline.com", "PAN (uppercase)", "MyCustomPass");
-
-        assertThat(candidates.getFirst().strategy()).isEqualTo(PasswordStrategy.CUSTOM_SAVED);
-        assertThat(candidates.getFirst().value()).isEqualTo("MyCustomPass");
+        assertThat(service.derivePassword(USER, PasswordStrategy.PAN_UPPERCASE)).isEmpty();
+        assertThat(service.derivePassword(USER, PasswordStrategy.DOB_DDMMYYYY)).contains("07031990");
     }
 
     @Test
-    @DisplayName("attempts are bounded — this is not a brute-force search")
-    void candidateListIsBounded() {
+    @DisplayName("CUSTOM_SAVED and a null strategy are never derivable from identity")
+    void derivePasswordRefusesNonDerivableStrategies() {
         when(repo.findByUserId(USER)).thenReturn(Optional.of(FinancialIdentity.builder()
             .userId(USER).encryptedPan(cipher.encrypt(PAN)).encryptedDob(cipher.encrypt(DOB.toString()))
             .build()));
 
-        var candidates = new PasswordCandidateResolver(service)
-            .resolve(USER, "cdslindia.com", "PAN + Date of Birth", "saved");
-
-        assertThat(candidates).hasSizeLessThanOrEqualTo(PasswordCandidateResolver.MAX_ATTEMPTS);
-        // Every candidate traces to a rule, a hint, or a saved credential — none is invented.
-        assertThat(candidates).allSatisfy(c -> assertThat(c.strategy()).isNotNull());
-    }
-
-    @Test
-    @DisplayName("no identity and no saved credential yields nothing, with an actionable reason")
-    void emptyVaultExplainsItself() {
-        var resolver = new PasswordCandidateResolver(service);
-
-        assertThat(resolver.resolve(USER, "camsonline.com", "PAN (uppercase)", null)).isEmpty();
-        assertThat(resolver.explainFailure(USER, "camsonline.com"))
-            .contains("PAN and date of birth");
-    }
-
-    @Test
-    @DisplayName("KFintech is explained as underivable rather than reported as a wrong password")
-    void userDefinedProviderGetsItsOwnExplanation() {
-        when(repo.findByUserId(USER)).thenReturn(Optional.of(FinancialIdentity.builder()
-            .userId(USER).encryptedPan(cipher.encrypt(PAN)).build()));
-
-        var resolver = new PasswordCandidateResolver(service);
-
-        // No identity-derived format can open it, so none should be attempted.
-        assertThat(resolver.resolve(USER, "kfintech.com", null, null)).isEmpty();
-        assertThat(resolver.explainFailure(USER, "kfintech.com"))
-            .contains("password you chose");
-    }
-
-    @Test
-    void duplicateStrategiesFromHintAndRuleProduceOneAttempt() {
-        when(repo.findByUserId(USER)).thenReturn(Optional.of(FinancialIdentity.builder()
-            .userId(USER).encryptedPan(cipher.encrypt(PAN)).build()));
-
-        // The hint and the CAMS rule both say PAN-uppercase; that must not burn two attempts.
-        var candidates = new PasswordCandidateResolver(service)
-            .resolve(USER, "camsonline.com", "PAN (uppercase)", null);
-
-        assertThat(candidates).extracting(PasswordCandidate::value).doesNotHaveDuplicates();
+        assertThat(service.derivePassword(USER, PasswordStrategy.CUSTOM_SAVED)).isEmpty();
+        assertThat(service.derivePassword(USER, null)).isEmpty();
     }
 }

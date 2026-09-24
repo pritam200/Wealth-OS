@@ -17,10 +17,30 @@ public final class SpendCategorizer {
         if (has(t, "sip", "mutual fund", "groww", "zerodha", "coin", "nps", "ppf", "elss", "investment"))
             return ExpenseCategory.INVESTMENT; // checked first: must never fall through to a spend category
 
-        if (has(t, "swiggy", "zomato", "eatfit", "dominos", "pizza", "mcdonald", "kfc", "restaurant",
-                 "cafe", "starbucks", "bakery", "biryani", "food",
-                 "bigbasket", "blinkit", "zepto", "grofers", "dmart", "d-mart", "instamart",
+        // Checked before EMI's generic "credit card payment" phrase, and before every other
+        // spend bucket: a CRED/CC-bill debit settles a debt already spent against elsewhere, so
+        // it must never be counted as spend under any other category either.
+        if (has(t, "cred", "credit card bill", "credit card payment", "cc bill", "card bill payment"))
+            return ExpenseCategory.ACCOUNT_TRANSFER;
+
+        // Sub-brand disambiguation, checked before the generic grocery/restaurant keywords below:
+        // "swiggy instamart" must win over the bare "swiggy" delivery-app match.
+        if (has(t, "instamart"))
+            return ExpenseCategory.GROCERIES;
+        if (has(t, "dineout"))
+            return ExpenseCategory.RESTAURANT_OUTING;
+        if (has(t, "swiggy", "zomato", "eatfit", "dunzo", "box8", "faasos"))
+            return ExpenseCategory.FOOD_DELIVERY;
+
+        if (has(t, "bigbasket", "blinkit", "zepto", "grofers", "dmart", "d-mart",
                  "jiomart", "reliance fresh", "supermarket", "grocery", "kirana"))
+            return ExpenseCategory.GROCERIES;
+
+        if (has(t, "dominos", "pizza", "mcdonald", "kfc", "restaurant", "cafe", "starbucks",
+                 "bakery", "biryani"))
+            return ExpenseCategory.RESTAURANT_OUTING;
+
+        if (has(t, "food"))
             return ExpenseCategory.FOOD;
 
         if (has(t, "uber", "ola", "rapido", "irctc", "makemytrip", "goibibo", "cleartrip", "indigo",
@@ -47,7 +67,7 @@ public final class SpendCategorizer {
                  "pharmacy", "dental", "practo", "cult.fit", "cultfit", "gym"))
             return ExpenseCategory.MEDICAL;
 
-        if (has(t, "emi", "loan", "home loan", "car loan", "personal loan", "credit card payment", "nach"))
+        if (has(t, "emi", "loan", "home loan", "car loan", "personal loan", "nach"))
             return ExpenseCategory.EMI;
 
         if (has(t, "upi", "gpay", "google pay", "phonepe", "paytm"))

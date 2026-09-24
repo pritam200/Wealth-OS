@@ -3,6 +3,8 @@ package com.marketai.mf.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.marketai.mf.entity.MfNavHistory;
 import com.marketai.mf.repository.MfNavHistoryRepository;
+import com.marketai.portfolio.entity.Holding;
+import com.marketai.portfolio.repository.HoldingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -11,11 +13,13 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -39,6 +43,7 @@ public class MfNavHistoryService {
 
     private final WebClient.Builder webClientBuilder;
     private final MfNavHistoryRepository navHistoryRepository;
+    private final HoldingRepository holdingRepository;
 
     /**
      * Fetch the full NAV history for a scheme and store only the dates we don't already have.
@@ -75,6 +80,39 @@ public class MfNavHistoryService {
         navHistoryRepository.saveAll(toInsert);
         log.info("MF NAV history {}: stored {} new of {} points returned", code, toInsert.size(), points.size());
         return toInsert.size();
+    }
+
+    /** Most recently stored NAV for a scheme, if any history has been fetched for it. */
+    public Optional<BigDecimal> latestNav(String schemeCode) {
+        if (schemeCode == null || schemeCode.trim().isEmpty()) return Optional.empty();
+        return navHistoryRepository.findTopBySchemeCodeOrderByDateDesc(schemeCode.trim())
+                .map(MfNavHistory::getNav);
+    }
+
+    /**
+     * Writes the latest stored NAV back onto every holding linked to this scheme code, across
+     * all users. This is the missing step that made MF "current value" freeze at the
+     * import-time cost basis forever: NAV history was being fetched and stored nightly, but
+     * nothing ever applied it back to {@code Holding.currentPrice}.
+     *
+     * @return number of holdings actually updated (a holding already at the latest NAV is left
+     *         alone rather than rewritten).
+     */
+    @Transactional
+    public int syncHoldingValuations(String schemeCode) {
+        Optional<BigDecimal> nav = latestNav(schemeCode);
+        if (nav.isEmpty()) return 0;
+
+        List<Holding> holdings = holdingRepository.findByAmfiSchemeCode(schemeCode.trim());
+        int updated = 0;
+        for (Holding h : holdings) {
+            if (h.getCurrentPrice() != null && nav.get().compareTo(h.getCurrentPrice()) == 0) continue;
+            h.setCurrentPrice(nav.get());
+            h.setUpdatedAt(LocalDateTime.now());
+            holdingRepository.save(h);
+            updated++;
+        }
+        return updated;
     }
 
     /**

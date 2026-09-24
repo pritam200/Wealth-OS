@@ -14,4 +14,6 @@ public class FdRequest {
     private boolean autoRenew = false;
     private LocalDate startDate;
     private LocalDate maturityDate;
+    private String accountNumber;
+    private String accountLast4;
 }

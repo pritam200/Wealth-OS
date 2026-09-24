@@ -30,12 +30,13 @@ export interface ExpenseSummary {
   byCategory: Record<string, number>;
 }
 
-// Matches backend ExpenseCategory enum labels (Investment is deliberately excluded here —
-// it exists only so Gmail parsing can flag and skip investment-flavoured debits; it should
-// never be a category a user picks for a real expense).
+// Matches backend ExpenseCategory enum labels. Investment and Account Transfer are
+// deliberately excluded here — both are system-derived-only classifications (Gmail parsing
+// flags/skips investment-flavoured debits and CRED/CC-bill-payment debits respectively); neither
+// should ever be a category a user picks for a manually-entered real expense.
 export const EXPENSE_CATEGORIES = [
-  'Food', 'Shopping', 'Travel', 'Fuel', 'Bills',
-  'Medical', 'Entertainment', 'EMI', 'UPI', 'Uncategorized',
+  'Food', 'Food Delivery', 'Groceries', 'Restaurant / Outing', 'Shopping', 'Travel', 'Fuel',
+  'Bills', 'Medical', 'Entertainment', 'EMI', 'UPI', 'Uncategorized',
 ];
 
 export const expenseApi = {

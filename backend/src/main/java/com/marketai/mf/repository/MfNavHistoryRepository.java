@@ -7,10 +7,14 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 public interface MfNavHistoryRepository extends JpaRepository<MfNavHistory, Long> {
 
     List<MfNavHistory> findBySchemeCodeOrderByDateAsc(String schemeCode);
+
+    /** Most recent stored NAV for a scheme — the value that should back a holding's current price. */
+    Optional<MfNavHistory> findTopBySchemeCodeOrderByDateDesc(String schemeCode);
 
     List<MfNavHistory> findBySchemeCodeAndDateBetweenOrderByDateAsc(
             String schemeCode, LocalDate from, LocalDate to);

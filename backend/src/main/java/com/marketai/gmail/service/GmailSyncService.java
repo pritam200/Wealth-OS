@@ -9,31 +9,29 @@ import com.marketai.gmail.entity.ExcludedSender;
 import com.marketai.gmail.entity.GmailToken;
 import com.marketai.gmail.entity.PendingPdf;
 import com.marketai.gmail.entity.ProcessedEmail;
-import com.marketai.gmail.parser.EmailParser;
-import com.marketai.gmail.parser.ParsedEmail;
-import com.marketai.gmail.parser.ParserUtil;
 import com.marketai.gmail.repository.ExcludedSenderRepository;
 import com.marketai.gmail.repository.GmailTokenRepository;
 import com.marketai.gmail.repository.PendingPdfRepository;
 import com.marketai.gmail.repository.ProcessedEmailRepository;
-import com.marketai.ai.intel.EmailIntelResult;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
-import com.marketai.document.classify.SenderTrustEvaluator;
-import com.marketai.document.route.SelectionComparator;
-import com.marketai.document.route.SelectionComparison;
-import com.marketai.ai.intel.EmailIntelType;
 
+/**
+ * Orchestrates a Gmail sync. Every fetched email — with or without a PDF attachment — is handed
+ * to {@link EmailLLMParserService}, the single LLM-based replacement for what used to be an
+ * 18-parser regex cascade plus two separate AI fallbacks
+ * ({@code EmailIntelAgent}/{@code AiEmailExtractor}). This class owns only the things that are
+ * genuinely about *syncing* — fetching, dedup/retry bookkeeping, exclusion filters, PDF
+ * attachment queueing — and delegates every parsing/extraction/import decision to that service.
+ */
 @Service
 @RequiredArgsConstructor
 public class GmailSyncService {
@@ -45,24 +43,12 @@ public class GmailSyncService {
     private final ProcessedEmailRepository processedRepo;
     private final GmailClientService gmailClient;
     private final UserRepository userRepo;
-    private final List<EmailParser> parsers;
-    private final SenderTrustEvaluator senderTrustEvaluator;
-    private final SelectionComparator selectionComparator;
-    private final ParsedEmailImporter importer;
-    // AiEmailExtractor was injected here but never called — the email-body AI fallback is
-    // EmailIntelAgent's job now, and the extractor is only used on the PDF path
-    // (PdfImportService). Removed rather than left as a misleading dependency.
     private final PendingPdfRepository pendingPdfRepo;
     private final ExcludedSenderRepository excludedSenderRepo;
-    private final PasswordHintExtractor passwordHintExtractor;
     private final PdfImportService pdfImportService;
-    private final com.marketai.ai.intel.EmailIntelAgent emailIntelAgent;
     private final com.marketai.ai.review.service.EmailReviewService emailReviewService;
-    private final com.marketai.ai.llm.LlmProviderRouter llmRouter;
+    private final EmailLLMParserService emailLlmParserService;
     private final com.marketai.document.classify.SubjectPatternStage subjectPatternStage;
-
-    @Value("${app.gmail.ai-fallback.enabled:true}")
-    private boolean aiFallbackEnabled;
 
     // Sender domain, e.g. "no-reply@mstock.com" -> "mstock.com" — the key used to save/reuse
     // a statement password, since a given institution's statements always come from the same
@@ -73,6 +59,15 @@ public class GmailSyncService {
         if (at < 0) return null;
         String domain = from.substring(at + 1).replaceAll("[>\\s]", "").toLowerCase();
         return domain.isEmpty() ? null : domain;
+    }
+
+    private static boolean containsIgnoreCase(String text, String... keywords) {
+        if (text == null) return false;
+        String lower = text.toLowerCase();
+        for (String kw : keywords) {
+            if (kw != null && lower.contains(kw.toLowerCase())) return true;
+        }
+        return false;
     }
 
     public GmailSyncResult syncForUser(Long userId) {
@@ -96,7 +91,7 @@ public class GmailSyncService {
      * Processes an explicit set of message ids instead of re-scanning a date window — the
      * incremental path, where Gmail's history API has already told us exactly what is new.
      *
-     * Everything downstream (parsers, dedup, review queue) is identical; only how the message
+     * Everything downstream (extraction, dedup, review queue) is identical; only how the message
      * list is obtained differs.
      */
     public GmailSyncResult syncSpecificMessages(Long userId, List<String> messageIds) {
@@ -182,7 +177,7 @@ public class GmailSyncService {
                 if (existing != null) {
                     // Only two outcomes are genuinely terminal: a completed import, and a sender
                     // the user deliberately excluded. Everything else — FAILED (transient error),
-                    // SKIPPED/UNKNOWN (no parser matched at the time — a later parser or a
+                    // SKIPPED/UNKNOWN (nothing extracted at the time — an improved model or a
                     // recovered LLM should get another chance), and REVIEW/REVIEW_REQUIRED
                     // (sender-trust hold-back or low-confidence classification — re-running is
                     // safe because EmailReviewService.enqueue() is a no-op once the user has
@@ -221,14 +216,8 @@ public class GmailSyncService {
                 List<String> steps = new ArrayList<>();
                 steps.add("Fetched email from Gmail");
 
-                boolean isMstock = from != null && (from.toLowerCase().contains("mstock") || from.toLowerCase().contains("miraeasset") || from.toLowerCase().contains("mirae"));
-                if (isMstock) {
-                    log.info("MSTOCK EMAIL FOUND — from: {}, subject: {}, hasBody: {}, bodyLen: {}",
-                        from, subject, body != null, body != null ? body.length() : 0);
-                }
-
                 if (!excludedPatterns.isEmpty()
-                        && ParserUtil.containsIgnoreCase(from + " " + subject + " " + body, excludedPatterns.toArray(new String[0]))) {
+                        && containsIgnoreCase(from + " " + subject + " " + body, excludedPatterns.toArray(new String[0]))) {
                     steps.add("Matched excluded sender/pattern filter — skipped");
                     saveProcessed(userId, msgId, "EXCLUDED", "SKIPPED", "Matches an excluded sender/pattern filter", from, null);
                     logEntries.add(GmailSyncResult.SyncLogEntry.builder()
@@ -239,98 +228,10 @@ public class GmailSyncService {
                     continue;
                 }
 
-                List<ParsedEmail> parsed = new ArrayList<>();
-                String matchedParser = null;
-                for (EmailParser parser : parsers) {
-                    try {
-                        if (parser.canParse(from, subject)) {
-                            String parserName = parser.getClass().getSimpleName();
-                            List<ParsedEmail> parserResults = parser.parse(from, subject, body);
-                            if (!parserResults.isEmpty()) {
-                                matchedParser = parserName;
-                                parsed.addAll(parserResults);
-                                steps.add("Parser matched: " + matchedParser + " → " + parsed.size() + " item(s)");
-                                break;
-                            }
-                            steps.add("Parser " + parserName + " matched but returned 0 results — trying next");
-                        }
-                    } catch (Exception e) {
-                        steps.add("Parser " + parser.getClass().getSimpleName() + " failed: " + e.getMessage());
-                        log.warn("Parser {} failed on message {}: {}", parser.getClass().getSimpleName(), msgId, e.getMessage());
-                    }
-                }
-
-                // Shadow-mode comparison: run classifier-based routing alongside the legacy
-                // selection above and record whether they agree. Neither path can affect the
-                // other — this only observes, so a bug here cannot change what gets imported.
-                //
-                // The point is to gather evidence on real mail before routing is allowed to
-                // decide anything. Read the tally at GET /api/gmail/selection-comparison;
-                // cutover needs regressions() at zero, not just passing unit tests.
-                try {
-                    SelectionComparison cmp = selectionComparator.compare(
-                        from, subject, body, matchedParser, parsers);
-                    if (!cmp.isClean()) {
-                        steps.add("Routing shadow: " + cmp.detail());
-                    }
-                } catch (Exception e) {
-                    // Belt and braces. The comparator already swallows its own failures; this
-                    // guarantees an observability feature can never break an import.
-                    log.debug("Selection comparison skipped: {}", e.toString());
-                }
-
-                // Local-LLM classification, only for emails no deterministic parser could read.
-                // Kept as a fallback rather than a per-email step on purpose: a local model
-                // costs seconds per call, so putting it in front of every message would turn a
-                // routine sync into a multi-minute job.
-                if (parsed.isEmpty() && aiFallbackEnabled && emailIntelAgent.isEnabled()) {
-                    steps.add("No regex parser matched — classifying with " + llmRouter.describeActive());
-                    try {
-                        EmailIntelResult intel = emailIntelAgent.classify(userId, from, subject, body, msgId);
-                        switch (intel.getOutcome()) {
-                            case IMPORT:
-                                parsed.add(intel.getParsed());
-                                matchedParser = "EmailIntelAgent (" + intel.getType() + ")";
-                                steps.add(String.format("Classified as %s at %.0f%% confidence", intel.getType(),
-                                    intel.getConfidence() != null ? intel.getConfidence() * 100 : 0));
-                                break;
-                            case REVIEW_REQUIRED:
-                            case UNRESOLVED:
-                                // Previously this email was dropped with only a log line, so a
-                                // real transaction could go missing invisibly. Now it becomes a
-                                // row the user can accept, correct or reject.
-                                emailReviewService.enqueue(userId, msgId, from, subject, intel);
-                                queuedForReview++;
-                                steps.add("Sent to review queue: " + intel.getReviewReason());
-                                saveProcessed(userId, msgId, intel.getType() != null ? intel.getType().name() : "UNKNOWN",
-                                    "REVIEW_REQUIRED", intel.getReviewReason(), from, "EmailIntelAgent");
-                                logEntries.add(GmailSyncResult.SyncLogEntry.builder()
-                                    .gmailMessageId(msgId).sender(from).subject(subject)
-                                    .matchedParser("EmailIntelAgent").status("REVIEW_REQUIRED")
-                                    .type(intel.getType() != null ? intel.getType().name() : "UNKNOWN")
-                                    .detail(intel.getReviewReason()).pipelineSteps(steps).build());
-                                skipped++;
-                                continue;
-                            case NOT_A_TRANSACTION:
-                                steps.add("Classified as non-transactional (" + intel.getType() + ")");
-                                break;
-                        }
-                    } catch (Exception e) {
-                        steps.add("AI classification failed: " + e.getMessage());
-                        log.warn("AI classification failed on message {}: {}", msgId, e.getMessage());
-                    }
-                }
-
-                // Check for PDF attachments — even when body parsing found something,
-                // also try PDFs if the email has them (contract notes contain detailed
-                // trade data only in the PDF, not in the email body summary).
+                // Check for PDF attachments — even when body extraction may succeed on its own,
+                // also try PDFs if the email has them (contract notes/statements often carry
+                // detail only present in the PDF, not the email body summary).
                 List<GmailClientService.PdfAttachmentRef> pdfRefs = gmailClient.findPdfAttachments(message);
-                if (isMstock) {
-                    log.info("MSTOCK PDF CHECK — found {} PDF attachment(s), parsed {} items so far", pdfRefs.size(), parsed.size());
-                    for (GmailClientService.PdfAttachmentRef pRef : pdfRefs) {
-                        log.info("MSTOCK PDF — filename: {}, attachmentId: {}", pRef.filename, pRef.attachmentId);
-                    }
-                }
                 boolean queuedPdf = false;
                 if (!pdfRefs.isEmpty()) {
                     totalAttachments += pdfRefs.size();
@@ -361,8 +262,18 @@ public class GmailSyncService {
                             continue;
                         }
                         String providerKey = providerKeyOf(from);
-                        String hint = passwordHintExtractor.extract(subject, body, providerKey);
-                        if (hint == null) hint = pdfImportService.findKnownHint(userId, providerKey);
+
+                        // Classify once (subject/body only — the attachment is still encrypted)
+                        // to learn which PasswordStrategy this issuer's statements use. The model
+                        // never sees or produces PAN/DOB/a password — only the strategy name,
+                        // which PdfImportService later resolves deterministically against the
+                        // user's stored identity. A hint that doesn't map to a known strategy
+                        // (see EmailLLMParserService#mapPasswordHint) is stored as null — fail
+                        // safe, no password guess.
+                        EmailLLMParserService.Classification cls = emailLlmParserService.classify(from, subject, body);
+                        String hint = cls.passwordHintType() != null ? cls.passwordHintType().name()
+                            : pdfImportService.findKnownHint(userId, providerKey);
+
                         // Best-effort subject-line classification, so password learning can
                         // tell a card statement apart from a bank statement from the same
                         // sender domain instead of assuming one password fits every statement
@@ -399,124 +310,60 @@ public class GmailSyncService {
                     }
                 }
 
-                if (parsed.isEmpty() && !queuedPdf) {
-                    String summary = matchedParser != null
-                        ? matchedParser + " matched but recorded nothing: " + subject
-                        : "No parser matched and no PDF attachment: " + subject;
-                    steps.add(summary);
-                    saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED", summary, from, matchedParser);
-                    logEntries.add(GmailSyncResult.SyncLogEntry.builder()
-                        .gmailMessageId(msgId).sender(from).subject(subject)
-                        .matchedParser(matchedParser).status("SKIPPED").detail(summary)
-                        .pipelineSteps(steps).build());
-                    skipped++;
-                    continue;
-                }
+                // Single unconditional LLM extraction call for the email body — replaces the
+                // former 18-parser cascade plus the EmailIntelAgent/AiEmailExtractor fallbacks.
+                EmailLLMParserService.Classification bodyClassification = emailLlmParserService.classify(from, subject, body);
+                EmailLLMParserService.Result result = emailLlmParserService.process(
+                    userId, user, from, subject, body, msgId, bodyClassification);
 
-                if (parsed.isEmpty() && queuedPdf) {
-                    String summary = "PDF queued for unlock: " + subject;
-                    saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED", summary, from, "PendingPdf");
-                    logEntries.add(GmailSyncResult.SyncLogEntry.builder()
-                        .gmailMessageId(msgId).sender(from).subject(subject)
-                        .matchedParser("PDF").status("PDF_QUEUED").detail(summary)
-                        .pipelineSteps(steps).build());
-                    skipped++;
-                    continue;
-                }
+                totalTransactionsFound += result.getImported() + result.getQueuedForReview() + result.getRejected();
 
-                // Sender authority check, placed after parsing so a held-back email still
-                // reaches the review queue with its extracted content rather than as a bare
-                // "something was blocked" row.
-                //
-                // Why it is needed: parser selection above matches substrings against `from`,
-                // which is the raw From header including the display name — and the display
-                // name is chosen by whoever sent the message. So
-                // `"Zerodha Alerts" <noreply@attacker.example>` satisfies
-                // containsIgnoreCase(from, "zerodha") and is handed to ZerodhaParser, whose
-                // output would then flow to the ledger.
-                //
-                // Scope is deliberately narrow. Only the impersonation shape is held back —
-                // a display name naming an issuer the sending domain cannot support. An
-                // unrecognised sender making no such claim still imports normally, because the
-                // issuer registry will always lag reality and blocking those would silently
-                // drop real transactions from any bank not yet catalogued.
-                SenderTrustEvaluator.Assessment trust = senderTrustEvaluator.evaluate(from);
-                if (!trust.permitsAutoImport()) {
-                    steps.add("Sender authority check failed: " + trust.detail());
-                    log.warn("Blocked auto-import for user {} message {}: {}", userId, msgId, trust.detail());
-
-                    // Nothing is dropped. Each parsed item becomes its OWN review row — keyed by
-                    // (message, item index) rather than just the message id — the user can
-                    // accept if the sender is in fact legitimate. Previously every item in this
-                    // loop shared one key, so item N overwrote item N-1 and only the last of a
-                    // multi-trade contract note ever reached the queue.
-                    for (int itemIdx = 0; itemIdx < parsed.size(); itemIdx++) {
-                        ParsedEmail pe = parsed.get(itemIdx);
-                        String itemNote = parsed.size() > 1
-                            ? String.format(" (item %d of %d in this email)", itemIdx + 1, parsed.size())
-                            : "";
-                        emailReviewService.enqueue(userId, msgId, itemIdx, from, subject,
-                            EmailIntelResult.builder()
-                                .outcome(EmailIntelResult.Outcome.REVIEW_REQUIRED)
-                                .type(EmailIntelType.UNKNOWN)
-                                .parsed(pe)
-                                .reviewReason("Sender could not be verified — " + trust.detail() + itemNote)
-                                .reasoning("Held back by the sender authority check rather than the "
-                                    + "classifier. " + matchedParser + " read this email, but the "
-                                    + "sending domain does not belong to the issuer the header claims. "
-                                    + "Accept only if you recognise this sender as genuine." + itemNote)
-                                .build());
-                        queuedForReview++;
+                switch (result.getOutcome()) {
+                    case IMPORTED -> {
+                        imported += result.getImported();
+                        queuedForReview += result.getQueuedForReview();
+                        summaries.addAll(result.getSummaries());
+                        steps.add("LLM extraction: " + result.getImported() + " transaction(s) imported"
+                            + (result.getQueuedForReview() > 0 ? ", " + result.getQueuedForReview() + " queued for review" : ""));
+                        saveProcessed(userId, msgId, "IMPORTED", "IMPORTED",
+                            String.join("; ", result.getSummaries()), from, "EmailLLMParserService");
+                        logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                            .gmailMessageId(msgId).sender(from).subject(subject)
+                            .matchedParser("EmailLLMParserService").status("IMPORTED")
+                            .itemsImported(result.getImported())
+                            .detail(String.join("; ", result.getSummaries()))
+                            .pipelineSteps(steps).build());
                     }
-                    saveProcessed(userId, msgId, "REVIEW", "SKIPPED",
-                        "Sender authority check failed: " + trust.detail(), from, matchedParser);
-                    logEntries.add(GmailSyncResult.SyncLogEntry.builder()
-                        .gmailMessageId(msgId).sender(from).subject(subject)
-                        .matchedParser(matchedParser).status("REVIEW")
-                        .detail("Sender authority check failed: " + trust.detail())
-                        .pipelineSteps(steps).build());
-                    continue;
-                }
-                if (trust.trust() == com.marketai.document.classify.SenderTrust.UNKNOWN_DOMAIN) {
-                    // Recorded, not blocked — useful signal for deciding what to add to the
-                    // registry, and visible in the sync log without costing the user an import.
-                    steps.add("Sender domain not in the issuer registry (imported anyway)");
-                }
-
-                int emailImported = 0;
-                totalTransactionsFound += parsed.size();
-                List<String> importedTypes = new ArrayList<>();
-                for (ParsedEmail pe : parsed) {
-                    try {
-                        importer.importParsedEmail(userId, user, pe, msgId, body);
-                        summaries.add(pe.getSourceDescription());
-                        importedTypes.add(typeName(pe));
-                        steps.add("DB updated: " + typeName(pe) + " — " + pe.getSourceDescription());
-                        imported++;
-                        emailImported++;
-                    } catch (Exception e) {
-                        steps.add("Import failed for " + typeName(pe) + ": " + e.getMessage());
-                        log.error("Import failed for {}: {}", pe.getSourceDescription(), e.getMessage());
-                        actionItems.add("FAILED: " + pe.getSourceDescription() + " — " + e.getMessage());
-                        failed++;
+                    case REVIEW, UNAVAILABLE -> {
+                        queuedForReview += result.getQueuedForReview();
+                        steps.add("Sent to review queue: " + result.getDetail());
+                        saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED",
+                            result.getDetail() != null ? result.getDetail() : "Queued for review", from, "EmailLLMParserService");
+                        logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                            .gmailMessageId(msgId).sender(from).subject(subject)
+                            .matchedParser("EmailLLMParserService").status("REVIEW_REQUIRED")
+                            .detail(result.getDetail()).pipelineSteps(steps).build());
+                        skipped++;
+                    }
+                    case NOT_FINANCIAL -> {
+                        if (!queuedPdf) {
+                            String summary = "No transaction found in body and no PDF attachment: " + subject;
+                            steps.add(summary);
+                            saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED", summary, from, null);
+                            logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                                .gmailMessageId(msgId).sender(from).subject(subject)
+                                .status("SKIPPED").detail(summary).pipelineSteps(steps).build());
+                        } else {
+                            String summary = "PDF queued for unlock: " + subject;
+                            saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED", summary, from, "PendingPdf");
+                            logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                                .gmailMessageId(msgId).sender(from).subject(subject)
+                                .matchedParser("PDF").status("PDF_QUEUED").detail(summary)
+                                .pipelineSteps(steps).build());
+                        }
+                        skipped++;
                     }
                 }
-
-                String combinedType = importedTypes.isEmpty() ? (parsed.isEmpty() ? "UNKNOWN" : typeName(parsed.get(0))) : String.join(",", importedTypes);
-                String combinedSummary = emailImported > 0 ? String.join("; ", summaries.subList(Math.max(0, summaries.size() - emailImported), summaries.size())) : "Import failed";
-                saveProcessed(userId, msgId, combinedType, emailImported > 0 ? "IMPORTED" : "FAILED", combinedSummary, from, matchedParser);
-
-                if (emailImported > 0) steps.add("UI refresh triggered");
-
-                String firstType = parsed.isEmpty() ? "UNKNOWN" : typeName(parsed.get(0));
-                logEntries.add(GmailSyncResult.SyncLogEntry.builder()
-                    .gmailMessageId(msgId).sender(from).subject(subject)
-                    .matchedParser(matchedParser)
-                    .status(emailImported > 0 ? "IMPORTED" : "FAILED")
-                    .type(firstType)
-                    .detail(emailImported > 0 ? parsed.get(0).getSourceDescription() : "Import failed")
-                    .itemsImported(emailImported)
-                    .pipelineSteps(steps).build());
             }
 
             // After processing all emails, try to auto-unlock any remaining locked PDFs
@@ -592,18 +439,6 @@ public class GmailSyncService {
                 log.error("Scheduled sync failed for user {}: {}", token.getUser().getId(), e.getMessage());
             }
         });
-    }
-
-    /**
-     * A parsed item's type as a log label.
-     *
-     * <p>Null-safe because {@code ParsedEmailImporter.routeImport} documents a null type as
-     * reachable and handles it — but the log lines here dereferenced it, so an item the importer
-     * had already committed threw NPE on the way to being logged and the message was recorded as
-     * FAILED. A logging concern must not change a record's reported outcome.
-     */
-    private static String typeName(ParsedEmail pe) {
-        return pe == null || pe.getType() == null ? "UNKNOWN" : pe.getType().name();
     }
 
     // Upsert, not insert: a retried FAILED email already has a row, and (user_id,

@@ -81,6 +81,18 @@ public class Holding {
     @Column(name = "amfi_scheme_code", length = 20)
     private String amfiSchemeCode;
 
+    /** ISIN — covers both MF schemes and listed equities. Nullable: not every source states it. */
+    @Column(length = 20)
+    private String isin;
+
+    /** Depository Participant id for a demat (equity) holding. Nullable — stock holdings only. */
+    @Column(name = "dp_id", length = 20)
+    private String dpId;
+
+    /** Broker client id for a demat (equity) holding. Nullable — stock holdings only. */
+    @Column(name = "client_id", length = 20)
+    private String clientId;
+
     @JsonIgnore
     @OneToMany(mappedBy = "holding", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
