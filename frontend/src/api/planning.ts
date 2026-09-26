@@ -30,7 +30,30 @@ export const goalApi = {
   add: (r: GoalRequest) => apiClient.post<GoalResponse>('/api/goals', r),
   update: (id: number, r: Partial<GoalRequest>) => apiClient.put<GoalResponse>(`/api/goals/${id}`, r),
   delete: (id: number) => apiClient.delete(`/api/goals/${id}`),
+  whatIf: (id: number, r: GoalWhatIfRequest) => apiClient.post<GoalWhatIfResponse>(`/api/goals/${id}/what-if`, r),
 };
+
+/* ── Goal what-if scenarios (pure simulation — never mutates the real goal/SIP) ── */
+export interface GoalWhatIfRequest {
+  adjustmentType: 'PAUSE_SIP' | 'LUMP_SUM';
+  startMonth?: number;      // months from now the adjustment takes effect (1-based)
+  pauseMonths?: number;     // PAUSE_SIP only
+  lumpSumAmount?: number;   // LUMP_SUM only
+}
+export interface GoalWhatIfProjection {
+  projectedValue: number;
+  completionMonth: number | null;
+  completionDate: string | null;
+  onTrack: boolean;
+  shortfall: number;
+}
+export interface GoalWhatIfResponse {
+  goalId: number;
+  baseline: GoalWhatIfProjection;
+  scenario: GoalWhatIfProjection;
+  completionDelayMonths: number | null;
+  projectedValueDelta: number;
+}
 
 /* ── Net worth trend ── */
 export interface NetWorthSnapshot {
@@ -54,4 +77,10 @@ export interface TaxResponse {
 export const taxApi = {
   summary: (fyStartYear?: number) =>
     apiClient.get<TaxResponse>(`/api/tax/summary${fyStartYear ? `?fyStartYear=${fyStartYear}` : ''}`),
+  // Blob response type so axios doesn't try to JSON-parse the CSV body.
+  exportCsv: (financialYear?: string) =>
+    apiClient.get<Blob>(`/api/tax/export`, {
+      params: { financialYear, format: 'csv' },
+      responseType: 'blob',
+    }),
 };

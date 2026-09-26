@@ -59,7 +59,7 @@ class PdfPasswordLearningDocumentTypeTest {
         gmailClient = mock(GmailClientService.class);
         passwordCipher = mock(PasswordCipher.class);
         emailLlmParserService = mock(EmailLLMParserService.class);
-        when(emailLlmParserService.process(any(), any(), any(), any(), any(), any(), any()))
+        when(emailLlmParserService.process(any(), any(), any(), any(), any(), any(), any(), anyInt()))
             .thenReturn(EmailLLMParserService.Result.builder()
                 .outcome(EmailLLMParserService.Outcome.NOT_FINANCIAL).build());
 

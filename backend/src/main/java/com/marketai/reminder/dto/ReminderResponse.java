@@ -6,7 +6,7 @@ import java.time.LocalDate;
 
 @Data @Builder @NoArgsConstructor @AllArgsConstructor
 public class ReminderResponse {
-    private String type;      // FD_MATURITY | RD_INSTALLMENT | CARD_BILL | LOAN_EMI
+    private String type;      // FD_MATURITY | RD_INSTALLMENT | CARD_BILL | LOAN_EMI | INSURANCE_PREMIUM
     private String title;
     private String subtitle;
     private LocalDate dueDate;

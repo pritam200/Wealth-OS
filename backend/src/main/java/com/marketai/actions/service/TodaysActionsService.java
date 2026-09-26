@@ -8,6 +8,8 @@ import com.marketai.recommendation.dto.MfRecommendationRequest;
 import com.marketai.recommendation.dto.PortfolioContext;
 import com.marketai.recommendation.service.PortfolioContextService;
 import com.marketai.recommendation.service.RecommendationEngine;
+import com.marketai.subscription.dto.SubscriptionResponse;
+import com.marketai.subscription.service.SubscriptionDetectionService;
 import com.marketai.technical.dto.TechnicalAnalysisDto;
 import com.marketai.technical.service.TechnicalIndicatorService;
 import lombok.RequiredArgsConstructor;
@@ -52,6 +54,11 @@ public class TodaysActionsService {
     private final TechnicalIndicatorService technicalIndicatorService;
     private final com.marketai.ledger.repository.CashAccountRepository cashAccountRepository;
     private final com.marketai.redemption.service.RedemptionService redemptionService;
+    private final SubscriptionDetectionService subscriptionDetectionService;
+
+    /** Just-crossed the detection threshold — the first day a recurring charge is old/regular
+     *  enough to call a subscription at all, so it's worth calling out as new. */
+    private static final int NEW_SUBSCRIPTION_OCCURRENCE_COUNT = 3;
 
     @Transactional(readOnly = true)
     public TodaysActionsResponse build(Long userId) {
@@ -199,6 +206,27 @@ public class TodaysActionsService {
             }
         }
 
+        // Not tied to any held security either, same reasoning as the concentration flags
+        // above — surfaced here so a new recurring charge or a price bump on an existing one
+        // is visible without a separate nudge surface to check.
+        for (SubscriptionResponse sub : subscriptionDetectionService.detectSubscriptions(userId)) {
+            if (sub.isPriceIncreased()) {
+                watch.add(WatchAction.builder()
+                    .symbol(null).name(sub.getMerchant()).assetType("SUBSCRIPTION")
+                    .condition("Price change on a recurring charge")
+                    .why(sub.getMerchant() + " changed from " + strip(sub.getPreviousAmount())
+                        + " to " + strip(sub.getCurrentAmount()) + " per " + sub.getCadence().name().toLowerCase() + " cycle.")
+                    .build());
+            } else if (sub.getOccurrenceCount() == NEW_SUBSCRIPTION_OCCURRENCE_COUNT) {
+                watch.add(WatchAction.builder()
+                    .symbol(null).name(sub.getMerchant()).assetType("SUBSCRIPTION")
+                    .condition("New subscription detected")
+                    .why(sub.getMerchant() + " recurring " + sub.getCadence().name().toLowerCase()
+                        + " at " + strip(sub.getCurrentAmount()) + ".")
+                    .build());
+            }
+        }
+
         String scopeNote = cashTracked
             ? "Covers securities you already hold. Buy amounts are sized against your tracked cash "
               + "balance and the " + SINGLE_STOCK_GUIDELINE_PCT + "% single-position guideline, whichever binds first. "
@@ -231,6 +259,10 @@ public class TodaysActionsService {
 
 
     private static BigDecimal nzc(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
+
+    private static String strip(BigDecimal v) {
+        return v == null ? "0" : v.stripTrailingZeros().toPlainString();
+    }
 
     /**
      * A plain statement of what the engine's rating implies, so an action isn't just a verb.

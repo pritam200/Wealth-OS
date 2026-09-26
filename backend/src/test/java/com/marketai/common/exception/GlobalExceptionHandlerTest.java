@@ -65,4 +65,16 @@ class GlobalExceptionHandlerTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
     }
+
+    @Test
+    @DisplayName("a deliberate 409 keeps its status and reason instead of becoming a generic 500")
+    void responseStatusKeepsStatusAndReason() {
+        var response = handler.handleResponseStatus(
+            new org.springframework.web.server.ResponseStatusException(HttpStatus.CONFLICT,
+                "No saved credit card matches this bill — add the card."),
+            request("/api/review/7/decision"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().getMessage()).contains("add the card");
+    }
 }

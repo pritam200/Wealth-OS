@@ -1,8 +1,18 @@
 package com.marketai.ai.audit.service;
 
+import com.marketai.ai.audit.dto.AiAuditTrailResponse;
+import com.marketai.ai.audit.entity.AiAuditTrail;
+import com.marketai.ai.audit.repository.AiAuditTrailRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * The audit trail deliberately persists prompts (that's its value), so redaction is the only
@@ -10,6 +20,43 @@ import static org.assertj.core.api.Assertions.assertThat;
  * of it.
  */
 class AiAuditServiceTest {
+
+    private AiAuditTrailRepository repository;
+    private AiAuditService service;
+
+    @BeforeEach
+    void setUp() {
+        repository = mock(AiAuditTrailRepository.class);
+        service = new AiAuditService(repository);
+    }
+
+    @Test
+    void getByReferenceReturnsRowsScopedToUserAndReference() {
+        AiAuditTrail row = AiAuditTrail.builder()
+                .id(5L).userId(1L).task("EMAIL_EXTRACT").referenceId("gmail-msg-1")
+                .provider("ollama").model("qwen2.5:7b")
+                .confidence(new BigDecimal("0.9200")).status("ACCEPTED")
+                .build();
+        when(repository.findByUserIdAndReferenceIdOrderByCreatedAtDesc(1L, "gmail-msg-1"))
+                .thenReturn(List.of(row));
+
+        List<AiAuditTrailResponse> result = service.getByReference(1L, "gmail-msg-1");
+
+        assertThat(result).hasSize(1);
+        AiAuditTrailResponse dto = result.get(0);
+        assertThat(dto.getId()).isEqualTo(5L);
+        assertThat(dto.getReferenceId()).isEqualTo("gmail-msg-1");
+        assertThat(dto.getStatus()).isEqualTo("ACCEPTED");
+        assertThat(dto.getConfidence()).isEqualByComparingTo("0.9200");
+    }
+
+    @Test
+    void getByReferenceReturnsEmptyWhenNothingRecorded() {
+        when(repository.findByUserIdAndReferenceIdOrderByCreatedAtDesc(any(), any()))
+                .thenReturn(List.of());
+
+        assertThat(service.getByReference(1L, "unknown")).isEmpty();
+    }
 
     @Test
     void redactsStatementPasswordsQuotedInEmailBodies() {

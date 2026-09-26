@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ImportedTransactionFingerprintRepository extends JpaRepository<ImportedTransactionFingerprint, Long> {
     boolean existsByUserIdAndFingerprint(Long userId, String fingerprint);
+    java.util.Optional<ImportedTransactionFingerprint> findFirstByUserIdAndFingerprint(Long userId, String fingerprint);
     void deleteByUserId(Long userId);
 
     /**

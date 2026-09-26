@@ -20,7 +20,8 @@ public final class SpendCategorizer {
         // Checked before EMI's generic "credit card payment" phrase, and before every other
         // spend bucket: a CRED/CC-bill debit settles a debt already spent against elsewhere, so
         // it must never be counted as spend under any other category either.
-        if (has(t, "cred", "credit card bill", "credit card payment", "cc bill", "card bill payment"))
+        if (has(t, "cred", "credit card bill", "credit card payment", "cc bill", "card bill payment",
+                 "self transfer", "own account", "to self", "fixed deposit", "recurring deposit"))
             return ExpenseCategory.ACCOUNT_TRANSFER;
 
         // Sub-brand disambiguation, checked before the generic grocery/restaurant keywords below:
@@ -159,8 +160,29 @@ public final class SpendCategorizer {
         return raw.substring(0, 1).toUpperCase() + raw.substring(1);
     }
 
+    // Short keys match whole words only: as bare substrings "cred" matched every "credit"/
+    // "credited" (turning ordinary spend into ACCOUNT_TRANSFER), "emi" matched "premium",
+    // "ola" matched "cola", "sip" matched "gossip". Longer keys are distinctive brand names that
+    // bank narrations often glue to other text ("ZOMATOONLINE"), so they stay substring matches.
+    private static final int WHOLE_WORD_MAX_LEN = 5;
+
     private static boolean has(String t, String... keys) {
-        for (String k : keys) if (t.contains(k)) return true;
+        for (String k : keys) {
+            if (k.trim().length() <= WHOLE_WORD_MAX_LEN ? containsWord(t, k.trim()) : t.contains(k)) return true;
+        }
         return false;
+    }
+
+    private static boolean containsWord(String t, String k) {
+        int from = 0;
+        while (true) {
+            int i = t.indexOf(k, from);
+            if (i < 0) return false;
+            int end = i + k.length();
+            boolean startOk = i == 0 || !Character.isLetterOrDigit(t.charAt(i - 1));
+            boolean endOk = end == t.length() || !Character.isLetterOrDigit(t.charAt(end));
+            if (startOk && endOk) return true;
+            from = i + 1;
+        }
     }
 }

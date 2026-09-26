@@ -8,6 +8,7 @@ import com.marketai.recommendation.dto.MfRecommendationRequest;
 import com.marketai.recommendation.dto.PortfolioContext;
 import com.marketai.recommendation.service.PortfolioContextService;
 import com.marketai.recommendation.service.RecommendationEngine;
+import com.marketai.subscription.service.SubscriptionDetectionService;
 import com.marketai.technical.dto.TechnicalAnalysisDto;
 import com.marketai.technical.service.TechnicalIndicatorService;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +35,7 @@ class TodaysActionsServiceTest {
     private TechnicalIndicatorService technical;
     private com.marketai.ledger.repository.CashAccountRepository cashRepo;
     private com.marketai.redemption.service.RedemptionService redemptionService;
+    private SubscriptionDetectionService subscriptionDetectionService;
     private TodaysActionsService service;
 
     @BeforeEach
@@ -43,11 +45,13 @@ class TodaysActionsServiceTest {
         technical = mock(TechnicalIndicatorService.class);
         cashRepo = mock(com.marketai.ledger.repository.CashAccountRepository.class);
         redemptionService = mock(com.marketai.redemption.service.RedemptionService.class);
+        subscriptionDetectionService = mock(SubscriptionDetectionService.class);
         // No cash accounts by default — sizing must then suggest no rupee amount at all.
         when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(java.math.BigDecimal.ZERO);
         when(cashRepo.findByUser_IdAndActiveTrueOrderByNameAsc(anyLong())).thenReturn(java.util.Collections.<com.marketai.ledger.entity.CashAccount>emptyList());
         when(redemptionService.totalAwaitingRedeployment(anyLong())).thenReturn(java.math.BigDecimal.ZERO);
-        service = new TodaysActionsService(ctxService, engine, technical, cashRepo, redemptionService);
+        when(subscriptionDetectionService.detectSubscriptions(anyLong())).thenReturn(Collections.emptyList());
+        service = new TodaysActionsService(ctxService, engine, technical, cashRepo, redemptionService, subscriptionDetectionService);
 
         when(ctxService.build(USER)).thenReturn(emptyContext());
         when(ctxService.getAllHoldings(USER)).thenReturn(Collections.<Holding>emptyList());

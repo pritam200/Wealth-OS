@@ -37,4 +37,9 @@ public class GoalController {
         service.delete(user.getId(), id);
         return ResponseEntity.noContent().build();
     }
+
+    @PostMapping("/{id}/what-if")
+    public ResponseEntity<WhatIfResponse> whatIf(@AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody WhatIfRequest req) {
+        return ResponseEntity.ok(service.whatIf(user.getId(), id, req));
+    }
 }

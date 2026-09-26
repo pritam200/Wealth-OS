@@ -63,4 +63,16 @@ public class ParsedEmail {
 
     // Human-readable description for UI
     private String sourceDescription;
+
+    // 0 for the first line in a document with this exact content, 1 for an identical second
+    // line, etc. A single statement never lists the same transaction twice, so two identical
+    // lines are two real transactions and must not dedup against each other.
+    @Builder.Default
+    private int occurrenceInSource = 0;
+
+    // True only when a person accepted this item from the review queue. It lifts the "looks like
+    // one already recorded from another email" holds — the person has said it is separate — but
+    // never the exact-reference/fingerprint gates, which identify the same transaction outright.
+    @Builder.Default
+    private boolean userConfirmed = false;
 }

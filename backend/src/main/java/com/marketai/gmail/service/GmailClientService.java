@@ -216,6 +216,51 @@ public class GmailClientService {
         return full;
     }
 
+    /** Message ids in a sync window, oldest first, and whether the safety cap cut the list short. */
+    public record MessageIdList(List<String> ids, boolean truncated) {}
+
+    /**
+     * Upper bound on ids listed in one sync — far above any realistic personal mailbox window,
+     * present only so a runaway pagination bug cannot loop forever. Hitting it is reported, never
+     * silent.
+     */
+    public static final int MESSAGE_ID_SAFETY_CAP = 50_000;
+
+    /**
+     * Every message id in the window — not just the newest few hundred. The previous
+     * {@link #fetchRecentMessages} stopped at 300, so a 365-day backfill of a normal inbox read
+     * only the last few weeks and silently never saw the rest.
+     *
+     * <p>Only spam and trash are excluded. The old category filter also dropped mail in the
+     * Forums tab and anything Gmail left uncategorised, where bank and broker mail does land.
+     *
+     * <p>Oldest first, so an FD is opened before its renewal is read and a fund is bought before
+     * its redemption is — otherwise the later event arrives with nothing to attach to.
+     */
+    public MessageIdList listMessageIds(Gmail gmail, String lookbackPeriod) throws Exception {
+        String query = "newer_than:" + lookbackPeriod + " -in:spam -in:trash";
+        List<String> ids = new ArrayList<>();
+        String pageToken = null;
+        boolean truncated = false;
+        do {
+            ListMessagesResponse resp = gmail.users().messages().list("me")
+                    .setQ(query)
+                    .setMaxResults(500L)
+                    .setPageToken(pageToken)
+                    .execute();
+            if (resp.getMessages() != null) {
+                for (Message m : resp.getMessages()) ids.add(m.getId());
+            }
+            pageToken = resp.getNextPageToken();
+            if (ids.size() >= MESSAGE_ID_SAFETY_CAP && pageToken != null) {
+                truncated = true;
+                break;
+            }
+        } while (pageToken != null);
+        Collections.reverse(ids); // Gmail lists newest first
+        return new MessageIdList(ids, truncated);
+    }
+
     // Fetches a single message by id — used to re-read a locked statement's body text
     // (e.g. to backfill a password-format hint for PendingPdf rows queued before that
     // feature existed, which never had the body text persisted).

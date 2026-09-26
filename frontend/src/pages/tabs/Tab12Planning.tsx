@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Bell, Target, Receipt, Plus, Trash2, CheckCircle, AlertTriangle, CalendarClock,
-  TrendingUp, Coins, Landmark, Wallet,
+  TrendingUp, Coins, Landmark, Wallet, HelpCircle,
 } from 'lucide-react';
 import { reminderApi, goalApi, taxApi, GOAL_CATEGORIES } from '../../api/planning';
-import type { Reminder, GoalResponse, TaxResponse } from '../../api/planning';
+import type { Reminder, GoalResponse, TaxResponse, GoalWhatIfResponse } from '../../api/planning';
 import { scheduledInvestmentApi } from '../../api/scheduledInvestment';
 import type { RecurringInvestment } from '../../api/scheduledInvestment';
 import { StatTile } from '../../components/shared/StatTile';
@@ -289,18 +289,101 @@ function GoalsSection() {
                   <div className="h-2 bg-surface rounded-full overflow-hidden mb-2">
                     <div className="h-full rounded-full bg-gradient-to-r from-brand to-bull" style={{ width: `${Math.min(100, g.progressPercent)}%` }} />
                   </div>
-                  <div className="grid grid-cols-3 gap-2 text-2xs">
+                  <div className="grid grid-cols-3 gap-2 text-2xs mb-2">
                     <div><span className="text-gray-600">Projected: </span><span className={`font-mono ${g.onTrack ? 'text-bull' : 'text-neutral'}`}>{maskText(fmtINR(g.projectedValue))}</span></div>
                     <div><span className="text-gray-600">SIP: </span><span className="font-mono text-gray-300">{maskText(fmtINR(g.monthlyContribution))}/mo</span></div>
                     {g.requiredMonthly != null && g.status === 'SHORTFALL' && (
                       <div><span className="text-gray-600">Need: </span><span className="font-mono text-neutral">{maskText(fmtINR(g.requiredMonthly))}/mo</span></div>
                     )}
                   </div>
+                  <GoalWhatIfPanel goal={g} />
                 </div>
               );
             })}
           </div>
         )}
+    </div>
+  );
+}
+
+/* ── Goal what-if ── pure simulation, never touches the real goal/SIP */
+function GoalWhatIfPanel({ goal }: { goal: GoalResponse }) {
+  const maskText = useMaskedText();
+  const [open, setOpen] = useState(false);
+  const [type, setType] = useState<'PAUSE_SIP' | 'LUMP_SUM'>('PAUSE_SIP');
+  const [startMonth, setStartMonth] = useState('1');
+  const [pauseMonths, setPauseMonths] = useState('3');
+  const [lumpSumAmount, setLumpSumAmount] = useState('');
+  const [result, setResult] = useState<GoalWhatIfResponse | null>(null);
+  const [running, setRunning] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const run = async () => {
+    setRunning(true); setFailed(false); setResult(null);
+    try {
+      const { data } = await goalApi.whatIf(goal.id, {
+        adjustmentType: type,
+        startMonth: Number(startMonth) || 1,
+        pauseMonths: type === 'PAUSE_SIP' ? Number(pauseMonths) || 0 : undefined,
+        lumpSumAmount: type === 'LUMP_SUM' ? Number(lumpSumAmount) || 0 : undefined,
+      });
+      setResult(data);
+    } catch { setFailed(true); } finally { setRunning(false); }
+  };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="text-2xs text-brand flex items-center gap-1 hover:underline">
+        <HelpCircle size={11} /> What if…
+      </button>
+    );
+  }
+
+  return (
+    <div className="bg-surface rounded-lg p-2.5 border border-surface-border space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-2xs font-medium text-ink">What if this SIP changes?</span>
+        <button onClick={() => { setOpen(false); setResult(null); }} className="text-2xs text-gray-600 hover:text-ink">Close</button>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <select value={type} onChange={e => { setType(e.target.value as any); setResult(null); }} className="input-field text-2xs">
+          <option value="PAUSE_SIP">Pause SIP</option>
+          <option value="LUMP_SUM">Add lump sum</option>
+        </select>
+        <input type="number" min="1" value={startMonth} onChange={e => setStartMonth(e.target.value)} placeholder="Starting in (months)" className="input-field text-2xs" />
+      </div>
+      {type === 'PAUSE_SIP' ? (
+        <input type="number" min="1" value={pauseMonths} onChange={e => setPauseMonths(e.target.value)} placeholder="Pause for how many months" className="input-field text-2xs w-full" />
+      ) : (
+        <input type="number" min="0" value={lumpSumAmount} onChange={e => setLumpSumAmount(e.target.value)} placeholder="Lump sum amount ₹" className="input-field text-2xs w-full" />
+      )}
+      <button onClick={run} disabled={running} className="btn-secondary text-2xs py-1 w-full">{running ? 'Simulating…' : 'See the effect'}</button>
+
+      {failed && <p className="text-2xs text-bear">Couldn't run that simulation. Try again.</p>}
+
+      {result && (
+        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-surface-border">
+          <div>
+            <div className="text-2xs text-gray-600 mb-0.5">Baseline</div>
+            <div className="font-mono text-2xs text-gray-300">{maskText(fmtINR(result.baseline.projectedValue))}</div>
+            <div className="text-2xs text-gray-600">{result.baseline.completionDate ? `done ${result.baseline.completionDate}` : 'not reached'}</div>
+          </div>
+          <div>
+            <div className="text-2xs text-gray-600 mb-0.5">With this change</div>
+            <div className={`font-mono text-2xs ${result.projectedValueDelta >= 0 ? 'text-bull' : 'text-neutral'}`}>{maskText(fmtINR(result.scenario.projectedValue))}</div>
+            <div className="text-2xs text-gray-600">{result.scenario.completionDate ? `done ${result.scenario.completionDate}` : 'not reached'}</div>
+          </div>
+          {result.completionDelayMonths != null && (
+            <div className="col-span-2 text-2xs text-gray-500">
+              {result.completionDelayMonths === 0
+                ? 'No change to completion timing.'
+                : result.completionDelayMonths > 0
+                  ? `Delays your goal by ${result.completionDelayMonths} month${result.completionDelayMonths === 1 ? '' : 's'}.`
+                  : `Pulls your goal forward by ${Math.abs(result.completionDelayMonths)} month${Math.abs(result.completionDelayMonths) === 1 ? '' : 's'}.`}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -311,6 +394,7 @@ function TaxSummary() {
   const [tax, setTax] = useState<TaxResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const loadTax = useCallback(() => {
     setLoading(true); setFailed(false);
     taxApi.summary()
@@ -320,12 +404,36 @@ function TaxSummary() {
   }, []);
   useEffect(() => { loadTax(); }, [loadTax]);
 
+  const handleExport = useCallback(() => {
+    if (!tax) return;
+    setExporting(true);
+    // fyLabel is "FY 2026-27" — the export endpoint takes the "2026-27" part.
+    const financialYear = tax.fyLabel.replace(/^FY\s*/, '');
+    taxApi.exportCsv(financialYear)
+      .then(r => {
+        const url = URL.createObjectURL(r.data);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `capital-gains-${financialYear}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch(() => alert('Could not generate the export. Please try again.'))
+      .finally(() => setExporting(false));
+  }, [tax]);
+
   return (
     <div className="card">
       <div className="flex items-center gap-2.5 mb-3">
         <div className="icon-badge-brand"><Receipt size={15} /></div>
         <h3 className="font-bold text-ink text-sm">Tax Summary</h3>
         {tax && <span className="text-2xs text-gray-600">{tax.fyLabel}</span>}
+        {tax && (
+          <button onClick={handleExport} disabled={exporting}
+                  className="btn-ghost text-2xs ml-auto disabled:opacity-50">
+            {exporting ? 'Exporting…' : 'Export for ITR filing'}
+          </button>
+        )}
       </div>
       {loading ? <div className="h-10 animate-pulse bg-surface-hover rounded" /> : failed ? (
         <LoadFailure what="your tax summary" onRetry={loadTax} />

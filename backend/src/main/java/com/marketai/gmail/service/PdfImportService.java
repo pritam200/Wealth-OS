@@ -568,7 +568,8 @@ public class PdfImportService {
             text.substring(0, Math.min(200, text.length())).replace("\n", " | "));
 
         EmailLLMParserService.Result result = emailLlmParserService.process(
-            userId, user, pdf.getSender(), pdf.getSubject(), text, pdf.getGmailMessageId(), null);
+            userId, user, pdf.getSender(), pdf.getSubject(), text, pdf.getGmailMessageId(), null,
+            EmailLLMParserService.attachmentItemIndexBase(pdf.getFilename()));
 
         pdf.setTradesExtracted(result.getImported() + result.getQueuedForReview() + result.getRejected());
         pdf.setTradesImported(result.getImported());
@@ -593,7 +594,9 @@ public class PdfImportService {
         }
 
         pdf.setPipelineSteps(toJson(steps));
-        pdf.setStatus(result.getImported() > 0 ? "IMPORTED" : "FAILED");
+        // A statement only partly read (the extractor failed on some of its pages) stays FAILED so
+        // it is retried; the lines already booked are recognised on retry and not booked twice.
+        pdf.setStatus(result.getImported() > 0 && !result.isIncomplete() ? "IMPORTED" : "FAILED");
         String summary = result.getImported() + " item(s) imported"
             + (result.getQueuedForReview() > 0 ? ", " + result.getQueuedForReview() + " queued for review" : "")
             + (result.getRejected() > 0 ? ", " + result.getRejected() + " rejected" : "")

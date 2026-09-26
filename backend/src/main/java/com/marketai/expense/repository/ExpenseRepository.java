@@ -14,6 +14,9 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
 
     List<Expense> findByUserIdOrderByExpenseDateDesc(Long userId);
 
+    // Ascending order: subscription-cadence detection walks the history forward in time.
+    List<Expense> findByUserIdOrderByExpenseDateAsc(Long userId);
+
     // Stray rows imported before the parser fix that stops Investment-flavoured
     // debits from ever being booked as an Expense — see BankTransactionParser.
     List<Expense> findByUserIdAndCategory(Long userId, ExpenseCategory category);

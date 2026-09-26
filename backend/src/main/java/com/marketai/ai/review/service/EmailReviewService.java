@@ -37,13 +37,30 @@ public class EmailReviewService {
     private final EmailReviewItemRepository repo;
     private final ParsedEmailImporter importer;
 
-    /** Queues an uncertain extraction as item 0 of its email. Idempotent per gmail message — a
-     *  re-sync updates the existing pending row instead of adding another, and never resurrects
-     *  a resolved one. */
+    /**
+     * Item index for a "this whole email could not be read" placeholder. Kept apart from the
+     * per-transaction indexes (0, 1, …): sharing index 0 meant the first real transaction later
+     * extracted from the same email overwrote — or, once judged, was blocked by — the placeholder.
+     */
+    public static final int WHOLE_EMAIL_ITEM_INDEX = -1;
+
+    /** Queues a whole-email placeholder (the extractor could not read it). Idempotent per gmail
+     *  message — a re-sync updates the existing pending row instead of adding another, and never
+     *  resurrects a resolved one. */
     @Transactional
     public void enqueue(Long userId, String gmailMessageId, String sender, String subject,
                         EmailIntelResult result) {
-        enqueue(userId, gmailMessageId, 0, sender, subject, result);
+        enqueue(userId, gmailMessageId, WHOLE_EMAIL_ITEM_INDEX, sender, subject, result);
+    }
+
+    /** Drops a still-pending whole-email placeholder once a later sync has read the email in
+     *  full, so the queue does not keep asking about an email that has since been processed. */
+    @Transactional
+    public void clearWholeEmailPlaceholder(Long userId, String gmailMessageId, int placeholderIndex) {
+        if (gmailMessageId == null) return;
+        repo.findByUserIdAndGmailMessageIdAndItemIndex(userId, gmailMessageId, placeholderIndex)
+            .filter(i -> i.getStatus() == ReviewStatus.PENDING)
+            .ifPresent(repo::delete);
     }
 
     /**
@@ -173,23 +190,32 @@ public class EmailReviewService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "An amount is required to import this item — edit it and supply one.");
         }
+        if (date == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "A transaction date is required to import this item — edit it and supply one.");
+        }
 
         ParsedEmail pe = ParsedEmail.builder()
             .type(type.importAs())
             .amount(amount)
-            .tradeDate(date != null ? date : LocalDate.now())
+            .tradeDate(date)
             .merchant(counterparty)
             .category(category != null ? ExpenseCategory.fromLabel(category).getLabel() : null)
             .incomeSource(type == EmailIntelType.SALARY ? "Salary"
                         : type == EmailIntelType.INTEREST_CREDIT ? "Interest"
                         : type == EmailIntelType.RENTAL_INCOME ? "Rental" : null)
             .sourceDescription("Human-reviewed: " + type)
+            .userConfirmed(true)
             .build();
 
         try {
             // Goes through the fingerprint gate like any other import, so accepting a review
             // item that already arrived via a parser cannot create a second record.
             importer.importParsedEmail(user.getId(), user, pe, item.getGmailMessageId());
+        } catch (com.marketai.gmail.service.ImportRejectedException e) {
+            // The item still can't be booked as-is (e.g. no saved card for a bill yet). A 409
+            // with the reason tells the person what to fix; it is not a server fault.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
                 "Could not import this item: " + e.getMessage());

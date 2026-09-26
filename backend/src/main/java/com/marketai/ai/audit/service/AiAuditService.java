@@ -1,5 +1,6 @@
 package com.marketai.ai.audit.service;
 
+import com.marketai.ai.audit.dto.AiAuditTrailResponse;
 import com.marketai.ai.audit.entity.AiAuditTrail;
 import com.marketai.ai.audit.repository.AiAuditTrailRepository;
 import com.marketai.ai.llm.LlmCompletion;
@@ -8,7 +9,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Writes the AI audit trail. Recording must never break the operation being audited, so every
@@ -75,5 +78,32 @@ public class AiAuditService {
                               String systemInstruction, String prompt,
                               String status, String note) {
         record(userId, task, referenceId, systemInstruction, prompt, null, null, status, note);
+    }
+
+    // Backs the "why did the AI do this" UI: referenceId is the same gmailMessageId that
+    // Expense/Income/Rent/CardPayment persist as sourceEmailId, so the frontend can go straight
+    // from an imported row to the extraction call(s) that produced it. Scoped by userId (not
+    // just the row's own referenceId) so one user can never read another's audit trail.
+    public List<AiAuditTrailResponse> getByReference(Long userId, String referenceId) {
+        return repo.findByUserIdAndReferenceIdOrderByCreatedAtDesc(userId, referenceId)
+                .stream().map(AiAuditService::toResponse).collect(Collectors.toList());
+    }
+
+    private static AiAuditTrailResponse toResponse(AiAuditTrail a) {
+        return AiAuditTrailResponse.builder()
+                .id(a.getId())
+                .task(a.getTask())
+                .provider(a.getProvider())
+                .model(a.getModel())
+                .referenceId(a.getReferenceId())
+                .systemInstruction(a.getSystemInstruction())
+                .prompt(a.getPrompt())
+                .rawOutput(a.getRawOutput())
+                .confidence(a.getConfidence())
+                .status(a.getStatus())
+                .note(a.getNote())
+                .latencyMs(a.getLatencyMs())
+                .createdAt(a.getCreatedAt())
+                .build();
     }
 }

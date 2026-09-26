@@ -42,6 +42,7 @@ public class AuthService {
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
     private final EmailOtpService emailOtpService;
+    private final SignupAllowlist signupAllowlist;
 
     @Value("${app.jwt.refresh-expiration-ms}")
     private long refreshExpirationMs;
@@ -55,6 +56,8 @@ public class AuthService {
             throw new DuplicateResourceException("User", "email", request.getEmail());
         }
 
+        // Re-checked here as well as at code request: the list may have changed in between.
+        signupAllowlist.check(request.getEmail());
         emailOtpService.assertEmailVerified(request.getEmail(), request.getOtpVerificationToken());
 
         Role userRole = roleRepository.findByName(Role.RoleName.ROLE_USER)

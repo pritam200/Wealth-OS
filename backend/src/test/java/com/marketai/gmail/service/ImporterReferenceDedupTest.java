@@ -132,7 +132,7 @@ class ImporterReferenceDedupTest {
             "Interest of Rs 5000 credited to your account.");
 
         // Behaviour must be identical to before this change when no reference is present.
-        verify(fingerprintRepo).existsByUserIdAndFingerprint(eq(USER), anyString());
+        verify(fingerprintRepo).findFirstByUserIdAndFingerprint(eq(USER), anyString());
         verify(fingerprintRepo).save(any());
         assertThat(savedIncomeAmount()).isEqualByComparingTo("5000.00");
     }
@@ -142,7 +142,7 @@ class ImporterReferenceDedupTest {
     void nullDocumentTextIsSafe() throws Exception {
         importer.importParsedEmail(USER, new User(), income("5000.00"), "msg-5", null);
 
-        verify(fingerprintRepo).existsByUserIdAndFingerprint(eq(USER), anyString());
+        verify(fingerprintRepo).findFirstByUserIdAndFingerprint(eq(USER), anyString());
         verify(fingerprintRepo).save(any());
         assertThat(savedIncomeAmount()).isEqualByComparingTo("5000.00");
     }

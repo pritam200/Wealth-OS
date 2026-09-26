@@ -7,10 +7,12 @@ import { EpfSection } from '../../components/wealth/EpfSection';
 import { FDSection } from '../../components/wealth/FDSection';
 import { RDSection } from '../../components/wealth/RDSection';
 import { LoanSection } from '../../components/wealth/LoanSection';
+import { InsuranceSection } from '../../components/wealth/InsuranceSection';
 import { OtherAssetsSection } from '../../components/wealth/OtherAssetsSection';
 import { WealthCalculator } from '../../components/wealth/WealthCalculator';
 import { CashAccountsSection } from '../../components/wealth/CashAccountsSection';
 import { ChunkRebalancingTracker } from '../../components/wealth/ChunkRebalancingTracker';
+import { ConcentrationRiskCard } from '../../components/wealth/ConcentrationRiskCard';
 import { trackingApi } from '../../api/tracking';
 import type { TrackingSummary } from '../../api/tracking';
 import { wealthApi } from '../../api/wealth';
@@ -87,6 +89,8 @@ export function Tab8MyWealth() {
         <PortfolioSection onValues={() => {}} />
       </div>
 
+      <ConcentrationRiskCard />
+
       <div>
         <h3 className="text-ink font-semibold text-sm mb-3">Fixed Income &amp; Retirement</h3>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -101,6 +105,7 @@ export function Tab8MyWealth() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <OtherAssetsSection onRefresh={loadSummary} />
           <LoanSection onRefresh={loadSummary} />
+          <InsuranceSection onRefresh={loadSummary} />
         </div>
       </div>
 

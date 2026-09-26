@@ -56,6 +56,103 @@ public class GoalService {
         repo.findByIdAndUserId(id, userId).ifPresent(repo::delete);
     }
 
+    /**
+     * PocketSmith-style "what if" simulation: re-runs the projection with a hypothetical SIP
+     * pause or lump sum, purely in memory. Never touches {@link #repo} for anything but the
+     * read — the real goal and its SIP are left exactly as they are.
+     */
+    public WhatIfResponse whatIf(Long userId, Long id, WhatIfRequest req) {
+        FinancialGoal g = repo.findByIdAndUserId(id, userId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+
+        SimResult baselineSim = simulate(g, null);
+        SimResult scenarioSim = simulate(g, req);
+
+        WhatIfProjection baseline = toProjection(baselineSim, g);
+        WhatIfProjection scenario = toProjection(scenarioSim, g);
+
+        Integer delay = (baselineSim.completionMonth() != null && scenarioSim.completionMonth() != null)
+            ? scenarioSim.completionMonth() - baselineSim.completionMonth()
+            : null;
+
+        return WhatIfResponse.builder()
+            .goalId(g.getId())
+            .baseline(baseline)
+            .scenario(scenario)
+            .completionDelayMonths(delay)
+            .projectedValueDelta(scenario.getProjectedValue().subtract(baseline.getProjectedValue()))
+            .build();
+    }
+
+    // 50 years — bounds the completion-date search so a goal that never completes doesn't loop forever.
+    private static final int MAX_SIMULATION_MONTHS = 600;
+
+    private record SimResult(double valueAtHorizon, Integer completionMonth) {}
+
+    /**
+     * Month-by-month simulation (rather than the closed-form annuity {@link #toDto} uses)
+     * because a pause window or a one-off lump sum breaks the "constant contribution every
+     * month" assumption the closed form relies on. {@code adj == null} runs the baseline,
+     * unmodified schedule.
+     */
+    private SimResult simulate(FinancialGoal g, WhatIfRequest adj) {
+        double target = g.getTargetAmount().doubleValue();
+        double balance = g.getCurrentSaved() != null ? g.getCurrentSaved().doubleValue() : 0;
+        double sip = g.getMonthlyContribution() != null ? g.getMonthlyContribution().doubleValue() : 0;
+        double annual = g.getExpectedReturn() != null ? g.getExpectedReturn().doubleValue() : 10;
+        double r = annual / 100.0 / 12.0;
+
+        Integer horizonMonths = g.getTargetDate() != null
+            ? (int) Math.max(0, ChronoUnit.MONTHS.between(LocalDate.now(), g.getTargetDate()))
+            : null;
+        // No target date: mirror toDto's "1yr illustration" window for the point-in-time value.
+        int valueWindow = horizonMonths != null ? horizonMonths : 12;
+
+        int pauseStart = -1, pauseEnd = -1;
+        int lumpSumMonth = -1;
+        double lumpSumAmount = 0;
+        if (adj != null && adj.getAdjustmentType() != null) {
+            int startMonth = adj.getStartMonth() != null ? Math.max(1, adj.getStartMonth()) : 1;
+            if ("PAUSE_SIP".equalsIgnoreCase(adj.getAdjustmentType())) {
+                pauseStart = startMonth;
+                pauseEnd = pauseStart + (adj.getPauseMonths() != null ? adj.getPauseMonths() : 0) - 1;
+            } else if ("LUMP_SUM".equalsIgnoreCase(adj.getAdjustmentType())) {
+                lumpSumMonth = startMonth;
+                lumpSumAmount = adj.getLumpSumAmount() != null ? adj.getLumpSumAmount().doubleValue() : 0;
+            }
+        }
+
+        Integer completionMonth = balance >= target ? 0 : null;
+        Double valueAtHorizon = valueWindow == 0 ? balance : null;
+
+        for (int m = 1; m <= MAX_SIMULATION_MONTHS; m++) {
+            double contribution = (m >= pauseStart && m <= pauseEnd) ? 0 : sip;
+            balance = balance * (1 + r) + contribution;
+            if (m == lumpSumMonth) balance += lumpSumAmount;
+
+            if (completionMonth == null && balance >= target) completionMonth = m;
+            if (m == valueWindow) valueAtHorizon = balance;
+            if (completionMonth != null && m >= valueWindow) break;
+        }
+        if (valueAtHorizon == null) valueAtHorizon = balance; // horizon beyond the search cap — best available estimate
+
+        return new SimResult(valueAtHorizon, completionMonth);
+    }
+
+    private WhatIfProjection toProjection(SimResult sim, FinancialGoal g) {
+        double target = g.getTargetAmount().doubleValue();
+        boolean onTrack = sim.valueAtHorizon() >= target;
+        LocalDate completionDate = sim.completionMonth() != null ? LocalDate.now().plusMonths(sim.completionMonth()) : null;
+
+        return WhatIfProjection.builder()
+            .projectedValue(BigDecimal.valueOf(sim.valueAtHorizon()).setScale(0, RoundingMode.HALF_UP))
+            .completionMonth(sim.completionMonth())
+            .completionDate(completionDate)
+            .onTrack(onTrack)
+            .shortfall(BigDecimal.valueOf(Math.max(0, target - sim.valueAtHorizon())).setScale(0, RoundingMode.HALF_UP))
+            .build();
+    }
+
     private GoalResponse toDto(FinancialGoal g) {
         double target = g.getTargetAmount().doubleValue();
         double saved = g.getCurrentSaved() != null ? g.getCurrentSaved().doubleValue() : 0;

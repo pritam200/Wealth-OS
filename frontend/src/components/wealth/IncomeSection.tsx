@@ -4,6 +4,7 @@ import { incomeApi, INCOME_SOURCES } from '../../api/income';
 import type { IncomeResponse, IncomeSummary } from '../../api/income';
 import { useMaskedText } from '../shared/Amount';
 import { TransactionDetail } from '../shared/TransactionDetail';
+import { AiProvenanceButton } from '../shared/AiProvenanceButton';
 import { categoryColor } from '../../theme/chartTheme';
 
 const fmtINR = (n: number) =>
@@ -171,6 +172,7 @@ export function IncomeSection() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
                     <span className="text-bull text-xs font-mono font-semibold">{maskText(fmtINR(e.amount))}</span>
+                    {e.sourceEmailId && <AiProvenanceButton referenceId={e.sourceEmailId} />}
                     <button onClick={(ev) => { ev.stopPropagation(); startEdit(e); }} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit income"><Edit2 size={11} /></button>
                     <button aria-label="Delete" onClick={(ev) => { ev.stopPropagation(); del(e.id); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                   </div>

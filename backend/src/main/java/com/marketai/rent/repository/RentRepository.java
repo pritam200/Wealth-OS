@@ -20,5 +20,8 @@ public interface RentRepository extends JpaRepository<Rent, Long> {
 
     boolean existsByUserIdAndSourceEmailId(Long userId, String sourceEmailId);
 
+    long countByUserIdAndSourceEmailIdAndAmountAndPaidDate(Long userId, String sourceEmailId,
+                                                           java.math.BigDecimal amount, java.time.LocalDate paidDate);
+
     boolean existsByIdAndUserId(Long id, Long userId);
 }

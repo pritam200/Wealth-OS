@@ -39,3 +39,7 @@ Thumbs.db
 *.log
 logs/
 docs/_build/
+
+# Production secrets and backups (deploy/)
+deploy/.env
+deploy/backups/

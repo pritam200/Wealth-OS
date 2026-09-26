@@ -81,7 +81,7 @@ class WeightedDuplicateImportTest {
     @DisplayName("a high-confidence weighted match skips booking a new expense and is recorded as MATCHED_TO_EXISTING")
     void highConfidenceMatchSkipsBooking() throws Exception {
         ImportedTransactionFingerprint priorStatementLine = ImportedTransactionFingerprint.builder().id(77L).build();
-        when(matchScorer.findBestMatch(eq(USER), any()))
+        when(matchScorer.findBestMatch(eq(USER), any(), any()))
             .thenReturn(Optional.of(new TransactionMatchScorer.ScoredMatch(priorStatementLine, 0.90)));
 
         importer.importParsedEmail(USER, user(), expense(new BigDecimal("4500.00")), "msg-a");
@@ -99,7 +99,7 @@ class WeightedDuplicateImportTest {
     @DisplayName("a mid-confidence weighted match still books the expense, flagged NEEDS_REVIEW rather than discarded")
     void midConfidenceMatchStillBooksButFlags() throws Exception {
         ImportedTransactionFingerprint priorLine = ImportedTransactionFingerprint.builder().id(88L).build();
-        when(matchScorer.findBestMatch(eq(USER), any()))
+        when(matchScorer.findBestMatch(eq(USER), any(), any()))
             .thenReturn(Optional.of(new TransactionMatchScorer.ScoredMatch(priorLine, 0.50)));
 
         importer.importParsedEmail(USER, user(), expense(new BigDecimal("4500.00")), "msg-b");
@@ -115,7 +115,7 @@ class WeightedDuplicateImportTest {
     @Test
     @DisplayName("no weighted match at all books the expense normally, flagged NEW")
     void noMatchBooksAsNew() throws Exception {
-        when(matchScorer.findBestMatch(eq(USER), any())).thenReturn(Optional.empty());
+        when(matchScorer.findBestMatch(eq(USER), any(), any())).thenReturn(Optional.empty());
 
         importer.importParsedEmail(USER, user(), expense(new BigDecimal("4500.00")), "msg-c");
 

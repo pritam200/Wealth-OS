@@ -114,6 +114,9 @@ public class GmailSyncService {
      * @param explicitMessageIds when non-null, exactly these messages are processed and the
      *                           date-window scan is skipped entirely.
      */
+    /** ProcessedEmail.type for an email that was read in full and holds nothing to book. */
+    static final String NO_TRANSACTION = "NO_TRANSACTION";
+
     private GmailSyncResult doSyncForUser(Long userId, String lookbackPeriod, List<String> explicitMessageIds) {
         GmailToken token = tokenRepo.findByUserId(userId).orElse(null);
         if (token == null) return emptyResult("Gmail not connected — please connect your Gmail account first.");
@@ -139,24 +142,21 @@ public class GmailSyncService {
                     tokenRepo.save(token);
                 });
 
-            List<Message> messages;
+            // Ids first, bodies later: a message already fully handled is recognised from its id
+            // alone and never downloaded again, so a large backfill costs one fetch per new email.
+            List<String> messageIds;
             try {
                 if (explicitMessageIds != null) {
-                    // Incremental path: Gmail's history API already told us precisely what is
-                    // new, so we fetch only those. A window scan here would re-pay 20 quota
-                    // units per message for mail we have already processed.
-                    messages = new ArrayList<>();
-                    for (String id : explicitMessageIds) {
-                        try {
-                            messages.add(gmailClient.getMessage(gmail, id));
-                        } catch (Exception e) {
-                            // A single unreadable message (deleted between notification and
-                            // fetch) must not abort the whole batch.
-                            log.warn("Could not fetch message {}: {}", id, e.getMessage());
-                        }
-                    }
+                    // Incremental path: Gmail's history API already told us precisely what is new.
+                    messageIds = explicitMessageIds;
                 } else {
-                    messages = gmailClient.fetchRecentMessages(gmail, 300, lookbackPeriod);
+                    GmailClientService.MessageIdList listed = gmailClient.listMessageIds(gmail, lookbackPeriod);
+                    messageIds = listed.ids();
+                    if (listed.truncated()) {
+                        actionItems.add("More than " + GmailClientService.MESSAGE_ID_SAFETY_CAP
+                            + " emails in the last " + lookbackPeriod + " — the oldest were not scanned. "
+                            + "Sync a shorter window first, then extend it.");
+                    }
                 }
             } catch (com.google.api.client.http.HttpResponseException httpEx) {
                 if (httpEx.getStatusCode() == 401) {
@@ -170,9 +170,15 @@ public class GmailSyncService {
                 excludedPatterns.add(es.getPattern());
             }
 
-            for (Message message : messages) {
+            for (String msgId : messageIds) {
                 totalEmails++;
-                String msgId = message.getId();
+                // Every message below is independent. A bug or unexpected exception on ONE
+                // email (a malformed attachment, an LLM response the router couldn't parse,
+                // etc.) must not abort the rest of this sync run and leave every message after
+                // it in the batch unprocessed until the next scheduled/manual sync — this catch
+                // is the backstop for exactly that. Known, expected failure points already have
+                // their own inner try/catch (PDF auto-unlock, bulk unlock) and are unaffected.
+                try {
                 ProcessedEmail existing = processedRepo.findByUserIdAndGmailMessageId(userId, msgId).orElse(null);
                 if (existing != null) {
                     // Only two outcomes are genuinely terminal: a completed import, and a sender
@@ -190,8 +196,11 @@ public class GmailSyncService {
                     // updates EmailReviewItem, never this row (see EmailReviewService.decide()).
                     // Without checking the review queue directly, an already-judged email would
                     // be re-fetched and re-parsed on every sync indefinitely.
+                    // NO_TRANSACTION is a completed read that found nothing to book — repeating the
+                    // same LLM calls on every sync would only cost time on a full-mailbox backfill.
                     boolean permanentlyResolved = "IMPORTED".equals(existing.getStatus())
                         || "EXCLUDED".equals(existing.getType())
+                        || NO_TRANSACTION.equals(existing.getType())
                         || "PendingPdf".equals(existing.getMatchedParser())
                         || ("SKIPPED".equals(existing.getStatus()) && emailReviewService.isFullyResolved(userId, msgId));
                     if (permanentlyResolved) {
@@ -210,6 +219,10 @@ public class GmailSyncService {
                 // still refuse to double-book the actual financial record regardless of message
                 // id, which is what actually matters for correctness.
 
+                // A fetch failure (message deleted meanwhile, transient API error) lands in the
+                // per-message catch below and is recorded as FAILED, so it is retried next sync
+                // rather than silently skipped as before.
+                Message message = gmailClient.getMessage(gmail, msgId);
                 String from    = gmailClient.getFrom(message);
                 String subject = gmailClient.getSubject(message);
                 String body    = gmailClient.getBodyText(message);
@@ -259,6 +272,7 @@ public class GmailSyncService {
                             } else {
                                 steps.add("PDF " + pdf.filename + " already processed — skipping");
                             }
+                            queuedPdf = true; // keeps the email tied to its PDF's own lifecycle
                             continue;
                         }
                         String providerKey = providerKeyOf(from);
@@ -335,6 +349,9 @@ public class GmailSyncService {
                             .pipelineSteps(steps).build());
                     }
                     case REVIEW, UNAVAILABLE -> {
+                        // Lines that did import before part of the email failed still count.
+                        imported += result.getImported();
+                        summaries.addAll(result.getSummaries());
                         queuedForReview += result.getQueuedForReview();
                         steps.add("Sent to review queue: " + result.getDetail());
                         saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED",
@@ -349,7 +366,7 @@ public class GmailSyncService {
                         if (!queuedPdf) {
                             String summary = "No transaction found in body and no PDF attachment: " + subject;
                             steps.add(summary);
-                            saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED", summary, from, null);
+                            saveProcessed(userId, msgId, NO_TRANSACTION, "SKIPPED", summary, from, null);
                             logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                                 .gmailMessageId(msgId).sender(from).subject(subject)
                                 .status("SKIPPED").detail(summary).pipelineSteps(steps).build());
@@ -363,6 +380,14 @@ public class GmailSyncService {
                         }
                         skipped++;
                     }
+                }
+                } catch (Exception e) {
+                    log.error("Failed to process message {} for user {}: {}", msgId, userId, e.getMessage(), e);
+                    failed++;
+                    saveProcessed(userId, msgId, "ERROR", "FAILED", "Sync error: " + e.getMessage(), null, null);
+                    logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                        .gmailMessageId(msgId).status("FAILED").detail("Sync error: " + e.getMessage())
+                        .build());
                 }
             }
 

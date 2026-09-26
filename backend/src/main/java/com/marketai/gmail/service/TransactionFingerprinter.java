@@ -53,7 +53,20 @@ public class TransactionFingerprinter {
             sb.append('|').append(key(pe.getPaymentReference()));
             sb.append('|').append(key(pe.getPaymentStatus()));
         }
+        // Appended only when non-zero so every first occurrence keeps its existing hash.
+        if (pe.getOccurrenceInSource() > 0) {
+            sb.append("|#").append(pe.getOccurrenceInSource());
+        }
         return sha256(sb.toString());
+    }
+
+    /**
+     * A distinct fingerprint for a transaction whose content is identical to one already recorded
+     * but which is known to be separate (a different rail reference, or a person confirmed it).
+     * Stable for the same qualifier, so re-reading that document is still recognised.
+     */
+    public String qualified(String fingerprint, String qualifier) {
+        return sha256(fingerprint + "|" + qualifier);
     }
 
     private static String norm(BigDecimal v) {

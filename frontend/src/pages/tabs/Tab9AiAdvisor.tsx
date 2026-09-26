@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { AnalystPanel } from '../../components/market/AnalystPanel';
 import { RedeemedInvestments } from '../../components/wealth/RedeemedInvestments';
+import { AdvisorChat } from '../../components/advisor/AdvisorChat';
 import { StatTile } from '../../components/shared/StatTile';
 import { useMaskedText } from '../../components/shared/Amount';
 import { portfolioApi } from '../../api/portfolio';
@@ -310,6 +311,8 @@ export function Tab9AiAdvisor() {
           </div>
         </>
       )}
+
+      <AdvisorChat />
 
       {/* Mutual Fund Reinvestment Tracker */}
       <RedeemedInvestments />

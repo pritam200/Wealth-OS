@@ -5,6 +5,7 @@ import com.marketai.reminder.dto.ReminderResponse;
 import com.marketai.scheduled.entity.RecurringInvestment;
 import com.marketai.scheduled.repository.RecurringInvestmentRepository;
 import com.marketai.tracking.repository.FixedDepositRepository;
+import com.marketai.tracking.repository.InsurancePolicyRepository;
 import com.marketai.tracking.repository.LoanRepository;
 import com.marketai.tracking.repository.RecurringDepositRepository;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,7 @@ public class ReminderService {
     private final CreditCardRepository cardRepo;
     private final LoanRepository loanRepo;
     private final RecurringInvestmentRepository recurringInvestmentRepo;
+    private final InsurancePolicyRepository insuranceRepo;
 
     public List<ReminderResponse> getReminders(Long userId) {
         List<ReminderResponse> out = new ArrayList<>();
@@ -111,6 +113,24 @@ public class ReminderService {
                     .subtitle("₹" + strip(ri.getAmount()) + "/month")
                     .dueDate(next).daysUntil(d)
                     .amount(ri.getAmount()).severity(sev(d)).build());
+            }
+        });
+
+        // Insurance premiums (next due date within 15 days or already overdue) — same
+        // due-date-lookahead shape as the other blocks above, keyed off the stored
+        // nextPremiumDueDate rather than a derived schedule since premium dates are bank/
+        // insurer-set and don't follow a fixed cadence off the policy start date.
+        insuranceRepo.findByUserIdOrderByCreatedAtDesc(userId).forEach(p -> {
+            if (p.getNextPremiumDueDate() == null) return;
+            if (!"ACTIVE".equalsIgnoreCase(p.getStatus() == null ? "ACTIVE" : p.getStatus())) return;
+            long d = ChronoUnit.DAYS.between(today, p.getNextPremiumDueDate());
+            if (d <= 15) {
+                out.add(ReminderResponse.builder()
+                    .type("INSURANCE_PREMIUM")
+                    .title("Premium due — " + p.getInsurer())
+                    .subtitle(p.getPolicyType() + " · ₹" + strip(p.getPremiumAmount()) + " " + p.getPremiumFrequency())
+                    .dueDate(p.getNextPremiumDueDate()).daysUntil(d)
+                    .amount(p.getPremiumAmount()).severity(sev(d)).build());
             }
         });
 

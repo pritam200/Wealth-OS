@@ -1,7 +1,11 @@
 package com.marketai.tax.service;
 
 import com.marketai.income.repository.IncomeRepository;
+import com.marketai.redemption.entity.MfRedemption;
+import com.marketai.redemption.repository.MfRedemptionRepository;
+import com.marketai.tax.dto.CapitalGainsExportRow;
 import com.marketai.tax.dto.TaxResponse;
+import com.marketai.tax.lot.FyExemptionLedger;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -9,6 +13,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +28,7 @@ import java.util.Map;
 public class TaxService {
 
     private final IncomeRepository incomeRepo;
+    private final MfRedemptionRepository redemptionRepo;
 
     public TaxResponse summary(Long userId, Integer fyStartYearArg) {
         LocalDate today = LocalDate.now();
@@ -67,4 +73,49 @@ public class TaxService {
     }
 
     private String strip(BigDecimal v) { return v == null ? "0" : v.stripTrailingZeros().toPlainString(); }
+
+    /**
+     * Flat, per-disposal rows for an ITR-filing tool import (ClearTax/Quicko-style).
+     *
+     * <p>Only mutual fund redemptions carry a persisted LTCG/STCG split — see
+     * {@code MfRedemption}/{@code RedemptionService}. Plain equity sales are booked as an
+     * undifferentiated Income row with no acquisition date, so they cannot be represented here
+     * without inventing data; they're excluded rather than misclassified.
+     *
+     * <p>Exemption applied is recomputed row-by-row via {@link FyExemptionLedger}, in
+     * redemption order, mirroring the same running-balance rule {@code RedemptionService} uses
+     * when it books each redemption's tax — the ₹1,25,000 relief is a per-FY aggregate, not a
+     * fresh allowance per sale.
+     */
+    public List<CapitalGainsExportRow> capitalGainsExport(Long userId, Integer fyStartYearArg) {
+        LocalDate today = LocalDate.now();
+        int fyStart = fyStartYearArg != null ? fyStartYearArg : FyExemptionLedger.fyStartYearFor(today);
+        LocalDate from = LocalDate.of(fyStart, 4, 1);
+        LocalDate to = LocalDate.of(fyStart + 1, 3, 31);
+
+        List<MfRedemption> redemptions = redemptionRepo.findByUserIdOrderByRedemptionDateDesc(userId).stream()
+            .filter(r -> r.getRedemptionDate() != null
+                && !r.getRedemptionDate().isBefore(from) && !r.getRedemptionDate().isAfter(to))
+            .sorted(Comparator.comparing(MfRedemption::getRedemptionDate))
+            .toList();
+
+        FyExemptionLedger ledger = FyExemptionLedger.empty(from);
+        List<CapitalGainsExportRow> rows = new ArrayList<>();
+        for (MfRedemption r : redemptions) {
+            BigDecimal gain = r.getCapitalGain() == null ? BigDecimal.ZERO : r.getCapitalGain();
+            BigDecimal exemptionUsed = BigDecimal.ZERO;
+            if ("LTCG".equals(r.getGainType()) && gain.signum() > 0) {
+                exemptionUsed = gain.min(ledger.remainingExemption());
+                ledger = ledger.plus(gain);
+            }
+            LocalDate acquiredOn = r.getHoldingPeriodDays() != null
+                ? r.getRedemptionDate().minusDays(r.getHoldingPeriodDays()) : null;
+            rows.add(new CapitalGainsExportRow(
+                r.getSymbol(), r.getFundName(), null,
+                acquiredOn, r.getRedemptionDate(),
+                r.getUnitsRedeemed(), r.getInvestedValueAtRedemption(), r.getRedeemedAmount(),
+                r.getGainType(), gain, exemptionUsed));
+        }
+        return rows;
+    }
 }

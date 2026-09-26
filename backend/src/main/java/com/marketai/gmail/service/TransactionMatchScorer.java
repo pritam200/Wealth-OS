@@ -79,6 +79,16 @@ public class TransactionMatchScorer {
      *         {@link #REVIEW_THRESHOLD}. Callers below that bar should treat the candidate as NEW.
      */
     public Optional<ScoredMatch> findBestMatch(Long userId, ParsedEmail candidate) {
+        return findBestMatch(userId, candidate, null);
+    }
+
+    /**
+     * @param sourceMessageId the document the candidate came from. Records from that same
+     *                        document are never treated as a match: one statement does not report
+     *                        one transaction twice, so two similar lines in it (lunch at the same
+     *                        place on consecutive days) are two transactions, not corroboration.
+     */
+    public Optional<ScoredMatch> findBestMatch(Long userId, ParsedEmail candidate, String sourceMessageId) {
         if (!SCORED_TYPES.contains(candidate.getType()) || candidate.getAmount() == null) {
             return Optional.empty();
         }
@@ -89,6 +99,7 @@ public class TransactionMatchScorer {
         ImportedTransactionFingerprint best = null;
         double bestScore = 0.0;
         for (ImportedTransactionFingerprint existing : pool) {
+            if (sourceMessageId != null && sourceMessageId.equals(existing.getGmailMessageId())) continue;
             double s = score(candidate, existing);
             if (s > bestScore) {
                 bestScore = s;

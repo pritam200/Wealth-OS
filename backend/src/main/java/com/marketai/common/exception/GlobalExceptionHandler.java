@@ -114,6 +114,23 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.NOT_FOUND, "No such endpoint", request);
     }
 
+    /**
+     * Status and reason chosen deliberately by the service that threw it — a 404 "not found", a
+     * 409 "this bill has no saved card yet — add the card first". This used to fall through to
+     * {@link #handleGeneral} and reach the client as 500 "An unexpected error occurred", so every
+     * such explanation was discarded and the UI could only say that something broke. Reasons are
+     * hand-written in this codebase, so returning them is safe.
+     */
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<ErrorResponse> handleResponseStatus(
+            org.springframework.web.server.ResponseStatusException ex, WebRequest request) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        if (status == null) status = HttpStatus.INTERNAL_SERVER_ERROR;
+        if (status.is5xxServerError()) log.error("Request failed: {}", ex.getReason(), ex);
+        else log.debug("Request refused ({}): {}", status.value(), ex.getReason());
+        return buildError(status, ex.getReason() != null ? ex.getReason() : status.getReasonPhrase(), request);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGeneral(Exception ex, WebRequest request) {
         if (ex.getClass().getName().contains("ClientAbort")) {

@@ -30,12 +30,22 @@ public class GeminiLlmProvider implements LlmProvider {
     @Override
     public boolean isAvailable() { return apiKey != null && !apiKey.trim().isEmpty(); }
 
+    /** JSON mode — callers of {@link #complete} parse the result. */
     @Override
     public LlmCompletion complete(String systemInstruction, String userPrompt) {
+        return call(systemInstruction, userPrompt, true);
+    }
+
+    @Override
+    public LlmCompletion completeProse(String systemInstruction, String userPrompt) {
+        return call(systemInstruction, userPrompt, false);
+    }
+
+    private LlmCompletion call(String systemInstruction, String userPrompt, boolean jsonMode) {
         if (!isAvailable()) throw new LlmUnavailableException("Gemini API key not configured");
         long started = System.currentTimeMillis();
         try {
-            String text = geminiClient.generateContent(systemInstruction, userPrompt);
+            String text = geminiClient.generateContent(systemInstruction, userPrompt, jsonMode);
             if (text == null || text.trim().isEmpty()) {
                 throw new LlmUnavailableException("Gemini returned no content");
             }

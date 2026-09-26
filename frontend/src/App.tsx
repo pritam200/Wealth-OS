@@ -38,6 +38,8 @@ const DataSyncPage          = lazy(() => import('./pages/DataSyncPage').then(m =
 const SettingsPage          = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 const StockPage             = lazy(() => import('./pages/StockPage').then(m => ({ default: m.StockPage })));
 const ReviewQueue           = lazy(() => import('./components/ReviewQueue').then(m => ({ default: m.ReviewQueue })));
+const CashFlowForecastPage  = lazy(() => import('./pages/CashFlowForecastPage').then(m => ({ default: m.CashFlowForecastPage })));
+const SubscriptionsPage     = lazy(() => import('./pages/SubscriptionsPage').then(m => ({ default: m.SubscriptionsPage })));
 
 // Nav is grouped into broad workflow groups rather than by single-responsibility domain
 // (Stocks/Mutual Funds merged into one Investments group) per explicit user request, with
@@ -52,6 +54,7 @@ const NAV_SECTIONS: readonly NavSection[] = [
       { id: 7, label: 'Net Worth & Risk' },
       { id: 9, label: 'Daily Actions' },
       { id: 16, label: "Today's Investment Actions" },
+      { id: 20, label: 'Cash Flow Forecast' },
     ],
   },
   {
@@ -78,6 +81,7 @@ const NAV_SECTIONS: readonly NavSection[] = [
       { id: 10, label: 'Income & Expenses' },
       { id: 11, label: 'Cards & Rewards' },
       { id: 14, label: 'Dividends' },
+      { id: 21, label: 'Subscriptions' },
     ],
   },
   {
@@ -219,6 +223,8 @@ function TabContent({ tab, onNavigate }: { tab: number; onNavigate: (tabId: numb
     case 17: return <Tab17FinancialPlanner />;
     case 18: return <SettingsPage />;
     case 19: return <ReviewQueue />;
+    case 20: return <CashFlowForecastPage />;
+    case 21: return <SubscriptionsPage />;
     default: return <Tab1MarketTrends />;
   }
 }

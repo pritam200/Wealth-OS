@@ -133,8 +133,21 @@ public class RentService {
     @Transactional
     public void matchOrCreateFromGmail(Long userId, BigDecimal amount, LocalDate date,
                                         String payee, String sourceEmailId) {
-        if (sourceEmailId != null && rentRepository.existsByUserIdAndSourceEmailId(userId, sourceEmailId)) {
-            return; // already booked from this exact email — idempotent re-sync
+        matchOrCreateFromGmail(userId, amount, date, payee, sourceEmailId, 0);
+    }
+
+    /**
+     * @param occurrenceInSource 0 for the first line of this content in the email, 1 for an
+     *        identical second line, … A statement listing two rent payments (two flats, or two
+     *        months paid on one day) books both; a re-sync books neither again. The check used to
+     *        be "any rent row from this email", which dropped every payment after the first.
+     */
+    @Transactional
+    public void matchOrCreateFromGmail(Long userId, BigDecimal amount, LocalDate date,
+                                        String payee, String sourceEmailId, int occurrenceInSource) {
+        if (sourceEmailId != null && rentRepository.countByUserIdAndSourceEmailIdAndAmountAndPaidDate(
+                userId, sourceEmailId, amount, date) > occurrenceInSource) {
+            return; // this line is already booked from this exact email — idempotent re-sync
         }
         LocalDate month = firstOfMonth(date);
 
@@ -148,6 +161,11 @@ public class RentService {
         target.setSourceEmailId(sourceEmailId);
         if (payee != null && target.getPaidTo() == null) target.setPaidTo(payee);
         rentRepository.save(target);
+    }
+
+    /** Rent rows booked from this email for this amount and payment date. */
+    public long countFromEmail(Long userId, String sourceEmailId, BigDecimal amount, LocalDate paidDate) {
+        return rentRepository.countByUserIdAndSourceEmailIdAndAmountAndPaidDate(userId, sourceEmailId, amount, paidDate);
     }
 
     private boolean payeesMatch(String a, String b) {

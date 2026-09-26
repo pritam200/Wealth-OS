@@ -18,6 +18,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -75,6 +76,14 @@ class MfImportGuardTest {
             mock(TransactionMatchScorer.class), mock(com.marketai.rent.service.RentService.class));
     }
 
+    /** Rejections throw ImportRejectedException (nothing written, item routed to review) —
+     *  never a NullPointerException/ArithmeticException, and never a silent skip. */
+    private void assertRejected(ParsedEmail pe, String msgId) {
+        assertThatThrownBy(() -> importer.importParsedEmail(USER, new User(), pe, msgId, null))
+            .isInstanceOf(ImportRejectedException.class)
+            .hasMessageNotContaining("null pointer");
+    }
+
     private ParsedEmail mf(BigDecimal units, BigDecimal nav, BigDecimal amount) {
         return ParsedEmail.builder()
             .type(ParsedEmail.Type.MF_SIP)
@@ -86,18 +95,15 @@ class MfImportGuardTest {
     }
 
     @Test
-    @DisplayName("a zero NAV no longer divides by zero and aborts the import")
+    @DisplayName("a zero NAV no longer divides by zero — it is a reviewable rejection")
     void zeroNavDoesNotThrow() {
-        assertThatCode(() -> importer.importParsedEmail(
-            USER, new User(), mf(null, BigDecimal.ZERO, new BigDecimal("5000")), "msg-1", null))
-            .doesNotThrowAnyException();
+        assertRejected(mf(null, BigDecimal.ZERO, new BigDecimal("5000")), "msg-1");
     }
 
     @Test
     @DisplayName("a zero NAV is rejected rather than imported with invented units")
     void zeroNavIsRejected() throws Exception {
-        importer.importParsedEmail(
-            USER, new User(), mf(null, BigDecimal.ZERO, new BigDecimal("5000")), "msg-2", null);
+        assertRejected(mf(null, BigDecimal.ZERO, new BigDecimal("5000")), "msg-2");
 
         verify(portfolioService, never()).addHolding(any(), any(), any());
     }
@@ -105,8 +111,7 @@ class MfImportGuardTest {
     @Test
     @DisplayName("no units and no NAV is rejected, not booked as one unit")
     void underivableUnitsAreRejected() throws Exception {
-        importer.importParsedEmail(
-            USER, new User(), mf(null, null, new BigDecimal("5000")), "msg-3", null);
+        assertRejected(mf(null, null, new BigDecimal("5000")), "msg-3");
 
         verify(portfolioService, never()).addHolding(any(), any(), any());
     }
@@ -152,9 +157,7 @@ class MfImportGuardTest {
     @Test
     @DisplayName("a null quantity no longer throws NullPointerException on unboxing")
     void nullQuantityDoesNotThrow() {
-        assertThatCode(() -> importer.importParsedEmail(
-            USER, new User(), trade("RELIANCE", null, new BigDecimal("1400")), "t-1", null))
-            .doesNotThrowAnyException();
+        assertRejected(trade("RELIANCE", null, new BigDecimal("1400")), "t-1");
     }
 
     @Test
@@ -162,8 +165,7 @@ class MfImportGuardTest {
     void nullSymbolIsRejected() throws Exception {
         // String concatenation on a null symbol produced "null.NS" and created a holding under
         // it, which then took part in ledger replay like any real position.
-        importer.importParsedEmail(
-            USER, new User(), trade(null, 25, new BigDecimal("1400")), "t-2", null);
+        assertRejected(trade(null, 25, new BigDecimal("1400")), "t-2");
 
         verify(portfolioService, never()).addHolding(any(), any(), any());
     }
@@ -171,8 +173,7 @@ class MfImportGuardTest {
     @Test
     @DisplayName("a missing price is rejected rather than dereferenced")
     void missingPriceIsRejected() throws Exception {
-        importer.importParsedEmail(
-            USER, new User(), trade("RELIANCE", 25, null), "t-3", null);
+        assertRejected(trade("RELIANCE", 25, null), "t-3");
 
         verify(portfolioService, never()).addHolding(any(), any(), any());
     }
@@ -191,8 +192,8 @@ class MfImportGuardTest {
 
     @Test
     void zeroOrNegativeQuantityIsRejected() throws Exception {
-        importer.importParsedEmail(USER, new User(), trade("RELIANCE", 0, new BigDecimal("1400")), "t-5", null);
-        importer.importParsedEmail(USER, new User(), trade("RELIANCE", -5, new BigDecimal("1400")), "t-6", null);
+        assertRejected(trade("RELIANCE", 0, new BigDecimal("1400")), "t-5");
+        assertRejected(trade("RELIANCE", -5, new BigDecimal("1400")), "t-6");
 
         verify(portfolioService, never()).addHolding(any(), any(), any());
     }
@@ -208,8 +209,7 @@ class MfImportGuardTest {
         ParsedEmail typeless = ParsedEmail.builder()
             .amount(new BigDecimal("100")).sourceDescription("unclassifiable").build();
 
-        assertThatCode(() -> importer.importParsedEmail(USER, new User(), typeless, "n-1", null))
-            .doesNotThrowAnyException();
+        assertRejected(typeless, "n-1");
         verifyNoInteractions(portfolioService);
     }
 
@@ -224,9 +224,39 @@ class MfImportGuardTest {
             .principal(null).startDate(LocalDate.of(2026, 9, 1))
             .sourceDescription("FD advice").build();
 
-        importer.importParsedEmail(USER, new User(), fd, "fd-1", null);
+        assertRejected(fd, "fd-1");
 
         verify(trackingService, never()).addFd(any(), any(), any());
+    }
+
+    private ParsedEmail fd(BigDecimal rate, LocalDate start) {
+        return ParsedEmail.builder()
+            .type(ParsedEmail.Type.FD_OPEN).bank("HDFC Bank")
+            .principal(new BigDecimal("100000")).rate(rate).startDate(start)
+            .maturityDate(LocalDate.of(2027, 9, 1))
+            .sourceDescription("FD advice").build();
+    }
+
+    @Test
+    @DisplayName("an FD with no stated rate or start date is rejected — never booked at 7% / today")
+    void fdIsNeverBookedOnDefaults() {
+        assertRejected(fd(null, LocalDate.of(2026, 9, 1)), "fd-2");
+        assertRejected(fd(new BigDecimal("7.25"), null), "fd-3");
+        verify(trackingService, never()).addFd(any(), any(), any());
+    }
+
+    @Test
+    void aCompleteFdIsBookedWithItsOwnFigures() throws Exception {
+        when(trackingService.addFd(any(), any(), any()))
+            .thenReturn(com.marketai.tracking.dto.FdResponse.builder().id(5L).build());
+
+        importer.importParsedEmail(USER, new User(), fd(new BigDecimal("7.25"), LocalDate.of(2026, 9, 1)), "fd-4", null);
+
+        ArgumentCaptor<com.marketai.tracking.dto.FdRequest> req =
+            ArgumentCaptor.forClass(com.marketai.tracking.dto.FdRequest.class);
+        verify(trackingService).addFd(eq(USER), req.capture(), any());
+        assertThat(req.getValue().getRate()).isEqualByComparingTo("7.25");
+        assertThat(req.getValue().getStartDate()).isEqualTo(LocalDate.of(2026, 9, 1));
     }
 
     @Test
@@ -236,16 +266,14 @@ class MfImportGuardTest {
             .monthlyAmount(null).startDate(LocalDate.of(2026, 9, 1))
             .sourceDescription("RD advice").build();
 
-        importer.importParsedEmail(USER, new User(), rd, "rd-1", null);
+        assertRejected(rd, "rd-1");
 
         verify(trackingService, never()).addRd(any(), any(), any());
     }
 
     @Test
     void negativeUnitsAreRejected() throws Exception {
-        importer.importParsedEmail(
-            USER, new User(), mf(new BigDecimal("-5"), new BigDecimal("50"), new BigDecimal("5000")),
-            "msg-6", null);
+        assertRejected(mf(new BigDecimal("-5"), new BigDecimal("50"), new BigDecimal("5000")), "msg-6");
 
         verify(portfolioService, never()).addHolding(any(), any(), any());
     }
@@ -286,8 +314,7 @@ class MfImportGuardTest {
     void redemptionWithNoMatchingHoldingIsRefused() throws Exception {
         when(portfolioService.findHoldingId(eq(1L), anyString())).thenReturn(null);
 
-        importer.importParsedEmail(USER, new User(),
-            redemption(new BigDecimal("500"), new BigDecimal("42.50")), "redeem-2", null);
+        assertRejected(redemption(new BigDecimal("500"), new BigDecimal("42.50")), "redeem-2");
 
         // Neither side: no invented purchase, and no sale against a position we cannot identify
         // (there would be no cost basis to compute a gain from).

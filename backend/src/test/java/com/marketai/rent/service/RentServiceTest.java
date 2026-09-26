@@ -110,11 +110,27 @@ class RentServiceTest {
 
     @Test
     void matchOrCreateFromGmailIsIdempotentForTheSameEmail() {
-        when(rentRepository.existsByUserIdAndSourceEmailId(1L, "msg-1")).thenReturn(true);
+        LocalDate paid = LocalDate.of(2026, 9, 1);
+        when(rentRepository.countByUserIdAndSourceEmailIdAndAmountAndPaidDate(1L, "msg-1", new BigDecimal("31000"), paid))
+                .thenReturn(1L);
 
-        service.matchOrCreateFromGmail(1L, new BigDecimal("31000"), LocalDate.now(), "Landlord", "msg-1");
+        service.matchOrCreateFromGmail(1L, new BigDecimal("31000"), paid, "Landlord", "msg-1");
 
         verify(rentRepository, never()).save(any());
+    }
+
+    @Test
+    void aSecondRentLineInTheSameEmailIsStillBooked() {
+        // Two flats paid on one day from one statement: the second line (occurrence 1) is booked
+        // even though the email already produced one rent row for that amount and date.
+        LocalDate paid = LocalDate.of(2026, 9, 1);
+        when(rentRepository.countByUserIdAndSourceEmailIdAndAmountAndPaidDate(1L, "msg-3", new BigDecimal("31000"), paid))
+                .thenReturn(1L);
+        when(rentRepository.findByUserIdAndMonthAndAmountAndPaidDateIsNull(any(), any(), any())).thenReturn(List.of());
+
+        service.matchOrCreateFromGmail(1L, new BigDecimal("31000"), paid, "Landlord B", "msg-3", 1);
+
+        verify(rentRepository).save(any());
     }
 
     @Test

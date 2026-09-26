@@ -3,11 +3,12 @@ spring:
     active: ${SPRING_PROFILES_ACTIVE:dev}
 
 ---
+# Base configuration, shared by every profile. This used to be activated only for `dev`, which
+# left the prod profile without the recommendation weights (startup fails their sum check),
+# Gmail OAuth, mail, the PDF-password key and sync settings. Local defaults below are
+# overridden by environment variables; the prod document at the end of the file only tightens
+# what must differ in a hosted deployment.
 spring:
-  config:
-    activate:
-      on-profile: dev
-
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketai_db}
     username: ${DB_USER:marketai}
@@ -114,6 +115,10 @@ app:
   llm:
     provider: ${LLM_PROVIDER:ollama}
     fallback-enabled: ${LLM_FALLBACK_ENABLED:true}
+    # Email reading (classification + transaction extraction) runs on its own provider so it can
+    # use Gemini while the other AI features stay local. Needs GEMINI_API_KEY; without one, or if
+    # Gemini is failing, it falls back to Ollama when fallback-enabled is true.
+    email-provider: ${LLM_EMAIL_PROVIDER:gemini}
     ollama:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       # qwen2.5:7b is the throughput choice — a full sync classifies hundreds of emails and
@@ -172,6 +177,12 @@ app:
   # Registration email-OTP verification (EmailOtpService). The code itself is never stored
   # in plaintext — hashed with the same BCrypt encoder as passwords — so a DB read can't
   # recover it.
+  # Invite-only sign-up: comma-separated emails allowed to register (you, parents, family).
+  # Empty = anyone may register here in dev; the prod profile fails closed instead.
+  signup:
+    allowed-emails: ${SIGNUP_ALLOWED_EMAILS:}
+    open-when-empty: ${SIGNUP_OPEN_WHEN_EMPTY:true}
+
   otp:
     from: ${MAIL_FROM:MarketAI <no-reply@marketai.local>}
     expiry-minutes: 10
@@ -206,72 +217,60 @@ springdoc:
     operationsSorter: method
 
 ---
+# Hosted deployment (deploy/docker-compose.prod.yml). Only what must differ from the base.
 spring:
   config:
     activate:
       on-profile: prod
 
+  # No local fallbacks: a hosted copy must be told where its database is and what the password
+  # is, never silently use the development defaults.
   datasource:
-    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME}
     username: ${DB_USER}
     password: ${DB_PASSWORD}
-    hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
 
   jpa:
     hibernate:
-      ddl-auto: validate
-    show-sql: false
+      # `update`, the same as local: there is no migration tool in this project, and schema
+      # changes have always been applied by Hibernate. `validate` against database/schema.sql
+      # refused to start, because that file predates most of the current entities. Take a
+      # backup (deploy/backup.sh) before deploying a version that changes entities.
+      ddl-auto: update
 
   data:
     redis:
-      host: ${REDIS_HOST}
-      port: ${REDIS_PORT}
       password: ${REDIS_PASSWORD}
-
-server:
-  port: 8080
 
 app:
   jwt:
+    # Required: a generated-at-startup secret would be lost on every container rebuild,
+    # signing everyone out.
     secret: ${JWT_SECRET}
-    expiration-ms: 86400000
-    refresh-expiration-ms: 604800000
 
-  # Empty default on purpose: Gemini is an OPTIONAL provider, so prod must not refuse to
-  # start just because no hosted-AI key was supplied. It previously used ${GEMINI_API_KEY}
-  # with no default, which made a missing optional key a fatal startup failure.
-  gemini:
-    api-key: ${GEMINI_API_KEY:}
-    base-url: https://generativelanguage.googleapis.com/v1beta
-    model: ${GEMINI_MODEL:gemini-3.6-flash}
+  security:
+    # Required for the same reason — losing it makes every saved statement password unreadable.
+    pdf-password-key: ${PDF_PASSWORD_ENC_KEY}
 
-  # Mirrors the dev block. Prod previously declared no app.llm at all and silently relied on
-  # the @Value defaults compiled into the Java, so the provider could not be configured here.
-  llm:
-    provider: ${LLM_PROVIDER:ollama}
-    fallback-enabled: ${LLM_FALLBACK_ENABLED:true}
-    ollama:
-      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
-      model: ${OLLAMA_MODEL:qwen2.5:7b}
-      timeout-seconds: ${OLLAMA_TIMEOUT_SECONDS:120}
-      temperature: 0.0
-    min-confidence: ${LLM_MIN_CONFIDENCE:0.85}
+  # A hosted copy must never be open to anyone on the internet: with no SIGNUP_ALLOWED_EMAILS
+  # set, nobody can register.
+  signup:
+    open-when-empty: false
 
-  yahoo-finance:
-    base-url: https://query1.finance.yahoo.com
-    timeout-seconds: 10
-
-  news:
-    api-key: ${NEWS_API_KEY}
-    base-url: https://newsapi.org/v2
-
+  # The frontend is served from the same origin as the API (nginx proxies /api), so browsers
+  # never make a cross-origin call; this only matters for tools pointed at the API directly.
   cors:
-    allowed-origins:
-      - ${FRONTEND_URL}
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:${FRONTEND_URL}}
 
 logging:
   level:
     com.marketai: INFO
+    org.springframework.security: WARN
     root: WARN
+
+# The API explorer lists every endpoint; not something to publish on the open internet.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

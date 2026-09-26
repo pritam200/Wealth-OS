@@ -74,6 +74,38 @@ public class LlmProviderRouter {
         return p.completeProse(systemInstruction, userPrompt);
     }
 
+    /**
+     * JSON completion from a specific provider for one task — e.g. email reading on Gemini while
+     * everything else stays on the default. Blank {@code preferred} means the configured default.
+     *
+     * <p>If the preferred provider is unusable or the call itself fails (a rate limit that outlived
+     * its retries, an outage), the other provider is tried when fallback is enabled — so one bad
+     * minute on the hosted API doesn't park every email in the backfill.
+     *
+     * @throws LlmUnavailableException when no provider could answer.
+     */
+    public LlmCompletion completeWith(String preferred, String systemInstruction, String userPrompt) {
+        if ("none".equalsIgnoreCase(configured)) throw new LlmUnavailableException(NONE_AVAILABLE);
+        String choice = preferred == null || preferred.isBlank() ? configured : preferred;
+        LlmProvider primary = "gemini".equalsIgnoreCase(choice) ? gemini : ollama;
+        LlmProvider secondary = primary == ollama ? gemini : ollama;
+
+        LlmUnavailableException primaryFailure = null;
+        if (primary.isAvailable()) {
+            try {
+                return primary.complete(systemInstruction, userPrompt);
+            } catch (LlmUnavailableException e) {
+                primaryFailure = e;
+            }
+        }
+        if (fallbackEnabled && secondary.isAvailable()) {
+            log.info("LLM provider {} unavailable ({}) — using {}", primary.describe(),
+                primaryFailure != null ? primaryFailure.getMessage() : "not configured", secondary.describe());
+            return secondary.complete(systemInstruction, userPrompt);
+        }
+        throw primaryFailure != null ? primaryFailure : new LlmUnavailableException(NONE_AVAILABLE);
+    }
+
     /** Surfaced to users when an AI feature is asked for but nothing can serve it. */
     public static final String NONE_AVAILABLE =
         "No AI model is available. Start Ollama locally (app.llm.provider=ollama, default "

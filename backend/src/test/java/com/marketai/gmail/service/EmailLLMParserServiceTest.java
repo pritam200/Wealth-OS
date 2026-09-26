@@ -84,7 +84,7 @@ class EmailLLMParserServiceTest {
             "\"amount_inr\":5000,\"nav\":100.50,\"units\":49.75," +
             "\"evidence\":\"Amount Rs 5000 invested in HDFC Small Cap Fund\"}],\"confidence\":0.95}";
 
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(json));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(json));
         when(mfSchemeLinkService.resolveSchemeCodeByFundName("HDFC Small Cap Fund - Direct Plan - Growth"))
             .thenReturn(Optional.of("HDFC001"));
 
@@ -101,7 +101,7 @@ class EmailLLMParserServiceTest {
     @Test
     @DisplayName("malformed/partial JSON is rejected by LlmJsonParser and queues the whole email for review")
     void malformedJsonRoutesToReview() throws Exception {
-        when(llm.complete(anyString(), anyString())).thenReturn(completion("this is not json at all"));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion("this is not json at all"));
 
         EmailLLMParserService.Result result = service.process(USER_ID, user,
             "noreply@hdfcfund.com", "Purchase confirmation",
@@ -109,7 +109,9 @@ class EmailLLMParserServiceTest {
 
         assertThat(result.getOutcome()).isEqualTo(EmailLLMParserService.Outcome.REVIEW);
         verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
-        verify(emailReviewService).enqueue(eq(USER_ID), eq(MSG_ID), anyString(), anyString(), any());
+        verify(emailReviewService).enqueue(eq(USER_ID), eq(MSG_ID),
+            eq(com.marketai.ai.review.service.EmailReviewService.WHOLE_EMAIL_ITEM_INDEX), anyString(), anyString(), any());
+        assertThat(result.isIncomplete()).as("an unread email must be retried, not marked done").isTrue();
     }
 
     @Test
@@ -121,7 +123,7 @@ class EmailLLMParserServiceTest {
             "\"transaction_date\":\"2026-01-15\",\"amount_inr\":5000," +
             "\"evidence\":\"This exact sentence does not appear anywhere in the source text\"}]," +
             "\"confidence\":0.95}";
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(json));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(json));
 
         EmailLLMParserService.Result result = service.process(USER_ID, user,
             "noreply@hdfcfund.com", "SIP confirmation", sourceText, MSG_ID, null);
@@ -143,7 +145,7 @@ class EmailLLMParserServiceTest {
             "\"scheme_name\":\"HDFC Small Cap Fund - Direct Plan - Growth\"," +
             "\"transaction_date\":\"2026-01-15\",\"amount_inr\":5000,\"nav\":100.50,\"units\":49.75," +
             "\"evidence\":\"Amount Rs 5000 invested in HDFC Small Cap Fund\"}],\"confidence\":0.40}";
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(json));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(json));
         when(mfSchemeLinkService.resolveSchemeCodeByFundName(anyString())).thenReturn(Optional.of("HDFC001"));
 
         EmailLLMParserService.Result result = service.process(USER_ID, user,
@@ -157,7 +159,7 @@ class EmailLLMParserServiceTest {
     @Test
     @DisplayName("an unavailable LLM routes to review rather than crashing the sync")
     void llmUnavailableRoutesToReviewNotCrash() throws Exception {
-        when(llm.complete(anyString(), anyString())).thenThrow(new LlmUnavailableException("no model"));
+        when(llm.completeWith(any(), anyString(), anyString())).thenThrow(new LlmUnavailableException("no model"));
 
         EmailLLMParserService.Result result = service.process(USER_ID, user,
             "noreply@hdfcfund.com", "Purchase confirmation",
@@ -165,7 +167,9 @@ class EmailLLMParserServiceTest {
 
         assertThat(result.getOutcome()).isEqualTo(EmailLLMParserService.Outcome.UNAVAILABLE);
         verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
-        verify(emailReviewService).enqueue(eq(USER_ID), eq(MSG_ID), anyString(), anyString(), any());
+        verify(emailReviewService).enqueue(eq(USER_ID), eq(MSG_ID),
+            eq(com.marketai.ai.review.service.EmailReviewService.WHOLE_EMAIL_ITEM_INDEX), anyString(), anyString(), any());
+        assertThat(result.isIncomplete()).as("an unread email must be retried, not marked done").isTrue();
     }
 
     @Test
@@ -179,7 +183,7 @@ class EmailLLMParserServiceTest {
         String json = "{\"transactions\":[{\"instrument_type\":\"BANK\",\"transaction_type\":\"DEBIT\"," +
             "\"transaction_date\":\"2026-01-15\",\"amount_inr\":2500,\"merchant\":\"Some Shop\"," +
             "\"evidence\":\"debited Rs 2500 towards UPI payment\"}],\"confidence\":0.95}";
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(json));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(json));
 
         EmailLLMParserService.Classification claim =
             new EmailLLMParserService.Classification(true, "ZERODHA", null);
@@ -205,14 +209,16 @@ class EmailLLMParserServiceTest {
                 "\"transaction_date\":\"2026-01-12\",\"amount_inr\":450," +
                 "\"evidence\":\"Starbucks Rs 450 on 2026-01-12\"}" +
             "],\"confidence\":0.95}";
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(json));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(json));
 
         EmailLLMParserService.Result result = service.process(USER_ID, user,
             "alerts@hdfcbank.com", "Credit Card Statement", sourceText, MSG_ID, null);
 
         assertThat(result.getOutcome()).isEqualTo(EmailLLMParserService.Outcome.IMPORTED);
         assertThat(result.getImported()).isEqualTo(2);
-        verify(importer, times(2)).importParsedEmail(eq(USER_ID), eq(user), any(), eq(MSG_ID), eq(sourceText));
+        // A statement's text is not passed for reference harvesting: one UTR in it would belong to
+        // one line, and stamping it on every line made lines 2+ look like conflicting restatements.
+        verify(importer, times(2)).importParsedEmail(eq(USER_ID), eq(user), any(), eq(MSG_ID), isNull());
     }
 
     @Test
@@ -222,7 +228,7 @@ class EmailLLMParserServiceTest {
         String json = "{\"transactions\":[{\"instrument_type\":\"BANK\",\"transaction_type\":\"DEBIT\"," +
             "\"merchant\":\"CRED\",\"transaction_date\":\"2026-01-15\",\"amount_inr\":5000," +
             "\"evidence\":\"Rs 5000 paid to CRED towards your credit card bill\"}],\"confidence\":0.95}";
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(json));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(json));
 
         EmailLLMParserService.Result result = service.process(USER_ID, user,
             "alerts@hdfcbank.com", "Payment confirmation", sourceText, MSG_ID, null);
@@ -245,7 +251,7 @@ class EmailLLMParserServiceTest {
             "\"scheme_name\":\"HDFC Small Cap Fund - Direct Plan - Growth\"," +
             "\"as_of_date\":\"2026-01-31\",\"units\":1234.5670," +
             "\"evidence\":\"Closing Balance: 1234.5670 units as of 31-Jan-2026\"}],\"confidence\":0.95}";
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(json));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(json));
         when(mfSchemeLinkService.resolveSchemeCodeByFundName("HDFC Small Cap Fund - Direct Plan - Growth"))
             .thenReturn(Optional.of("HDFC001"));
 
@@ -270,7 +276,7 @@ class EmailLLMParserServiceTest {
             "\"as_of_date\":\"2026-01-31\",\"units\":1234.5670," +
             "\"evidence\":\"This exact sentence does not appear anywhere in the source text\"}]," +
             "\"confidence\":0.95}";
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(json));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(json));
 
         service.process(USER_ID, user, "noreply@camsonline.com", "CAS Statement", sourceText, MSG_ID, null);
 
@@ -286,7 +292,7 @@ class EmailLLMParserServiceTest {
             "\"scheme_name\":\"HDFC Small Cap Fund - Direct Plan - Growth\"," +
             "\"as_of_date\":\"2026-01-31\",\"units\":1234.5670," +
             "\"evidence\":\"Closing Balance: 1234.5670 units as of 31-Jan-2026\"}],\"confidence\":0.95}";
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(json));
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(json));
 
         // Display name claims CAMS but the sending domain isn't a CAMS domain — impersonation.
         service.process(USER_ID, user, "\"CAMS\" <noreply@attacker.example>", "CAS Statement",
@@ -312,7 +318,7 @@ class EmailLLMParserServiceTest {
     @Test
     @DisplayName("classify() returns a no-op classification when the LLM is unavailable")
     void classifyDegradesGracefullyWhenUnavailable() throws Exception {
-        when(llm.complete(anyString(), anyString())).thenThrow(new LlmUnavailableException("down"));
+        when(llm.completeWith(any(), anyString(), anyString())).thenThrow(new LlmUnavailableException("down"));
 
         EmailLLMParserService.Classification result = service.classify(
             "noreply@hdfcfund.com", "SIP confirmation", "Your SIP of Rs 5000 has been debited.");
@@ -325,7 +331,7 @@ class EmailLLMParserServiceTest {
     @Test
     @DisplayName("classify() reads the password hint type from a well-formed response")
     void classifyReadsPasswordHint() throws Exception {
-        when(llm.complete(anyString(), anyString())).thenReturn(completion(
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion(
             "{\"is_financial_statement\":true,\"statement_provider\":\"CAMS\",\"password_hint_type\":\"PAN\"}"));
 
         EmailLLMParserService.Classification result = service.classify(
@@ -334,5 +340,44 @@ class EmailLLMParserServiceTest {
         assertThat(result.financialStatement()).isTrue();
         assertThat(result.statementProvider()).isEqualTo("CAMS");
         assertThat(result.passwordHintType()).isEqualTo(PasswordStrategy.PAN_UPPERCASE);
+    }
+
+    @Test
+    @DisplayName("a long source is read in chunks — lines past the old 8,000-character cut are no longer lost")
+    void longSourceIsReadInChunks() throws Exception {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 400; i++) sb.append("10-09-2026 UPI/PAYMENT/REF").append(i).append(" Rs 100.00\n");
+        String sourceText = sb.toString();
+        assertThat(sourceText.length()).isGreaterThan(8000);
+        when(llm.completeWith(any(), anyString(), anyString())).thenReturn(completion("{\"transactions\":[],\"confidence\":0.9}"));
+
+        service.process(USER_ID, user, "alerts@hdfcbank.net", "Account statement", sourceText, MSG_ID, null);
+
+        org.mockito.ArgumentCaptor<String> prompts = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(llm, atLeast(2)).completeWith(any(), anyString(), prompts.capture());
+        // Every line reached the model exactly once across the chunks.
+        String all = String.join("\n", prompts.getAllValues());
+        for (int i = 0; i < 400; i++) {
+            assertThat(all).contains("REF" + i + " ");
+        }
+        assertThat(all.split("REF399 ", -1)).hasSize(2);
+    }
+
+    @Test
+    void chunksNeverOverlapOrDropText() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 1000; i++) sb.append("line ").append(i).append(i % 7 == 0 ? "\n" : " | ");
+        String text = sb.toString();
+        java.util.List<String> chunks = EmailLLMParserService.chunk(text, 500);
+        assertThat(String.join("", chunks)).isEqualTo(text);
+        assertThat(chunks).allSatisfy(c -> assertThat(c.length()).isLessThanOrEqualTo(500));
+    }
+
+    @Test
+    void attachmentReviewItemsNeverCollideWithTheBodys() {
+        int base = EmailLLMParserService.attachmentItemIndexBase("statement.pdf");
+        assertThat(base).isGreaterThanOrEqualTo(1_000_000);
+        assertThat(base - 1).isNotEqualTo(com.marketai.ai.review.service.EmailReviewService.WHOLE_EMAIL_ITEM_INDEX);
+        assertThat(EmailLLMParserService.attachmentItemIndexBase("statement.pdf")).isEqualTo(base);
     }
 }

@@ -44,6 +44,7 @@ public class EmailOtpService {
     // relay must give a clear "mail isn't set up" error at send time, not stop the whole
     // app from starting.
     private final ObjectProvider<JavaMailSender> mailSenderProvider;
+    private final SignupAllowlist signupAllowlist;
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -65,6 +66,9 @@ public class EmailOtpService {
     @Transactional
     public void requestOtp(String rawEmail) {
         String email = normalize(rawEmail);
+        // Checked before anything is stored or sent, so an uninvited address can't use this
+        // endpoint to make the server email arbitrary people.
+        signupAllowlist.check(email);
 
         if (userRepository.existsByEmail(email)) {
             throw new IllegalArgumentException("An account with this email already exists. Try signing in instead.");

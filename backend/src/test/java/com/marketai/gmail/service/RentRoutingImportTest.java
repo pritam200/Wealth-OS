@@ -55,7 +55,7 @@ class RentRoutingImportTest {
             .thenReturn(Optional.empty());
         when(fingerprintRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(expenseRepo.save(any())).thenAnswer(i -> i.getArgument(0));
-        when(matchScorer.findBestMatch(any(), any())).thenReturn(Optional.empty());
+        when(matchScorer.findBestMatch(any(), any(), any())).thenReturn(Optional.empty());
     }
 
     private User user() {
@@ -77,7 +77,7 @@ class RentRoutingImportTest {
         importer.importParsedEmail(USER, user(), pe, "msg-rent");
 
         verify(rentService).matchOrCreateFromGmail(USER, new BigDecimal("31000.00"),
-            LocalDate.of(2026, 9, 1), "Landlord", "msg-rent");
+            LocalDate.of(2026, 9, 1), "Landlord", "msg-rent", 0);
         verify(expenseRepo, never()).save(any());
     }
 
@@ -96,6 +96,8 @@ class RentRoutingImportTest {
         importer.importParsedEmail(USER, user(), pe, "msg-amazon");
 
         verify(expenseRepo).save(any());
-        verifyNoInteractions(rentService);
+        // Only consulted for the same-email line count; never asked to book anything.
+        verify(rentService, never()).matchOrCreateFromGmail(any(), any(), any(), any(), any(), anyInt());
+        verify(rentService, never()).matchOrCreateFromGmail(any(), any(), any(), any(), any());
     }
 }
