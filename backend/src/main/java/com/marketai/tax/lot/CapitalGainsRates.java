@@ -18,6 +18,19 @@ public final class CapitalGainsRates {
     /** Holding period above which equity gains are long-term. */
     public static final int LONG_TERM_MONTHS = 12;
 
+    /** Held for more than {@link #LONG_TERM_MONTHS} months, counting from the purchase date. */
+    public static boolean isLongTerm(LocalDate acquiredOn, LocalDate disposalDate) {
+        if (acquiredOn == null || disposalDate == null) return false;
+        return disposalDate.isAfter(acquiredOn.plusMonths(LONG_TERM_MONTHS));
+    }
+
+    /** Days until a unit bought on {@code acquiredOn} turns long-term; 0 once it has. */
+    public static long daysToLongTerm(LocalDate acquiredOn, LocalDate today) {
+        if (acquiredOn == null || today == null) return 0;
+        long d = java.time.temporal.ChronoUnit.DAYS.between(today, acquiredOn.plusMonths(LONG_TERM_MONTHS).plusDays(1));
+        return Math.max(0, d);
+    }
+
     /** Short-term capital gains on equity — raised from 15% by the Finance (No.2) Act 2024. */
     public static final BigDecimal STCG_RATE = new BigDecimal("0.20");
 

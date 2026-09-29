@@ -43,12 +43,24 @@ public class ParsedEmailImporter {
     private final TransactionMatchScorer matchScorer;
     private final com.marketai.rent.service.RentService rentService;
 
-    public void importParsedEmail(Long userId, User user, ParsedEmail pe) throws Exception {
-        importParsedEmail(userId, user, pe, null);
+    /** What happened to one extracted item. Anything that can't be booked safely throws
+     *  {@link ImportRejectedException} instead, so it reaches the review queue. */
+    public enum ImportOutcome {
+        /** A new record was written. */
+        IMPORTED,
+        /** Already recorded — the same email re-read, or the same transaction from another source. */
+        DUPLICATE,
+        /** Carries the same payment reference as a recorded transaction but different details;
+         *  the original was kept and the discrepancy flagged on it. */
+        CONFLICT
     }
 
-    public void importParsedEmail(Long userId, User user, ParsedEmail pe, String gmailMessageId) throws Exception {
-        importParsedEmail(userId, user, pe, gmailMessageId, null);
+    public ImportOutcome importParsedEmail(Long userId, User user, ParsedEmail pe) throws Exception {
+        return importParsedEmail(userId, user, pe, null);
+    }
+
+    public ImportOutcome importParsedEmail(Long userId, User user, ParsedEmail pe, String gmailMessageId) throws Exception {
+        return importParsedEmail(userId, user, pe, gmailMessageId, null);
     }
 
     /**
@@ -76,8 +88,8 @@ public class ParsedEmailImporter {
      */
     @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class,
         propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
-    public void importParsedEmail(Long userId, User user, ParsedEmail pe, String gmailMessageId,
-                                  String documentText) throws Exception {
+    public ImportOutcome importParsedEmail(Long userId, User user, ParsedEmail pe, String gmailMessageId,
+                                           String documentText) throws Exception {
 
         // --- Tier 1: a rail-issued reference is decisive.
         //
@@ -118,12 +130,12 @@ public class ParsedEmailImporter {
                     fingerprintRepo.save(prior);
                     log.warn("Conflict on {} {} for user {} — same reference, different content",
                         ref.type(), ref.value(), userId);
-                    return;
+                    return ImportOutcome.CONFLICT;
                 }
 
                 log.debug("Skipping transaction already imported under {} {}: {}",
                     ref.type(), ref.value(), pe.getSourceDescription());
-                return;
+                return ImportOutcome.DUPLICATE;
             }
         }
 
@@ -138,7 +150,10 @@ public class ParsedEmailImporter {
             boolean sameDocument = gmailMessageId != null && gmailMessageId.equals(prior.getGmailMessageId());
             boolean provablyDistinct = ref != null && prior.getExternalRef() != null
                 && !ref.value().equals(prior.getExternalRef());
-            boolean spendOrCredit = TransactionMatchScorer.SCORED_TYPES.contains(pe.getType());
+            // Cash movements that can legitimately repeat (two equal refunds, two equal transfers,
+            // equal interest from two deposits) go to review, never silently dropped.
+            boolean spendOrCredit = TransactionMatchScorer.SCORED_TYPES.contains(pe.getType())
+                || REPEATABLE_CASH_TYPES.contains(pe.getType());
 
             if (pe.isUserConfirmed() && sameDocument) {
                 // A person accepted an item this same email has already booked — say so rather
@@ -150,7 +165,7 @@ public class ParsedEmailImporter {
                 // Re-reading the same document, or an identical trade/fund/deposit record (a
                 // contract note and its confirmation email) — the same transaction.
                 log.debug("Skipping already-imported transaction (fingerprint {}): {}", fp, pe.getSourceDescription());
-                return;
+                return ImportOutcome.DUPLICATE;
             }
             if (!provablyDistinct && !pe.isUserConfirmed()) {
                 // Identical spending/credit from a different email: a resent alert, or a second
@@ -165,7 +180,7 @@ public class ParsedEmailImporter {
             fp = fingerprinter.qualified(fp, provablyDistinct ? "ref:" + ref.value() : "msg:" + gmailMessageId);
             if (fingerprintRepo.existsByUserIdAndFingerprint(userId, fp)) {
                 log.debug("Skipping already-imported transaction (fingerprint {}): {}", fp, pe.getSourceDescription());
-                return;
+                return ImportOutcome.DUPLICATE;
             }
             if (provablyDistinct) {
                 // Two rail references are proof, so the similarity holds below (which exist for the
@@ -174,6 +189,17 @@ public class ParsedEmailImporter {
             }
         }
         final boolean establishedSeparate = pe.isUserConfirmed() && !contentFingerprint.equals(fp);
+
+        // --- A different model or prompt re-reading an email that already booked lines. An
+        // identical line stopped at tier 2 above; one that differs may be a line the earlier read
+        // missed, or the same line read differently (₹1,200 read as ₹1,250) — nothing tells them
+        // apart, and booking it could double-count. A person compares it instead; what the
+        // earlier read booked is never changed.
+        if (gmailMessageId != null && !pe.isUserConfirmed() && pe.getExtractionVersion() != null && pe.getReadStartedAt() != null
+                && fingerprintRepo.existsReadByOtherVersion(userId, gmailMessageId, pe.getExtractionVersion(), pe.getReadStartedAt())) {
+            throw new ImportRejectedException("This email was read before by a different model or prompt, and this "
+                + "line differs from what that read recorded. Check it against the existing records before accepting.");
+        }
 
         // --- Tier 3: weighted multi-factor match. Tiers 1/2 above only ever catch byte-for-byte
         // identical evidence; this catches the far more common case of the SAME transaction
@@ -210,7 +236,7 @@ public class ParsedEmailImporter {
                     com.marketai.gmail.entity.DuplicateState.MATCHED_TO_EXISTING, matchedFingerprintId, matchConfidence));
                 log.info("MATCHED_TO_EXISTING (confidence {}): {} scored against fingerprint {} — not booked as a new transaction",
                     String.format("%.2f", match.getConfidence()), pe.getSourceDescription(), matchedFingerprintId);
-                return;
+                return ImportOutcome.DUPLICATE;
             }
 
             // Below the confirm bar but above the review bar: per spec, an uncertain transaction
@@ -223,11 +249,20 @@ public class ParsedEmailImporter {
                 String.format("%.2f", match.getConfidence()), pe.getSourceDescription(), matchedFingerprintId);
         }
 
-        routeImport(userId, user, pe, gmailMessageId);
+        com.marketai.common.ledger.Provenance provenance = com.marketai.common.ledger.Provenance.builder()
+            .sourceEmailId(gmailMessageId).sourceFingerprint(fp)
+            .extractionMethod(pe.getExtractionMethod()).extractionConfidence(pe.getExtractionConfidence())
+            .sourceReference(truncate(pe.getTradeReference(), 60))
+            .linkGroup(linkGroup(pe, gmailMessageId))
+            .build();
+        boolean booked = routeImport(userId, user, pe, gmailMessageId, provenance);
 
-        // Recorded only after a successful import, so a failed attempt stays retryable.
+        // Recorded only after a successful import, so a failed attempt stays retryable. A
+        // duplicate the domain checks caught still gets one, so the next re-read stops at tier 2.
         fingerprintRepo.save(buildFingerprintRow(userId, pe, gmailMessageId, fp, ref,
-            duplicateState, matchedFingerprintId, matchConfidence));
+            booked ? duplicateState : com.marketai.gmail.entity.DuplicateState.MATCHED_TO_EXISTING,
+            matchedFingerprintId, matchConfidence));
+        return booked ? ImportOutcome.IMPORTED : ImportOutcome.DUPLICATE;
     }
 
     private com.marketai.gmail.entity.ImportedTransactionFingerprint buildFingerprintRow(
@@ -250,6 +285,11 @@ public class ParsedEmailImporter {
             .duplicateState(duplicateState.name())
             .matchedFingerprintId(matchedFingerprintId)
             .matchConfidence(matchConfidence)
+            .attachmentId(pe.getSourceAttachmentId())
+            .documentHash(pe.getSourceDocumentHash())
+            .extractionMethod(pe.getExtractionMethod())
+            .extractionConfidence(pe.getExtractionConfidence())
+            .extractionVersion(truncate(pe.getExtractionVersion(), 160))
             .build();
     }
 
@@ -278,13 +318,32 @@ public class ParsedEmailImporter {
         return distinctValues == 1 ? unique.get(0) : null;
     }
 
+    /**
+     * The two legs of a switch come from one email, so the email identifies the pair: the
+     * redemption leg is then known to have been reinvested, not paid out to the bank.
+     */
+    static String linkGroup(ParsedEmail pe, String gmailMessageId) {
+        if (pe.getLinkGroup() == null) return null;
+        String g = pe.getLinkGroup() + (gmailMessageId != null ? ":" + gmailMessageId : "");
+        return truncate(g, 100);
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return null;
+        String t = s.trim();
+        return t.length() <= max ? t : t.substring(0, max);
+    }
+
     /** Keeps conflict detail inside its column without truncating mid-character. */
     private static String truncateDetail(String s) {
         if (s == null) return null;
         return s.length() <= 500 ? s : s.substring(0, 497) + "...";
     }
 
-    private void routeImport(Long userId, User user, ParsedEmail pe, String gmailMessageId) throws Exception {
+    /** @return false when the item turned out to be a duplicate of an existing record. */
+    private boolean routeImport(Long userId, User user, ParsedEmail pe, String gmailMessageId,
+                                com.marketai.common.ledger.Provenance provenance) throws Exception {
+        String lineKey = provenance.getSourceFingerprint();
         // Switching on a null enum throws NullPointerException. That a null type is reachable is
         // not hypothetical — the fingerprinter a few lines above this call explicitly handles
         // `getType() == null`, so such a ParsedEmail gets as far as here and then aborts the
@@ -298,8 +357,7 @@ public class ParsedEmailImporter {
         switch (pe.getType()) {
             case TRADE_BUY:
             case TRADE_SELL:
-                importTrade(userId, user, pe);
-                break;
+                return importTrade(userId, user, pe, provenance);
             case FD_OPEN:
                 // Every field below feeds interest, maturity and renewal-linking maths, so none of
                 // them is defaulted: a placeholder bank, a 7% rate or "today" as the start date
@@ -341,6 +399,7 @@ public class ParsedEmailImporter {
                 fdReq.setAutoRenew(false);
                 fdReq.setStartDate(fdStart);
                 fdReq.setMaturityDate(pe.getMaturityDate());
+                fdReq.setProvenance(provenance);
                 com.marketai.tracking.dto.FdResponse newFd = trackingService.addFd(userId, fdReq, user);
                 // A bank "new FD opened" email is exactly what a renewal looks like from the
                 // mailbox's point of view — there is no separate "renewed" notification to key
@@ -380,56 +439,71 @@ public class ParsedEmailImporter {
                 rdReq.setRate(pe.getRate());
                 rdReq.setStartDate(rdStart);
                 rdReq.setTenureMonths(pe.getTenureMonths());
+                rdReq.setProvenance(provenance);
                 trackingService.addRd(userId, rdReq, user);
                 break;
             case MF_SIP:
             case MF_REDEEM:
-                importMf(userId, user, pe);
-                break;
+                return importMf(userId, user, pe, provenance);
             case DIVIDEND:
-                importDividend(userId, pe, gmailMessageId);
-                break;
+                return importDividend(userId, pe, gmailMessageId, lineKey);
             case INCOME:
-                importIncome(userId, pe, gmailMessageId);
-                break;
+                return importIncome(userId, pe, gmailMessageId, lineKey);
             case EXPENSE:
-                importExpense(userId, pe, gmailMessageId);
-                break;
+                return importExpense(userId, pe, gmailMessageId, lineKey);
             case CARD_BILL:
                 applyCardBill(userId, pe, gmailMessageId);
                 break;
             case CARD_PAYMENT:
                 importCardPayment(userId, pe, gmailMessageId);
                 break;
+            case CORPORATE_ACTION:
+                return importCorporateAction(userId, user, pe, provenance);
+            case DEPOSIT_CLOSE:
+                return closeDeposit(userId, pe, gmailMessageId);
+            case DEPOSIT_INTEREST:
+                return importDepositInterest(userId, pe, gmailMessageId, lineKey);
+            case REFUND:
+                return importRefund(userId, pe, gmailMessageId, lineKey);
+            case OWN_TRANSFER:
+                return importOwnTransfer(userId, pe, gmailMessageId, lineKey);
             default:
                 break;
         }
+        return true;
     }
 
-    private void importDividend(Long userId, ParsedEmail pe, String gmailMessageId) throws ImportRejectedException {
+    private boolean importDividend(Long userId, ParsedEmail pe, String gmailMessageId, String lineKey) throws ImportRejectedException {
         LocalDate date = requireDate(pe);
         String company = pe.getSymbol();
         String shortName = company != null ? company.replaceAll("(?i)\\s*(Limited|Ltd\\.?|Industries|Corporation)\\s*", " ").trim() : null;
         String desc = shortName != null ? shortName + " Dividend" : "Dividend";
 
-        if (isDuplicateIncome(userId, pe, date, desc, gmailMessageId)) {
+        // The amount is what was credited; the dividend declared is that plus the TDS withheld.
+        BigDecimal tds = pe.getTds() != null && pe.getTds().signum() > 0 ? pe.getTds() : null;
+        // Compared on the gross, which is what is stored.
+        if (isDuplicateIncome(userId, tds == null ? pe : pe.toBuilder().amount(pe.getAmount().add(tds)).build(),
+                date, desc, gmailMessageId, lineKey)) {
             log.debug("Skipping duplicate dividend: {} on {} for ₹{}", desc, date, pe.getAmount());
-            return;
+            return false;
         }
         incomeRepo.save(com.marketai.income.entity.Income.builder()
             .userId(userId)
             .description(desc)
-            .amount(pe.getAmount())
+            .amount(tds == null ? pe.getAmount() : pe.getAmount().add(tds))
+            .tds(tds)
             .source(com.marketai.income.entity.IncomeSource.DIVIDEND)
             .incomeDate(date)
             .payer(company)
             .paymentMethod(pe.getPaymentMethod())
             .sourceEmailId(gmailMessageId)
+            .sourceFingerprint(lineKey)
             .note("Auto-imported from email")
             .build());
+        return true;
     }
 
-    private void importIncome(Long userId, ParsedEmail pe, String gmailMessageId) throws ImportRejectedException {
+    private boolean importIncome(Long userId, ParsedEmail pe, String gmailMessageId, String lineKey) throws ImportRejectedException {
         LocalDate date = requireDate(pe);
         String payer = pe.getMerchant();
         String source = pe.getIncomeSource() != null ? pe.getIncomeSource() : "Other";
@@ -438,9 +512,9 @@ public class ParsedEmailImporter {
             desc = pe.getSourceDescription();
         }
 
-        if (isDuplicateIncome(userId, pe, date, desc, gmailMessageId)) {
+        if (isDuplicateIncome(userId, pe, date, desc, gmailMessageId, lineKey)) {
             log.debug("Skipping duplicate income: {} on {} for ₹{}", desc, date, pe.getAmount());
-            return;
+            return false;
         }
         incomeRepo.save(com.marketai.income.entity.Income.builder()
             .userId(userId)
@@ -451,19 +525,21 @@ public class ParsedEmailImporter {
             .payer(payer)
             .paymentMethod(pe.getPaymentMethod())
             .sourceEmailId(gmailMessageId)
+            .sourceFingerprint(lineKey)
             .note("Auto-imported from email")
             .build());
+        return true;
     }
 
-    private void importExpense(Long userId, ParsedEmail pe, String gmailMessageId) throws ImportRejectedException {
+    private boolean importExpense(Long userId, ParsedEmail pe, String gmailMessageId, String lineKey) throws ImportRejectedException {
         LocalDate date = requireDate(pe);
         String merchant = pe.getMerchant();
         String desc = merchant != null ? merchant
             : (pe.getCategory() != null ? pe.getCategory() + " spend" : "Expense");
 
-        if (isDuplicateExpense(userId, pe, date, merchant, gmailMessageId)) {
+        if (isDuplicateExpense(userId, pe, date, merchant, desc, gmailMessageId, lineKey)) {
             log.debug("Skipping duplicate expense: {} on {} for ₹{}", desc, date, pe.getAmount());
-            return;
+            return false;
         }
         if (looksLikeRent(merchant, desc, pe.getCategory())) {
             // Rent has its own ledger (RentSchedule/Rent) so a schedule-generated "Upcoming"
@@ -471,7 +547,7 @@ public class ParsedEmailImporter {
             // Expense row — see RentService.matchOrCreateFromGmail.
             rentService.matchOrCreateFromGmail(userId, pe.getAmount(), date, merchant, gmailMessageId,
                 pe.getOccurrenceInSource());
-            return;
+            return true;
         }
         expenseRepo.save(com.marketai.expense.entity.Expense.builder()
             .userId(userId)
@@ -482,8 +558,10 @@ public class ParsedEmailImporter {
             .merchant(merchant)
             .paymentMethod(pe.getPaymentMethod())
             .sourceEmailId(gmailMessageId)
+            .sourceFingerprint(lineKey)
             .note("Auto-imported from email")
             .build());
+        return true;
     }
 
     /** Rent detection is deliberately keyword-based, not a full classifier — a false negative
@@ -513,8 +591,8 @@ public class ParsedEmailImporter {
      *       goes to review with the reason instead of being silently dropped.</li>
      * </ul>
      */
-    private boolean isDuplicateExpense(Long userId, ParsedEmail pe, LocalDate date, String merchant,
-                                       String gmailMessageId) throws ImportRejectedException {
+    private boolean isDuplicateExpense(Long userId, ParsedEmail pe, LocalDate date, String merchant, String desc,
+                                       String gmailMessageId, String lineKey) throws ImportRejectedException {
         BigDecimal amount = pe.getAmount();
         if (amount == null) throw new ImportRejectedException("No amount could be determined for this expense.");
         // Rows this email already produced with this amount and date — expenses and the rent rows
@@ -523,44 +601,87 @@ public class ParsedEmailImporter {
         long sameEmailSameLine = gmailMessageId == null ? 0
             : rentService.countFromEmail(userId, gmailMessageId, amount, date);
         com.marketai.expense.entity.Expense otherSource = null;
+        com.marketai.expense.entity.Expense enteredByHand = null;
+        String[] mine = {merchant, desc};
         for (com.marketai.expense.entity.Expense e :
                 expenseRepo.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(userId, date, date)) {
             if (e.getAmount() == null || e.getAmount().compareTo(amount) != 0) continue;
             if (gmailMessageId != null && gmailMessageId.equals(e.getSourceEmailId())) {
-                sameEmailSameLine++;
-            } else if (otherSource == null && merchant != null
-                    && (merchant.equalsIgnoreCase(e.getMerchant()) || merchant.equalsIgnoreCase(e.getDescription()))) {
-                otherSource = e;
+                // Amount and date alone do not make two lines one payment: a clearly different
+                // payee in the same email (its body and its statement) is a different one.
+                if (!differentParty(merchant, e.getMerchant())) sameEmailSameLine++;
+            } else if (com.marketai.common.ledger.PartyNames.anySame(mine, new String[]{e.getMerchant(), e.getDescription()})) {
+                if (e.getSourceEmailId() == null) {
+                    if (enteredByHand == null) enteredByHand = e;
+                } else if (otherSource == null) {
+                    otherSource = e;
+                }
             }
         }
         if (sameEmailSameLine > pe.getOccurrenceInSource()) return true;
+        if (enteredByHand != null && gmailMessageId != null && !pe.isUserConfirmed()) {
+            // The user recorded this payment by hand before the email arrived: the email is the
+            // evidence for that row, not a second payment. Linked, so the next hand-entered
+            // twin is not matched to the same email again.
+            enteredByHand.setSourceEmailId(gmailMessageId);
+            enteredByHand.setSourceFingerprint(lineKey);
+            expenseRepo.save(enteredByHand);
+            log.info("Linked email {} to hand-entered expense {}", gmailMessageId, enteredByHand.getId());
+            return true;
+        }
+        if (enteredByHand != null && otherSource == null) otherSource = enteredByHand;
         if (otherSource != null && !pe.isUserConfirmed()) {
-            throw new ImportRejectedException("A ₹" + amount + " expense at " + merchant + " on " + date
+            throw new ImportRejectedException("A ₹" + amount + " expense (" + (merchant != null ? merchant : desc) + ") on " + date
                 + " is already recorded from another source — accept only if this is a separate payment.");
         }
         return false;
     }
 
+    /** Both name a counterparty, and not the same one. Unknown on either side is never "different". */
+    static boolean differentParty(String a, String b) {
+        return a != null && !a.isBlank() && b != null && !b.isBlank()
+            && !com.marketai.common.ledger.PartyNames.sameParty(a, b);
+    }
+
     /** Same rules as {@link #isDuplicateExpense}. */
     private boolean isDuplicateIncome(Long userId, ParsedEmail pe, LocalDate date, String desc,
-                                      String gmailMessageId) throws ImportRejectedException {
+                                      String gmailMessageId, String lineKey) throws ImportRejectedException {
         BigDecimal amount = pe.getAmount();
         if (amount == null) throw new ImportRejectedException("No amount could be determined for this credit.");
         int sameEmailSameLine = 0;
         com.marketai.income.entity.Income otherSource = null;
+        com.marketai.income.entity.Income enteredByHand = null;
+        String[] mine = {desc, pe.getMerchant(), pe.getSymbol()};
         for (com.marketai.income.entity.Income i :
                 incomeRepo.findByUserIdAndIncomeDateBetweenOrderByIncomeDateDesc(userId, date, date)) {
             if (i.getAmount() == null || i.getAmount().compareTo(amount) != 0) continue;
             if (gmailMessageId != null && gmailMessageId.equals(i.getSourceEmailId())) {
-                sameEmailSameLine++;
+                // The payer is stored as the company for a dividend, the counterparty otherwise.
+                String myPayer = pe.getType() == ParsedEmail.Type.DIVIDEND ? pe.getSymbol() : pe.getMerchant();
+                if (!differentParty(myPayer, i.getPayer())) sameEmailSameLine++;
                 continue;
             }
-            boolean sameDesc = desc != null && desc.equalsIgnoreCase(i.getDescription());
+            boolean sameParty = com.marketai.common.ledger.PartyNames.anySame(mine,
+                new String[]{i.getDescription(), i.getPayer()});
             boolean bothDividends = com.marketai.income.entity.IncomeSource.DIVIDEND == i.getSource()
                 && desc != null && desc.toLowerCase().contains("dividend");
-            if ((sameDesc || bothDividends) && otherSource == null) otherSource = i;
+            if (!(sameParty || bothDividends)) continue;
+            if (i.getSourceEmailId() == null) {
+                if (enteredByHand == null) enteredByHand = i;
+            } else if (otherSource == null) {
+                otherSource = i;
+            }
         }
         if (sameEmailSameLine > pe.getOccurrenceInSource()) return true;
+        if (enteredByHand != null && gmailMessageId != null && !pe.isUserConfirmed()) {
+            // See isDuplicateExpense: the email is the evidence for the hand-entered row.
+            enteredByHand.setSourceEmailId(gmailMessageId);
+            enteredByHand.setSourceFingerprint(lineKey);
+            incomeRepo.save(enteredByHand);
+            log.info("Linked email {} to hand-entered income {}", gmailMessageId, enteredByHand.getId());
+            return true;
+        }
+        if (enteredByHand != null && otherSource == null) otherSource = enteredByHand;
         if (otherSource != null && !pe.isUserConfirmed()) {
             throw new ImportRejectedException("A ₹" + amount + " credit (" + otherSource.getDescription() + ") on " + date
                 + " is already recorded from another source — accept only if this is a separate credit.");
@@ -670,7 +791,13 @@ public class ParsedEmailImporter {
      * This never touches any balance directly: {@code CardReconciliationService} derives
      * outstanding/paid status by walking statements and payments together at read time.
      */
-    private void importCardPayment(Long userId, ParsedEmail pe, String gmailMessageId) {
+    private void importCardPayment(Long userId, ParsedEmail pe, String gmailMessageId) throws ImportRejectedException {
+        // Never "today": a payment booked on the day it was imported lands in the wrong card
+        // cycle and can't be matched against the statement it settled.
+        LocalDate paidOn = pe.getPaymentDate() != null ? pe.getPaymentDate() : pe.getTradeDate();
+        if (paidOn == null) {
+            throw new ImportRejectedException("The card payment's date isn't stated — confirm the date to record it.");
+        }
         com.marketai.card.entity.CreditCard card = findCard(userId, pe);
         com.marketai.card.entity.CardPaymentStatus status =
             "REVERSED".equalsIgnoreCase(pe.getPaymentStatus())
@@ -681,7 +808,7 @@ public class ParsedEmailImporter {
             .cardId(card != null ? card.getId() : null)
             .userId(userId)
             .amount(pe.getAmount())
-            .paymentDate(pe.getPaymentDate() != null ? pe.getPaymentDate() : LocalDate.now())
+            .paymentDate(paidOn)
             .referenceNumber(pe.getPaymentReference())
             .status(status)
             .sourceEmailId(gmailMessageId)
@@ -701,13 +828,306 @@ public class ParsedEmailImporter {
         return matches.size() == 1 ? matches.get(0) : null;
     }
 
+    /* ── Corporate actions ───────────────────────────────────── */
+
+    private boolean importCorporateAction(Long userId, User user, ParsedEmail pe,
+                                          com.marketai.common.ledger.Provenance provenance) throws Exception {
+        String action = pe.getCorporateAction();
+        LocalDate date = requireDate(pe);
+        Portfolio portfolio = getOrCreatePortfolio(userId, user);
+        String symbol = equitySymbol(pe.getSymbol(), pe.getExchange());
+        PortfolioService.CorporateActionResult result;
+        try {
+            result = switch (action == null ? "" : action) {
+                case "SPLIT" -> portfolioService.recordSplit(portfolio.getId(), symbol, pe.getRatioFrom(), pe.getRatioTo(), date, provenance);
+                case "BONUS" -> portfolioService.recordBonus(portfolio.getId(), symbol, pe.getRatioFrom(), pe.getRatioTo(),
+                    pe.getUnits(), date, provenance);
+                case "MERGER" -> portfolioService.recordMerger(portfolio.getId(), symbol,
+                    equitySymbol(pe.getNewSymbol(), pe.getExchange()), pe.getRatioFrom(), pe.getRatioTo(), date, provenance);
+                default -> throw new ImportRejectedException("The corporate action (" + action + ") could not be recorded automatically.");
+            };
+        } catch (IllegalArgumentException e) {
+            throw new ImportRejectedException(e.getMessage());
+        }
+        log.info("Corporate action for user {}: {}", userId, result.detail());
+        return result.booked();
+    }
+
+    private static String equitySymbol(String raw, String exchange) {
+        if (raw == null || raw.isBlank()) return null;
+        String s = raw.trim().toUpperCase();
+        if (s.endsWith(".NS") || s.endsWith(".BO")) return s;
+        return s + ("BSE".equalsIgnoreCase(exchange) ? ".BO" : ".NS");
+    }
+
+    /* ── Deposits ────────────────────────────────────────────── */
+
+    /**
+     * A maturity or premature-closure payout closes the one open deposit it belongs to, on the
+     * bank's figures. It never creates a record of its own: the principal was already counted
+     * while the deposit was open, and only the excess paid out is interest.
+     */
+    private boolean closeDeposit(Long userId, ParsedEmail pe, String gmailMessageId) throws ImportRejectedException {
+        LocalDate date = requireDate(pe);
+        BigDecimal paid = pe.getAmount();
+        if (paid == null || paid.signum() <= 0) {
+            throw new ImportRejectedException("The deposit payout amount could not be read.");
+        }
+        boolean rd = "RD".equalsIgnoreCase(pe.getInstrumentKind());
+        String bank = pe.getBank();
+        String what = (rd ? "RD" : "FD") + " payout of ₹" + paid.toPlainString() + (bank != null ? " from " + bank : "");
+        if (rd) {
+            List<com.marketai.tracking.entity.RecurringDeposit> open = new ArrayList<>();
+            boolean closedOnTheseFigures = false;
+            for (var d : rdRepo.findByUserIdOrderByCreatedAtDesc(userId)) {
+                if (!com.marketai.common.ledger.PartyNames.sameParty(bank, d.getBank())) continue;
+                if (isClosed(d.getStatus())) {
+                    closedOnTheseFigures |= sameClosure(d.getMaturityAmount(), d.getClosedDate(), paid, date);
+                    continue;
+                }
+                open.add(d);
+            }
+            // Only when nothing open could take it: a second identical deposit at the same bank
+            // must be closed, not mistaken for the first one's payout.
+            if (open.isEmpty() && closedOnTheseFigures) return false;
+            var target = single(open, what, "recurring deposit");
+            closeOrDuplicate(() -> trackingService.closeRd(target.getId(), userId, paid, pe.getTds(), date, gmailMessageId));
+            return true;
+        }
+        List<com.marketai.tracking.entity.FixedDeposit> open = new ArrayList<>();
+        boolean closedOnTheseFigures = false;
+        for (var d : fdRepo.findByUserIdOrderByCreatedAtDesc(userId)) {
+            if (!com.marketai.common.ledger.PartyNames.sameParty(bank, d.getBank())) continue;
+            if (isClosed(d.getStatus())) {
+                boolean principalFits = pe.getPrincipal() == null || d.getPrincipal() == null || d.getPrincipal().compareTo(pe.getPrincipal()) == 0;
+                closedOnTheseFigures |= principalFits && sameClosure(d.getMaturityAmount(), d.getClosedDate(), paid, date);
+                continue;
+            }
+            // The principal, when the advice states it, tells two deposits at one bank apart;
+            // a payout smaller than the principal can't belong to that deposit.
+            if (pe.getPrincipal() != null && d.getPrincipal() != null && d.getPrincipal().compareTo(pe.getPrincipal()) != 0) continue;
+            if (pe.getPrincipal() == null && d.getPrincipal() != null && paid.add(nz(pe.getTds())).compareTo(d.getPrincipal()) < 0) continue;
+            open.add(d);
+        }
+        if (open.size() > 1 && pe.getPrincipal() == null) {
+            // Several open deposits at the bank: the one due soonest before the payout is the
+            // likeliest, but that is a guess — only an exact maturity-date match is taken.
+            List<com.marketai.tracking.entity.FixedDeposit> onDate = open.stream()
+                .filter(d -> date.equals(d.getMaturityDate())).toList();
+            if (onDate.size() == 1) open = onDate;
+        }
+        if (open.isEmpty() && closedOnTheseFigures) return false;
+        var target = single(open, what, "fixed deposit");
+        closeOrDuplicate(() -> trackingService.closeFd(target.getId(), userId, paid, pe.getTds(), date, gmailMessageId));
+        return true;
+    }
+
+    /** A deposit already closed with this payout on this day: the advice has been recorded. */
+    private static boolean sameClosure(BigDecimal closedAmount, LocalDate closedOn, BigDecimal paid, LocalDate date) {
+        return closedAmount != null && closedAmount.compareTo(paid) == 0 && (closedOn == null || closedOn.equals(date));
+    }
+
+    private static boolean isClosed(String status) {
+        return "CLOSED".equalsIgnoreCase(status) || "MATURED_RENEWED".equalsIgnoreCase(status);
+    }
+
+    private static BigDecimal nz(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
+
+    private static <T> T single(List<T> candidates, String what, String kind) throws ImportRejectedException {
+        if (candidates.isEmpty()) {
+            throw new ImportRejectedException(what + " — no open " + kind + " at that bank matches it. "
+                + "Add the deposit (or close it by hand) so the principal and interest are split correctly.");
+        }
+        if (candidates.size() > 1) {
+            throw new ImportRejectedException(what + " — " + candidates.size() + " open " + kind
+                + "s at that bank could be the one that paid out; close the right one by hand.");
+        }
+        return candidates.get(0);
+    }
+
+    private interface Closer { void run(); }
+
+    /** Already closed (by hand, or by a renewal) means its interest is already booked. */
+    private static void closeOrDuplicate(Closer c) throws ImportRejectedException {
+        try {
+            c.run();
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            throw new ImportRejectedException(e.getReason() != null ? e.getReason() : "The deposit could not be closed.");
+        }
+    }
+
+    /**
+     * Interest paid out by a deposit during its term, or TDS withheld from it. Booked gross, with
+     * the TDS beside it: the TDS is tax already paid, not money that vanished. A TDS-only advice
+     * is attached to the interest it was withheld from when that is on record.
+     */
+    private boolean importDepositInterest(Long userId, ParsedEmail pe, String gmailMessageId, String lineKey)
+            throws ImportRejectedException {
+        LocalDate date = requireDate(pe);
+        String bank = pe.getBank();
+        String kind = "RD".equalsIgnoreCase(pe.getInstrumentKind()) ? "RD" : "FD";
+        BigDecimal tds = pe.getTds() != null && pe.getTds().signum() > 0 ? pe.getTds() : null;
+        if (pe.getAmount() == null) {
+            if (tds == null) throw new ImportRejectedException("The deposit interest amount could not be read.");
+            for (var i : incomeRepo.findByUserIdAndSourceAndIncomeDateBetweenOrderByIncomeDateDesc(userId,
+                    com.marketai.income.entity.IncomeSource.INTEREST, date.minusDays(45), date.plusDays(45))) {
+                // Only interest from the same bank: equal TDS at another bank is a different advice.
+                boolean sameBank = bank != null && com.marketai.common.ledger.PartyNames.anySame(
+                    new String[]{bank}, new String[]{i.getPayer(), i.getDescription()});
+                if (!sameBank) continue;
+                if (i.getTds() != null && i.getTds().compareTo(tds) == 0) return false; // already attached
+                if (i.getTds() == null) {
+                    i.setTds(tds);
+                    i.setAmount(i.getAmount().add(tds)); // the credit was net; interest earned is gross
+                    i.setNote(truncate((i.getNote() == null ? "" : i.getNote() + " ") + "TDS ₹" + tds + " added from a later advice.", 500));
+                    incomeRepo.save(i);
+                    return true;
+                }
+            }
+            throw new ImportRejectedException("TDS of ₹" + tds.toPlainString() + " was withheld from " + kind + " interest"
+                + (bank != null ? " at " + bank : "") + ", but the interest it came from isn't on record yet.");
+        }
+        BigDecimal gross = pe.getAmount().add(tds != null ? tds : BigDecimal.ZERO);
+        String desc = kind + " interest" + (bank != null ? " — " + bank : "");
+        if (isDuplicateIncome(userId, pe.toBuilder().amount(gross).build(), date, desc, gmailMessageId, lineKey)) {
+            return false;
+        }
+        incomeRepo.save(com.marketai.income.entity.Income.builder()
+            .userId(userId)
+            .description(desc)
+            .amount(gross)
+            .tds(tds)
+            .source(com.marketai.income.entity.IncomeSource.INTEREST)
+            .incomeDate(date)
+            .payer(bank)
+            .sourceEmailId(gmailMessageId)
+            .sourceFingerprint(lineKey)
+            .note("Auto-imported from email" + (tds != null ? " — credited ₹" + pe.getAmount() + " after TDS ₹" + tds : ""))
+            .build());
+        return true;
+    }
+
+    /* ── Refunds and own-account transfers ───────────────────── */
+
+    /** Not scored by {@link TransactionMatchScorer}, but just as able to repeat identically. */
+    static final java.util.Set<ParsedEmail.Type> REPEATABLE_CASH_TYPES = java.util.EnumSet.of(
+        ParsedEmail.Type.REFUND, ParsedEmail.Type.OWN_TRANSFER, ParsedEmail.Type.DEPOSIT_INTEREST);
+
+    static final int REFUND_LOOKBACK_DAYS = 120;
+
+    /**
+     * A refund reduces the spend it reverses. It is booked as a negative expense in that
+     * purchase's category, linked to it, so the purchase itself is never edited and both rows
+     * stay traceable to their emails. With no purchase to link to it is held for review:
+     * booking it as income inflated income and left the spend in place.
+     */
+    private boolean importRefund(Long userId, ParsedEmail pe, String gmailMessageId, String lineKey)
+            throws ImportRejectedException {
+        LocalDate date = requireDate(pe);
+        BigDecimal amount = pe.getAmount();
+        if (amount == null || amount.signum() <= 0) throw new ImportRejectedException("The refund amount could not be read.");
+        String merchant = pe.getMerchant();
+        if (merchant == null || merchant.isBlank()) {
+            throw new ImportRejectedException("A refund of ₹" + amount.toPlainString() + " on " + date
+                + " doesn't say who it is from, so it can't be matched to the purchase it reverses.");
+        }
+        BigDecimal negative = amount.negate();
+        if (isDuplicateExpense(userId, pe.toBuilder().amount(negative).build(), date, merchant, "Refund — " + merchant,
+                gmailMessageId, lineKey)) {
+            return false;
+        }
+        com.marketai.expense.entity.Expense original = null;
+        for (com.marketai.expense.entity.Expense e : expenseRepo.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(
+                userId, date.minusDays(REFUND_LOOKBACK_DAYS), date)) {
+            if (e.getAmount() == null || e.getAmount().signum() <= 0 || e.getRefundOfExpenseId() != null) continue;
+            if (e.getCategory() == com.marketai.expense.entity.ExpenseCategory.ACCOUNT_TRANSFER) continue;
+            if (!com.marketai.common.ledger.PartyNames.anySame(new String[]{merchant},
+                    new String[]{e.getMerchant(), e.getDescription()})) continue;
+            BigDecimal refundedSoFar = expenseRepo.findByRefundOfExpenseId(e.getId()).stream()
+                .map(r -> r.getAmount() == null ? BigDecimal.ZERO : r.getAmount().negate())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (e.getAmount().subtract(refundedSoFar).compareTo(amount) < 0) continue;
+            // An exact-amount purchase beats a larger one (a full refund of that order), and the
+            // most recent beats an older one — the list is newest first.
+            if (original == null || (e.getAmount().compareTo(amount) == 0 && original.getAmount().compareTo(amount) != 0)) {
+                original = e;
+            }
+        }
+        if (original == null) {
+            throw new ImportRejectedException("A refund of ₹" + amount.toPlainString() + " from " + merchant + " on " + date
+                + " matches no purchase from " + merchant + " of at least that amount in the previous "
+                + REFUND_LOOKBACK_DAYS + " days, so it was not booked.");
+        }
+        expenseRepo.save(com.marketai.expense.entity.Expense.builder()
+            .userId(userId)
+            .description("Refund — " + (original.getDescription() != null ? original.getDescription() : merchant))
+            .amount(negative)
+            .category(original.getCategory())
+            .expenseDate(date)
+            .merchant(original.getMerchant() != null ? original.getMerchant() : merchant)
+            .paymentMethod(pe.getPaymentMethod() != null ? pe.getPaymentMethod() : original.getPaymentMethod())
+            .planCategoryOverride(original.getPlanCategoryOverride())
+            .refundOfExpenseId(original.getId())
+            .sourceEmailId(gmailMessageId)
+            .sourceFingerprint(lineKey)
+            .note(truncate("Refund of the ₹" + original.getAmount() + " purchase on " + original.getExpenseDate()
+                + " — auto-imported from email", 500))
+            .build());
+        return true;
+    }
+
+    static final int TRANSFER_PAIR_DAYS = 3;
+
+    /**
+     * Money moved between the user's own accounts is neither spending nor income. The outgoing
+     * leg is kept as an account transfer (visible, excluded from spend); the incoming leg is the
+     * same money arriving, so it is matched to that outgoing leg rather than booked again.
+     */
+    private boolean importOwnTransfer(Long userId, ParsedEmail pe, String gmailMessageId, String lineKey)
+            throws ImportRejectedException {
+        LocalDate date = requireDate(pe);
+        BigDecimal amount = pe.getAmount();
+        if (amount == null || amount.signum() <= 0) throw new ImportRejectedException("The transfer amount could not be read.");
+        if (!Boolean.TRUE.equals(pe.getIncoming())) {
+            String desc = "Transfer to own account" + (pe.getMerchant() != null ? " — " + pe.getMerchant() : "");
+            if (isDuplicateExpense(userId, pe, date, pe.getMerchant(), desc, gmailMessageId, lineKey)) return false;
+            expenseRepo.save(com.marketai.expense.entity.Expense.builder()
+                .userId(userId)
+                .description(desc)
+                .amount(amount)
+                .category(com.marketai.expense.entity.ExpenseCategory.ACCOUNT_TRANSFER)
+                .expenseDate(date)
+                .merchant(pe.getMerchant())
+                .paymentMethod(pe.getPaymentMethod())
+                .sourceEmailId(gmailMessageId)
+                .sourceFingerprint(lineKey)
+                .note("Own-account transfer — not spending. Auto-imported from email")
+                .build());
+            return true;
+        }
+        for (com.marketai.expense.entity.Expense e : expenseRepo.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(
+                userId, date.minusDays(TRANSFER_PAIR_DAYS), date.plusDays(TRANSFER_PAIR_DAYS))) {
+            if (e.getCategory() != com.marketai.expense.entity.ExpenseCategory.ACCOUNT_TRANSFER) continue;
+            if (e.getAmount() == null || e.getAmount().compareTo(amount) != 0) continue;
+            String arrived = "Arrived " + date + (pe.getPaymentMethod() != null ? " in " + pe.getPaymentMethod() : "") + ".";
+            if (e.getNote() != null && e.getNote().contains(arrived)) return false; // already paired
+            e.setNote(truncate((e.getNote() == null ? "" : e.getNote() + " ") + arrived, 500));
+            expenseRepo.save(e);
+            log.info("Paired incoming own-account transfer of ₹{} with outgoing leg {}", amount, e.getId());
+            return false;
+        }
+        throw new ImportRejectedException("₹" + amount.toPlainString() + " arrived on " + date
+            + " from one of your own accounts, but the matching outgoing transfer isn't recorded. Nothing was booked — "
+            + "it is not income. Dismiss this if the sending account isn't tracked here.");
+    }
+
     private Portfolio getOrCreatePortfolio(Long userId, User user) throws Exception {
         List<Portfolio> portfolios = portfolioService.getUserPortfolios(userId);
         if (!portfolios.isEmpty()) return portfolios.get(0);
         return portfolioService.createPortfolio(userId, "My Portfolio", "Auto-created");
     }
 
-    private void importTrade(Long userId, User user, ParsedEmail pe) throws Exception {
+    private boolean importTrade(Long userId, User user, ParsedEmail pe, com.marketai.common.ledger.Provenance provenance) throws Exception {
         // A trade is only a trade if it has a symbol, a quantity and a price. Each of these was
         // previously used unchecked:
         //
@@ -734,22 +1154,21 @@ public class ParsedEmailImporter {
         LocalDate date = requireDate(pe);
         BigDecimal quantity = BigDecimal.valueOf(pe.getQuantity());
 
-        if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, quantity, pe.getPrice())) {
+        if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, quantity, pe.getPrice(), pe.getTradeReference())) {
             log.debug("Skipping duplicate trade: {} {} @ {} on {}", symbol, pe.getQuantity(), pe.getPrice(), date);
-            return;
+            return false;
         }
 
         if (pe.getType() == ParsedEmail.Type.TRADE_SELL) {
             Long holdingId = portfolioService.findHoldingId(portfolio.getId(), symbol);
             if (holdingId != null) {
-                portfolioService.sellHolding(portfolio.getId(), holdingId, userId,
-                    quantity, pe.getPrice(), incomeRepo);
+                sell(portfolio.getId(), holdingId, userId, quantity, pe.getPrice(), date, provenance, pe.getCharges());
                 log.info("Imported SELL: {} x {} @ ₹{}", symbol, quantity, pe.getPrice());
             } else {
                 log.warn("SELL trade for {} but no holding found — recording as transaction only", symbol);
-                importSellAsTransaction(portfolio.getId(), userId, symbol, pe, date, quantity);
+                return importSellAsTransaction(portfolio.getId(), userId, symbol, pe, date, quantity);
             }
-            return;
+            return true;
         }
 
         AddHoldingRequest req = new AddHoldingRequest();
@@ -758,13 +1177,34 @@ public class ParsedEmailImporter {
         req.setQuantity(quantity);
         req.setPrice(pe.getPrice());
         req.setTransactionDate(date);
-        req.setCharges(BigDecimal.ZERO);
+        // Brokerage, STT, GST and stamp duty, when the contract note states them: they are part
+        // of what the shares cost, and leaving them out overstated every later gain.
+        req.setCharges(pe.getCharges() != null && pe.getCharges().signum() > 0 ? pe.getCharges() : BigDecimal.ZERO);
         req.setBroker(pe.getExchange());
         req.setIsin(pe.getIsin());
         req.setDpId(pe.getDpId());
         req.setClientId(pe.getClientId());
+        req.setProvenance(provenance);
 
         portfolioService.addHolding(portfolio.getId(), userId, req);
+        return true;
+    }
+
+    /** A sale the ledger refuses (more units than held) goes to review instead of being clamped. */
+    private void sell(Long portfolioId, Long holdingId, Long userId, BigDecimal qty, BigDecimal price,
+                      LocalDate date, com.marketai.common.ledger.Provenance provenance) throws ImportRejectedException {
+        sell(portfolioId, holdingId, userId, qty, price, date, provenance, null);
+    }
+
+    private void sell(Long portfolioId, Long holdingId, Long userId, BigDecimal qty, BigDecimal price,
+                      LocalDate date, com.marketai.common.ledger.Provenance provenance, BigDecimal charges)
+            throws ImportRejectedException {
+        try {
+            portfolioService.sellHolding(portfolioId, holdingId, userId, qty, price, date, provenance,
+                charges != null && charges.signum() > 0 ? charges : BigDecimal.ZERO);
+        } catch (IllegalArgumentException e) {
+            throw new ImportRejectedException(e.getMessage());
+        }
     }
 
     /**
@@ -775,13 +1215,13 @@ public class ParsedEmailImporter {
      * which {@code TaxService} taxes directly: a ₹1,50,000 sale whose true gain was ₹8,000 added
      * ₹1,50,000 to the year's taxable gains and inflated the estimate by tens of thousands.
      */
-    private void importSellAsTransaction(Long portfolioId, Long userId, String symbol,
+    private boolean importSellAsTransaction(Long portfolioId, Long userId, String symbol,
             ParsedEmail pe, LocalDate date, BigDecimal quantity) throws ImportRejectedException {
         BigDecimal saleValue = pe.getPrice().multiply(quantity);
         String desc = "Sale of " + symbol.replace(".NS", "").replace(".BO", "");
-        if (isDuplicateIncome(userId, pe.toBuilder().amount(saleValue).build(), date, desc, null)) {
+        if (isDuplicateIncome(userId, pe.toBuilder().amount(saleValue).build(), date, desc, null, null)) {
             log.debug("Skipping duplicate sell-as-income: {} on {} for ₹{}", desc, date, saleValue);
-            return;
+            return false;
         }
         incomeRepo.save(com.marketai.income.entity.Income.builder()
             .userId(userId)
@@ -792,9 +1232,10 @@ public class ParsedEmailImporter {
             .note("Sold " + quantity.stripTrailingZeros().toPlainString() + " units @ ₹" + pe.getPrice()
                 + " — gross proceeds, no matching holding so the cost basis and therefore the gain are unknown")
             .build());
+        return true;
     }
 
-    private void importMf(Long userId, User user, ParsedEmail pe) throws Exception {
+    private boolean importMf(Long userId, User user, ParsedEmail pe, com.marketai.common.ledger.Provenance provenance) throws Exception {
         if (com.marketai.common.util.FinancialDataValidator.looksLikeUnverifiableFundName(pe.getFundName())) {
             throw new ImportRejectedException("Fund name '" + pe.getFundName()
                 + "' does not look like a real scheme name — please confirm the fund.");
@@ -842,11 +1283,15 @@ public class ParsedEmailImporter {
         } else {
             symbol = "MFSIP.MF";
         }
+        // The name-derived symbol is only a label; the ISIN is the fund's identity. It finds
+        // the holding when a statement spells the name differently, and it keeps a fund's
+        // Growth and IDCW options apart when their names share the first 30 characters.
+        symbol = portfolioService.resolveFundSymbol(portfolio.getId(), symbol, pe.getIsin());
         LocalDate date = requireDate(pe);
 
         if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, units, nav)) {
             log.debug("Skipping duplicate MF import: {} {} units @ {} on {}", symbol, units, nav, date);
-            return;
+            return false;
         }
 
         // A redemption removes units. This branch used to be absent: MF_SIP and MF_REDEEM both
@@ -862,9 +1307,9 @@ public class ParsedEmailImporter {
                 throw new ImportRejectedException("Redemption of " + units.stripTrailingZeros().toPlainString()
                     + " units of '" + pe.getFundName() + "' has no matching holding — import the purchase history first.");
             }
-            portfolioService.sellHolding(portfolio.getId(), holdingId, userId, units, nav, incomeRepo);
+            sell(portfolio.getId(), holdingId, userId, units, nav, date, provenance);
             log.info("Imported MF REDEMPTION: {} x {} units @ ₹{}", symbol, units, nav);
-            return;
+            return true;
         }
 
         AddHoldingRequest req = new AddHoldingRequest();
@@ -877,7 +1322,25 @@ public class ParsedEmailImporter {
         req.setBroker(pe.getProvider());
         req.setFolio(pe.getFolio());
         req.setIsin(pe.getIsin());
+        req.setProvenance(provenance);
 
         portfolioService.addHolding(portfolio.getId(), userId, req);
+        if (pe.isIdcwReinvest() && pe.getAmount() != null && pe.getAmount().signum() > 0) {
+            // A reinvested IDCW is still a dividend for tax: it is income received and then spent
+            // on new units. Booking only the units left it out of the year's dividend income.
+            incomeRepo.save(com.marketai.income.entity.Income.builder()
+                .userId(userId)
+                .description("IDCW reinvested — " + req.getName())
+                .amount(pe.getAmount().add(pe.getTds() != null && pe.getTds().signum() > 0 ? pe.getTds() : BigDecimal.ZERO))
+                .tds(pe.getTds() != null && pe.getTds().signum() > 0 ? pe.getTds() : null)
+                .source(com.marketai.income.entity.IncomeSource.DIVIDEND)
+                .incomeDate(date)
+                .payer(req.getName())
+                .sourceEmailId(provenance.getSourceEmailId())
+                .sourceFingerprint(provenance.getSourceFingerprint())
+                .note("Reinvested into " + units.stripTrailingZeros().toPlainString() + " units — no cash was received")
+                .build());
+        }
+        return true;
     }
 }

@@ -300,7 +300,8 @@ public class TodaysActionsService {
             req.setSymbol(h.getSymbol());
             req.setFundName(h.getName());
             req.setBuyDate(h.getBuyDate());
-            req.setXirr(h.getXirr());
+            // The ledger-derived XIRR every portfolio screen shows, not the statement's copy.
+            req.setXirr(portfolioContextService.holdingXirr(h));
             req.setInvestedValue(h.getInvestedValue());
             req.setCurrentValue(h.getCurrentValue());
             req.setQuantity(h.getQuantity());

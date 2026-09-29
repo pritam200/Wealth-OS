@@ -743,7 +743,8 @@ export function GmailConnect({ onImport }: Props) {
                   ? <CheckCircle size={13} className="text-bull" />
                   : <AlertTriangle size={13} className="text-neutral" />}
                 <span className="font-semibold text-ink">
-                  Reconciliation: {lastResult.reconciliation.status === 'OK' ? 'All records accounted for' : 'Action Required'}
+                  {lastResult.reconciliation.headline
+                    ?? `Reconciliation: ${lastResult.reconciliation.status === 'OK' ? 'All records accounted for' : 'Action Required'}`}
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-2xs">
@@ -753,6 +754,12 @@ export function GmailConnect({ onImport }: Props) {
                 <div><span className="text-gray-500">Imported</span><div className="text-bull font-medium">{lastResult.reconciliation.transactionsImported}</div></div>
                 <div><span className="text-gray-500">Duplicates skipped</span><div className="text-gray-400 font-medium">{lastResult.reconciliation.duplicatesSkipped}</div></div>
                 <div><span className="text-gray-500">Failed</span><div className={`font-medium ${lastResult.reconciliation.failedImports > 0 ? 'text-bear' : 'text-gray-400'}`}>{lastResult.reconciliation.failedImports}</div></div>
+                {lastResult.reconciliation.eventsSeen != null && (
+                  <div><span className="text-gray-500">Events accounted for</span><div className="text-ink font-medium">{lastResult.reconciliation.eventsAccounted} / {lastResult.reconciliation.eventsSeen}</div></div>
+                )}
+                {lastResult.reconciliation.eventsSeen != null && (
+                  <div><span className="text-gray-500">Events unresolved</span><div className={`font-medium ${(lastResult.reconciliation.outstandingUnresolved ?? 0) > 0 ? 'text-neutral' : 'text-gray-400'}`}>{lastResult.reconciliation.outstandingUnresolved}</div></div>
+                )}
                 <div><span className="text-gray-500">PDFs pending</span><div className={`font-medium ${lastResult.reconciliation.pdfsPending > 0 ? 'text-neutral' : 'text-gray-400'}`}>{lastResult.reconciliation.pdfsPending}</div></div>
               </div>
               {lastResult.reconciliation.actionItems.length > 0 && (

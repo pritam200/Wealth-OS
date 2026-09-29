@@ -21,6 +21,8 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
     // debits from ever being booked as an Expense — see BankTransactionParser.
     List<Expense> findByUserIdAndCategory(Long userId, ExpenseCategory category);
 
+    List<Expense> findByRefundOfExpenseId(Long expenseId);
+
     List<Expense> findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(
             Long userId, LocalDate from, LocalDate to);
 
@@ -32,10 +34,18 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long> {
                                        @Param("from") LocalDate from,
                                        @Param("to") LocalDate to);
 
-    @Query("SELECT e.category, SUM(e.amount) FROM Expense e WHERE e.userId = :userId AND e.expenseDate >= :from AND e.expenseDate <= :to GROUP BY e.category")
+    // Same exclusion as the total above, so the categories add up to it. A card-bill payment
+    // listed as a spending category counted the month's card spend a second time.
+    @Query("SELECT e.category, SUM(e.amount) FROM Expense e WHERE e.userId = :userId AND e.expenseDate >= :from "
+        + "AND e.expenseDate <= :to AND e.category <> com.marketai.expense.entity.ExpenseCategory.ACCOUNT_TRANSFER GROUP BY e.category")
     List<Object[]> sumByCategory(@Param("userId") Long userId,
                                   @Param("from") LocalDate from,
                                   @Param("to") LocalDate to);
+
+    /** Own-account transfers and card-bill payments in the range — shown apart from spending. */
+    @Query("SELECT SUM(e.amount) FROM Expense e WHERE e.userId = :userId AND e.expenseDate >= :from "
+        + "AND e.expenseDate <= :to AND e.category = com.marketai.expense.entity.ExpenseCategory.ACCOUNT_TRANSFER")
+    BigDecimal sumTransfers(@Param("userId") Long userId, @Param("from") LocalDate from, @Param("to") LocalDate to);
 
     boolean existsByIdAndUserId(Long id, Long userId);
 

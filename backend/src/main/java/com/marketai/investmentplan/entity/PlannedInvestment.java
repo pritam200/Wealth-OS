@@ -25,6 +25,13 @@ public class PlannedInvestment {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /** Optimistic lock: a sync and a user edit changing the same record at once can't silently
+     *  overwrite each other — the second write fails and is retried or reported. */
+    @Version
+    @Column(name = "version")
+    @lombok.EqualsAndHashCode.Exclude
+    private Long version;
+
     @Column(name = "user_id", nullable = false)
     private Long userId;
 

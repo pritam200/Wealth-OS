@@ -47,7 +47,8 @@ class SyncJobRunnerRetryBacklogTest {
 
         runner = new SyncJobRunner(jobRepo, jobService, mock(GmailTokenRepository.class),
             mock(GmailClientService.class), gmailSyncService, mock(GmailIncrementalSyncService.class),
-            processedEmailRepo);
+            processedEmailRepo, mock(com.marketai.reconciliation.service.ReconciliationIssueService.class),
+            new com.marketai.common.jobs.JobHealthRecorder(mock(com.marketai.common.jobs.ScheduledJobHealthRepository.class)));
 
         User user = new User();
         user.setId(USER_ID);
@@ -67,7 +68,7 @@ class SyncJobRunnerRetryBacklogTest {
 
         verify(gmailSyncService).syncSpecificMessages(USER_ID, List.of("msg-failed-1", "msg-review-2"));
         verify(gmailSyncService, never()).syncForUser(any(), any());
-        verify(jobService).succeed(eq(JOB_ID), anyString(), eq(1));
+        verify(jobService).complete(eq(JOB_ID), eq(com.marketai.sync.entity.SyncJobStatus.SUCCEEDED), anyString(), eq(1));
     }
 
     @Test
@@ -78,6 +79,23 @@ class SyncJobRunnerRetryBacklogTest {
         runner.run(JOB_ID);
 
         verify(gmailSyncService, never()).syncSpecificMessages(any(), any());
-        verify(jobService).succeed(eq(JOB_ID), anyString(), eq(0));
+        verify(jobService).complete(eq(JOB_ID), eq(com.marketai.sync.entity.SyncJobStatus.SUCCEEDED), anyString(), eq(0));
+    }
+
+    private static GmailSyncResult result(int failed, String reconciliationStatus) {
+        return GmailSyncResult.builder().imported(3).failed(failed)
+            .reconciliation(GmailSyncResult.ReconciliationReport.builder().status(reconciliationStatus).build())
+            .build();
+    }
+
+    @Test
+    @DisplayName("a run that failed some emails, or left something for the user, is not reported as a success")
+    void outcomeReflectsWhatActuallyHappened() {
+        org.assertj.core.api.Assertions.assertThat(SyncJobRunner.outcomeOf(result(0, "OK")))
+            .isEqualTo(com.marketai.sync.entity.SyncJobStatus.SUCCEEDED);
+        org.assertj.core.api.Assertions.assertThat(SyncJobRunner.outcomeOf(result(2, "ACTION_REQUIRED")))
+            .isEqualTo(com.marketai.sync.entity.SyncJobStatus.PARTIAL_SUCCESS);
+        org.assertj.core.api.Assertions.assertThat(SyncJobRunner.outcomeOf(result(0, "ACTION_REQUIRED")))
+            .isEqualTo(com.marketai.sync.entity.SyncJobStatus.RECONCILIATION_REQUIRED);
     }
 }

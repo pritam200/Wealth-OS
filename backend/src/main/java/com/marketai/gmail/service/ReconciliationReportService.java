@@ -77,7 +77,9 @@ public class ReconciliationReportService {
         long unparsedEmails = Math.max(0, skippedTotal - excludedEmails - pdfQueuedEmails);
 
         long importedPdfs = pendingPdfRepo.countByUserIdAndStatus(userId, "IMPORTED");
-        long failedPdfs = pendingPdfRepo.countByUserIdAndStatus(userId, "FAILED");
+        // A scanned PDF that couldn't be read is a gap, not a success.
+        long failedPdfs = pendingPdfRepo.countByUserIdAndStatus(userId, "FAILED")
+            + pendingPdfRepo.countByUserIdAndStatus(userId, "NEEDS_OCR");
         long passwordFailedPdfs = pendingPdfRepo.countByUserIdAndStatus(userId, "PASSWORD_FAILED");
         long needsPasswordPdfs = pendingPdfRepo.countByUserIdAndStatus(userId, "NEEDS_PASSWORD");
 
@@ -122,14 +124,15 @@ public class ReconciliationReportService {
         }
 
         List<PendingPdf> problemPdfs = pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(
-            userId, Arrays.asList("FAILED", "PASSWORD_FAILED"));
+            userId, Arrays.asList("FAILED", "PASSWORD_FAILED", "NEEDS_OCR"));
         for (PendingPdf pdf : problemPdfs) {
             details.add(ReconciliationReportDto.DetailRow.builder()
                 .gmailMessageId(pdf.getGmailMessageId())
                 .subject(pdf.getFilename())
                 .sender(pdf.getSender())
                 .matchedParser(null)
-                .status("Failed")
+                .status("PASSWORD_FAILED".equals(pdf.getStatus()) ? "Password failed"
+                    : "NEEDS_OCR".equals(pdf.getStatus()) ? "Scanned — unreadable" : "Failed")
                 .reason(pdf.getResultSummary())
                 .processedAt(pdf.getUnlockedAt() != null ? pdf.getUnlockedAt() : pdf.getCreatedAt())
                 .source("PDF")

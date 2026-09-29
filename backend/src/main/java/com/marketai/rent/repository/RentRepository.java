@@ -14,7 +14,10 @@ public interface RentRepository extends JpaRepository<Rent, Long> {
 
     Optional<Rent> findByUserIdAndMonthAndScheduleId(Long userId, LocalDate month, Long scheduleId);
 
-    Optional<Rent> findByUserIdAndMonthAndPaidDateIsNull(Long userId, LocalDate month);
+    List<Rent> findByUserIdAndMonth(Long userId, LocalDate month);
+
+    List<Rent> findByUserIdAndAmountAndSourceEmailIdIsNullAndPaidDateBetween(Long userId, BigDecimal amount,
+                                                                              LocalDate from, LocalDate to);
 
     List<Rent> findByUserIdAndMonthAndAmountAndPaidDateIsNull(Long userId, LocalDate month, BigDecimal amount);
 
@@ -24,4 +27,6 @@ public interface RentRepository extends JpaRepository<Rent, Long> {
                                                            java.math.BigDecimal amount, java.time.LocalDate paidDate);
 
     boolean existsByIdAndUserId(Long id, Long userId);
+
+    Optional<Rent> findByIdAndUserId(Long id, Long userId);
 }

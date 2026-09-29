@@ -33,4 +33,10 @@ public class RentRequest {
 
     @Size(max = 500)
     private String note;
+
+    /** The schedule this instalment belongs to, when paying one shown as upcoming. */
+    private Long scheduleId;
+
+    /** Record it even though the same payment was already read from email. */
+    private boolean confirmSeparate;
 }

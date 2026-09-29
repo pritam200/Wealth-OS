@@ -37,4 +37,8 @@ public class AddHoldingRequest {
     private String isin;      // MF scheme or listed equity ISIN
     private String dpId;      // demat Depository Participant id (equity)
     private String clientId;  // broker client id (equity)
+
+    /** Set by the importer only; never read from a request body. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private com.marketai.common.ledger.Provenance provenance;
 }

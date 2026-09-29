@@ -55,7 +55,7 @@ public class RecurringInvestment {
 
     @Builder.Default
     @Column(length = 12)
-    private String status = "ACTIVE"; // ACTIVE | PAUSED | COMPLETED
+    private String status = "ACTIVE"; // ACTIVE | PAUSED | COMPLETED | CANCELLED
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default

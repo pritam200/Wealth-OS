@@ -15,6 +15,9 @@ public class IncomeResponse {
     private String payer;
     private String paymentMethod;
     private String sourceEmailId;
+    /** True when nothing was added because this transaction was already recorded; the existing
+     *  record is returned. */
+    private boolean alreadyRecorded;
     private String note;
     private LocalDateTime createdAt;
 }

@@ -40,7 +40,7 @@ public class SyncJob {
     private SyncJobType type;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
+    @Column(nullable = false, length = 30)
     @Builder.Default
     private SyncJobStatus status = SyncJobStatus.QUEUED;
 
@@ -98,6 +98,8 @@ public class SyncJob {
 
     public boolean isTerminal() {
         return status == SyncJobStatus.SUCCEEDED
+            || status == SyncJobStatus.PARTIAL_SUCCESS
+            || status == SyncJobStatus.RECONCILIATION_REQUIRED
             || status == SyncJobStatus.FAILED
             || status == SyncJobStatus.CANCELLED;
     }

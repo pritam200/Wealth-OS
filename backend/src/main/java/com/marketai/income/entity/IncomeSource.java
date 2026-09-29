@@ -32,6 +32,12 @@ public enum IncomeSource {
 
     public String getLabel() { return label; }
 
+    /** Display label for a grouped query column, which JPA returns as the enum, not its label. */
+    public static String labelOf(Object column) {
+        if (column instanceof IncomeSource s) return s.label;
+        return column == null ? OTHER.label : fromLabel(column.toString()).label;
+    }
+
     /** Looks up by display label or enum name (case-insensitive), mapping known legacy
      *  free-text variants and falling back to OTHER for anything unrecognised. */
     public static IncomeSource fromLabel(String label) {

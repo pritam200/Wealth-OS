@@ -36,6 +36,11 @@ public class EmailReviewService {
 
     private final EmailReviewItemRepository repo;
     private final ParsedEmailImporter importer;
+    private final com.marketai.gmail.ledger.FinancialEventLedger ledger;
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper PAYLOAD_JSON =
+        new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules()
+            .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     /**
      * Item index for a "this whole email could not be read" placeholder. Kept apart from the
@@ -88,7 +93,10 @@ public class EmailReviewService {
 
         item.setSender(trim(sender, 320));
         item.setSubject(trim(subject, 500));
-        item.setProposedType(result.getType() != null ? result.getType().name() : EmailIntelType.UNKNOWN.name());
+        EmailIntelType proposed = result.getType() != null ? result.getType() : EmailIntelType.UNKNOWN;
+        if (proposed == EmailIntelType.UNKNOWN) proposed = EmailIntelType.forParsed(result.getParsed());
+        item.setProposedType(proposed.name());
+        item.setParsedPayload(writePayload(result.getParsed()));
         item.setConfidence(result.getConfidence() != null ? BigDecimal.valueOf(result.getConfidence()) : null);
         item.setReviewReason(trim(result.getReviewReason(), 500));
         item.setReasoning(result.getReasoning());
@@ -147,8 +155,10 @@ public class EmailReviewService {
                 item.setStatus(ReviewStatus.REJECTED);
                 break;
             case "ACCEPT":
-                importDecided(user, item, item.getProposedType(), item.getAmount(),
-                    item.getTransactionDate(), item.getCounterparty(), req.getCorrectedCategory());
+                if (!importPayload(user, item, null, null, null, req.getCorrectedCategory())) {
+                    importDecided(user, item, item.getProposedType(), item.getAmount(),
+                        item.getTransactionDate(), item.getCounterparty(), req.getCorrectedCategory());
+                }
                 item.setStatus(ReviewStatus.ACCEPTED);
                 break;
             case "EDIT":
@@ -156,7 +166,14 @@ public class EmailReviewService {
                 BigDecimal amount = req.getCorrectedAmount() != null ? req.getCorrectedAmount() : item.getAmount();
                 LocalDate date = req.getCorrectedDate() != null ? req.getCorrectedDate() : item.getTransactionDate();
                 String party = req.getCorrectedCounterparty() != null ? req.getCorrectedCounterparty() : item.getCounterparty();
-                importDecided(user, item, type, amount, date, party, req.getCorrectedCategory());
+                // Same classification: correct the extracted record in place, keeping every
+                // field the form doesn't show (units, NAV, folio, bank, tenure...). A changed
+                // classification is a different kind of record, rebuilt from the form.
+                boolean sameType = EmailIntelType.fromLabel(type) == EmailIntelType.fromLabel(item.getProposedType());
+                if (!sameType || !importPayload(user, item, req.getCorrectedAmount(), req.getCorrectedDate(),
+                        req.getCorrectedCounterparty(), req.getCorrectedCategory())) {
+                    importDecided(user, item, type, amount, date, party, req.getCorrectedCategory());
+                }
                 item.setProposedType(type);
                 item.setAmount(amount);
                 item.setTransactionDate(date);
@@ -169,7 +186,61 @@ public class EmailReviewService {
 
         item.setResolvedAt(LocalDateTime.now());
         item.setResolutionNote(trim(req.getNote(), 500));
-        return repo.save(item);
+        EmailReviewItem saved = repo.save(item);
+        // The events behind this item are now accounted for, by a person.
+        ledger.onReviewDecision(user.getId(), item.getGmailMessageId(), item.getItemIndex(),
+            item.getStatus() != ReviewStatus.REJECTED, req.getNote());
+        return saved;
+    }
+
+    /**
+     * Books the held-back record itself, with any corrections applied. Returns false when the
+     * item has no stored record (older items, or a whole-email placeholder), so the caller
+     * falls back to building one from the form.
+     */
+    private boolean importPayload(User user, EmailReviewItem item, BigDecimal amount, LocalDate date,
+                                  String counterparty, String category) {
+        ParsedEmail stored = readPayload(item.getParsedPayload());
+        if (stored == null || stored.getType() == null || stored.getType() == ParsedEmail.Type.UNKNOWN) return false;
+        if (!EmailIntelType.fromLabel(item.getProposedType()).isImportable()) {
+            log.info("Review item {} accepted as {} — recorded as a judgement, no financial row created",
+                item.getId(), item.getProposedType());
+            return true;
+        }
+        ParsedEmail.ParsedEmailBuilder b = stored.toBuilder().userConfirmed(true);
+        if (amount != null) b.amount(amount);
+        if (date != null) {
+            // The importer reads the date from the field its type uses: a deposit's start, a
+            // card payment's payment date, everything else the transaction date.
+            b.tradeDate(date);
+            if (stored.getStartDate() != null) b.startDate(date);
+            if (stored.getPaymentDate() != null) b.paymentDate(date);
+        }
+        if (counterparty != null) b.merchant(counterparty);
+        if (category != null) b.category(ExpenseCategory.fromLabel(category).getLabel());
+        runImport(user, item, b.build());
+        return true;
+    }
+
+    private static String writePayload(ParsedEmail pe) {
+        if (pe == null) return null;
+        try {
+            return PAYLOAD_JSON.writeValueAsString(pe);
+        } catch (Exception e) {
+            // Not fatal to queueing — the item can still be approved through the form.
+            log.warn("Could not store the extracted record for review: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static ParsedEmail readPayload(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            return PAYLOAD_JSON.readValue(json, ParsedEmail.class);
+        } catch (Exception e) {
+            log.warn("Stored review record could not be read: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -181,6 +252,12 @@ public class EmailReviewService {
     private void importDecided(User user, EmailReviewItem item, String typeName, BigDecimal amount,
                                LocalDate date, String counterparty, String category) {
         EmailIntelType type = EmailIntelType.fromLabel(typeName);
+        if (type == EmailIntelType.UNKNOWN) {
+            // Accepting "unknown" would record nothing and mark the email resolved — the loss the
+            // queue exists to prevent. The person has to say what it is.
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Say what this email is first — edit it and choose a type (or reject it if it isn't a transaction).");
+        }
         if (!type.isImportable()) {
             log.info("Review item {} accepted as {} — recorded as a judgement, no financial row created",
                 item.getId(), type);
@@ -208,10 +285,22 @@ public class EmailReviewService {
             .userConfirmed(true)
             .build();
 
+        runImport(user, item, pe);
+    }
+
+    private void runImport(User user, EmailReviewItem item, ParsedEmail pe) {
         try {
             // Goes through the fingerprint gate like any other import, so accepting a review
             // item that already arrived via a parser cannot create a second record.
-            importer.importParsedEmail(user.getId(), user, pe, item.getGmailMessageId());
+            var outcome = importer.importParsedEmail(user.getId(), user, pe, item.getGmailMessageId());
+            if (outcome != com.marketai.gmail.service.ParsedEmailImporter.ImportOutcome.IMPORTED) {
+                // Nothing was written; approving it must not read as though it was booked.
+                throw new ResponseStatusException(HttpStatus.CONFLICT, outcome == com.marketai.gmail.service.ParsedEmailImporter.ImportOutcome.CONFLICT
+                    ? "Nothing was added: a recorded transaction carries the same reference with different details. It has been flagged for you to check."
+                    : "Nothing was added: this transaction is already recorded. Reject this item to clear it.");
+            }
+        } catch (ResponseStatusException e) {
+            throw e;
         } catch (com.marketai.gmail.service.ImportRejectedException e) {
             // The item still can't be booked as-is (e.g. no saved card for a bill yet). A 409
             // with the reason tells the person what to fix; it is not a server fault.

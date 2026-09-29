@@ -2,7 +2,6 @@ package com.marketai.tax.lot;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 
 /**
  * One acquisition of units, with the cost basis that applies to it.
@@ -17,10 +16,10 @@ import java.time.temporal.ChronoUnit;
 public record TaxLot(String lotId, LocalDate acquiredOn, BigDecimal units,
                      BigDecimal costPerUnit, BigDecimal fmv20180131) {
 
+    /** Long-term when held for <i>more than</i> twelve months — a unit sold on the first
+     *  anniversary of its purchase is still short-term. */
     public boolean isLongTermAsOf(LocalDate disposalDate) {
-        if (acquiredOn == null || disposalDate == null) return false;
-        return ChronoUnit.MONTHS.between(acquiredOn, disposalDate)
-            >= CapitalGainsRates.LONG_TERM_MONTHS;
+        return CapitalGainsRates.isLongTerm(acquiredOn, disposalDate);
     }
 
     /**

@@ -31,6 +31,7 @@ import static org.mockito.Mockito.when;
 class FdRenewalTest {
 
     private FixedDepositRepository fdRepo;
+    private IncomeRepository incomeRepo;
     private TrackingService service;
 
     @BeforeEach
@@ -38,7 +39,7 @@ class FdRenewalTest {
         fdRepo = mock(FixedDepositRepository.class);
         service = new TrackingService(fdRepo, mock(RecurringDepositRepository.class),
             mock(LoanRepository.class), mock(EpfAccountRepository.class),
-            mock(IncomeRepository.class), mock(OtherAssetRepository.class));
+            incomeRepo = mock(IncomeRepository.class), mock(OtherAssetRepository.class));
         when(fdRepo.save(any(FixedDeposit.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -76,6 +77,31 @@ class FdRenewalTest {
         assertThat(old.getMaturityAmount().doubleValue()).isBetween(12500.0, 12800.0);
         assertThat(fresh.getRenewedFromId()).isEqualTo(100L);
         assertThat(result.getRenewedFromId()).isEqualTo(100L);
+    }
+
+    @Test
+    @DisplayName("Interest rolled into a renewal is booked once, from the new FD's actual principal")
+    void renewalBooksTheRolledOverInterest() {
+        LocalDate start = LocalDate.of(2025, 6, 1);
+        LocalDate maturity = LocalDate.of(2026, 6, 1);
+        FixedDeposit old = oldFd(100L, "HDFC Bank", new BigDecimal("11877"), new BigDecimal("6.25"), start, maturity);
+        when(fdRepo.findByUser_IdAndBankIgnoreCaseAndStatusIn(1L, "HDFC Bank", Arrays.asList("ACTIVE", "MATURED")))
+            .thenReturn(Collections.singletonList(old));
+        FixedDeposit fresh = FixedDeposit.builder()
+            .id(200L).bank("HDFC Bank").principal(new BigDecimal("12639")).rate(new BigDecimal("6.25"))
+            .compounding("quarterly").startDate(maturity).maturityDate(maturity.plusYears(1))
+            .status("ACTIVE").build();
+        when(fdRepo.findByIdAndUserId(200L, 1L)).thenReturn(Optional.of(fresh));
+
+        service.detectAndLinkRenewal(1L, 200L);
+
+        org.mockito.ArgumentCaptor<com.marketai.income.entity.Income> booked =
+            org.mockito.ArgumentCaptor.forClass(com.marketai.income.entity.Income.class);
+        org.mockito.Mockito.verify(incomeRepo).save(booked.capture());
+        assertThat(booked.getValue().getAmount()).isEqualByComparingTo("762");
+        assertThat(booked.getValue().getIncomeDate()).isEqualTo(maturity);
+        assertThat(old.getMaturityAmount()).isEqualByComparingTo("12639");
+        assertThat(old.getClosedDate()).isEqualTo(maturity);
     }
 
     @Test

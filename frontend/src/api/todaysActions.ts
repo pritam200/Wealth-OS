@@ -21,9 +21,11 @@ export interface PortfolioFlag {
 
 export interface PortfolioContext {
   stocksValue: number; mfValue: number; fdValue: number; rdValue: number;
-  epfValue: number; otherAssetsValue: number; loansOutstanding: number;
+  epfValue: number; otherAssetsValue: number; cashValue?: number; loansOutstanding: number;
+  cardDues?: number; totalLiabilities?: number;
   totalAssets: number; netWorth: number;
-  equityPercent: number | null; debtPercent: number | null; otherPercent: number | null;
+  equityPercent: number | null; debtPercent: number | null; otherPercent: number | null; cashPercent?: number | null;
+  holdingsAtCost?: number; valueAtCost?: number; holdingsStale?: number; valueStale?: number;
   equityInvested: number; equityCurrent: number; equityPnl: number; equityPnlPercent: number | null;
   stockCount: number; mfCount: number;
   topStockExposures: PortfolioExposure[];

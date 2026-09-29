@@ -2,8 +2,6 @@ package com.marketai.reconciliation.scheduler;
 
 import com.marketai.auth.entity.User;
 import com.marketai.auth.repository.UserRepository;
-import com.marketai.reconciliation.dto.ReconciliationIssue;
-import com.marketai.reconciliation.service.ReconciliationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -28,21 +26,23 @@ import org.springframework.stereotype.Component;
 public class ReconciliationScheduler {
 
     private final UserRepository userRepo;
-    private final ReconciliationService reconciliationService;
+    private final com.marketai.reconciliation.service.ReconciliationIssueService issueService;
+    private final com.marketai.common.jobs.JobHealthRecorder jobHealth;
 
+    /** Re-runs every check for every user and updates the stored issues (opening new ones,
+     *  resolving ones that have gone away). */
     @Scheduled(fixedDelay = 86_400_000, initialDelay = 180_000)
     public void scheduledReconciliationSweep() {
-        for (User user : userRepo.findAll()) {
-            try {
-                for (ReconciliationIssue issue : reconciliationService.checkAll(user.getId()).getIssues()) {
-                    if ("HIGH".equals(issue.getSeverity())) {
-                        log.warn("Reconciliation [{}/{}] user {}: {}",
-                            issue.getDomain(), issue.getType(), user.getId(), issue.getDescription());
-                    }
+        jobHealth.record("reconciliation-sweep", run -> {
+            for (User user : userRepo.findAll()) {
+                try {
+                    long high = issueService.refresh(user.getId()).stream()
+                        .filter(i -> "HIGH".equals(i.getSeverity())).count();
+                    if (high > 0) log.warn("Reconciliation: user {} has {} high-severity issue(s) open", user.getId(), high);
+                } catch (Exception e) {
+                    run.failed("user " + user.getId(), e);
                 }
-            } catch (Exception e) {
-                log.error("Scheduled reconciliation sweep failed for user {}: {}", user.getId(), e.getMessage());
             }
-        }
+        });
     }
 }

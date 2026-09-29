@@ -28,6 +28,10 @@ public class PortfolioContext {
     private BigDecimal otherAssetsValue;
     private BigDecimal cashValue;      // tracked bank/cash balances
     private BigDecimal loansOutstanding;
+    /** Still owed on credit cards (latest statement less payments since). */
+    private BigDecimal cardDues;
+    /** Loans plus card dues — what net worth subtracts. */
+    private BigDecimal totalLiabilities;
     private BigDecimal totalAssets;
     private BigDecimal netWorth;
 
@@ -35,6 +39,7 @@ public class PortfolioContext {
     private Double equityPercent;   // direct stocks + equity-oriented MF
     private Double debtPercent;     // FD + RD + EPF
     private Double otherPercent;
+    private Double cashPercent;     // bank balances — part of total assets, so the four sum to 100
 
     /* ── Equity book ───────────────────────────────────────────── */
     private BigDecimal equityInvested;
@@ -65,6 +70,12 @@ public class PortfolioContext {
     private String dataQuality;
     /** Named, specific gaps — rendered to the user instead of silently omitted analysis. */
     private List<String> dataGaps;
+    /** Holdings with no usable price, carried at cost — and the value so carried. */
+    private int holdingsAtCost;
+    private BigDecimal valueAtCost;
+    /** Holdings valued at a price older than the staleness window. */
+    private int holdingsStale;
+    private BigDecimal valueStale;
 
     @Data
     @Builder

@@ -216,4 +216,38 @@ class CardReconciliationServiceTest {
         assertThatThrownBy(() -> service.reconcile(999L, CARD))
             .isInstanceOf(ResponseStatusException.class);
     }
+
+    @Test
+    @DisplayName("Owed now = the latest statement less payments since it; older cycles are not added again")
+    void outstandingDuesUsesOnlyTheLatestStatement() {
+        when(cardRepo.findByUserIdOrderByCreatedAtDesc(USER))
+            .thenReturn(List.of(CreditCard.builder().id(CARD).userId(USER).name("Test Card").build()));
+        LocalDate aug = LocalDate.of(2026, 8, 20), sep = LocalDate.of(2026, 9, 20);
+        when(statementRepo.findByCardIdOrderByDueDateDesc(CARD)).thenReturn(List.of(
+            statement(2, sep, new BigDecimal("30000")),    // carries August's unpaid balance forward
+            statement(1, aug, new BigDecimal("20000"))));
+        when(paymentRepo.findByCardIdOrderByPaymentDateDesc(CARD)).thenReturn(List.of(
+            payment(5, sep.minusDays(5), new BigDecimal("10000"), CardPaymentStatus.CONFIRMED),   // after the Sept statement
+            payment(4, aug.minusDays(5), new BigDecimal("5000"), CardPaymentStatus.CONFIRMED),    // inside August's cycle
+            payment(6, sep.minusDays(4), new BigDecimal("9999"), CardPaymentStatus.REVERSED)));
+
+        CardReconciliationService.CardDues dues = service.outstandingDues(USER);
+
+        assertThat(dues.total()).isEqualByComparingTo("20000");
+        assertThat(dues.cards()).isEqualTo(1);
+        assertThat(dues.fromEnteredFigure()).isZero();
+    }
+
+    @Test
+    @DisplayName("A card with no statement falls back to the due amount entered on it, and says so")
+    void outstandingDuesFallsBackToTheEnteredFigure() {
+        when(cardRepo.findByUserIdOrderByCreatedAtDesc(USER)).thenReturn(List.of(
+            CreditCard.builder().id(CARD).userId(USER).name("Manual").currentDue(new BigDecimal("4500")).build()));
+        when(statementRepo.findByCardIdOrderByDueDateDesc(CARD)).thenReturn(List.of());
+
+        CardReconciliationService.CardDues dues = service.outstandingDues(USER);
+
+        assertThat(dues.total()).isEqualByComparingTo("4500");
+        assertThat(dues.fromEnteredFigure()).isEqualTo(1);
+    }
 }

@@ -138,6 +138,27 @@ public class ImportedTransactionFingerprint {
     @Column(nullable = false, updatable = false)
     private LocalDateTime importedAt;
 
+    /** The PDF attachment the event was read from; null for an email body. */
+    @Column(name = "attachment_id", length = 200)
+    private String attachmentId;
+
+    /** SHA-256 of the source document's text (statement PDFs). */
+    @Column(name = "document_hash", length = 64)
+    private String documentHash;
+
+    /** EMAIL_LLM or PDF_LLM (see {@link com.marketai.common.ledger.Provenance}). */
+    @Column(name = "extraction_method", length = 30)
+    private String extractionMethod;
+
+    @Column(name = "extraction_confidence")
+    private Double extractionConfidence;
+
+    /** Provider, model and prompt version that read it; null for records from before this was
+     *  kept, and for lines accepted by a person. A re-read by a different version is told apart
+     *  from a repeat of the same read by this (see ParsedEmailImporter). */
+    @Column(name = "extraction_version", length = 160)
+    private String extractionVersion;
+
     @PrePersist
     void onCreate() { if (importedAt == null) importedAt = LocalDateTime.now(); }
 }

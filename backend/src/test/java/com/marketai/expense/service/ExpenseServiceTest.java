@@ -92,4 +92,57 @@ class ExpenseServiceTest {
         assertThat(resp.getPaymentMethod()).isEqualTo("Credit Card");
         assertThat(resp.getCashAccountId()).isEqualTo(99L);
     }
+
+    private static ExpenseRequest coffee() {
+        ExpenseRequest req = new ExpenseRequest();
+        req.setDescription("Coffee");
+        req.setMerchant("Blue Tokai");
+        req.setAmount(new BigDecimal("250"));
+        req.setExpenseDate(LocalDate.of(2026, 9, 20));
+        return req;
+    }
+
+    @Test
+    void enteringByHandWhatTheEmailAlreadyRecordedAddsNothingAndSaysSo() {
+        Expense fromEmail = Expense.builder().id(5L).userId(1L).description("BLUE TOKAI COFFEE")
+                .merchant("BLUE TOKAI COFFEE ROASTERS").amount(new BigDecimal("250.00"))
+                .category(ExpenseCategory.FOOD).expenseDate(LocalDate.of(2026, 9, 20)).sourceEmailId("msg-1").build();
+        when(expenseRepository.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(any(), any(), any()))
+                .thenReturn(java.util.List.of(fromEmail));
+
+        ExpenseResponse resp = service.addExpense(1L, coffee());
+
+        assertThat(resp.isAlreadyRecorded()).isTrue();
+        assertThat(resp.getId()).isEqualTo(5L);
+        verify(expenseRepository, never()).save(any());
+    }
+
+    @Test
+    void theUserCanStillAddItWhenItReallyIsASecondPayment() {
+        Expense fromEmail = Expense.builder().id(5L).userId(1L).description("Blue Tokai").merchant("Blue Tokai")
+                .amount(new BigDecimal("250")).category(ExpenseCategory.FOOD)
+                .expenseDate(LocalDate.of(2026, 9, 20)).sourceEmailId("msg-1").build();
+        when(expenseRepository.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(any(), any(), any()))
+                .thenReturn(java.util.List.of(fromEmail));
+        ExpenseRequest req = coffee();
+        req.setConfirmSeparate(true);
+
+        ExpenseResponse resp = service.addExpense(1L, req);
+
+        assertThat(resp.isAlreadyRecorded()).isFalse();
+        verify(expenseRepository).save(any());
+    }
+
+    @Test
+    void twoHandEnteredCoffeesOnOneDayAreBothKept() {
+        Expense first = Expense.builder().id(6L).userId(1L).description("Coffee").merchant("Blue Tokai")
+                .amount(new BigDecimal("250")).category(ExpenseCategory.FOOD).expenseDate(LocalDate.of(2026, 9, 20)).build();
+        when(expenseRepository.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(any(), any(), any()))
+                .thenReturn(java.util.List.of(first));
+
+        ExpenseResponse resp = service.addExpense(1L, coffee());
+
+        assertThat(resp.isAlreadyRecorded()).isFalse();
+        verify(expenseRepository).save(any());
+    }
 }

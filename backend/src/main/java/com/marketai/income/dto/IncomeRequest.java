@@ -31,4 +31,8 @@ public class IncomeRequest {
 
     @Size(max = 500)
     private String note;
+
+    /** Set when the user has been told an identical transaction is already recorded (usually
+     *  from their email) and says this is a separate one. */
+    private boolean confirmSeparate;
 }

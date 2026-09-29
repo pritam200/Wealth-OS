@@ -32,6 +32,21 @@ public interface PendingPdfRepository extends JpaRepository<PendingPdf, Long> {
     Optional<PendingPdf> findFirstByUserIdAndProviderKeyAndPasswordHintIsNotNull(Long userId, String providerKey);
     List<PendingPdf> findByUserIdOrderByCreatedAtDesc(Long userId);
 
+    List<PendingPdf> findByUserIdAndGmailMessageId(Long userId, String gmailMessageId);
+
     // Used by the reconciliation report to count PDFs per status without loading every row.
     long countByUserIdAndStatus(Long userId, String status);
+
+    java.util.List<PendingPdf> findByUserIdAndCounts_TotalsCheck(Long userId, String totalsCheck);
+
+    /** Statement attachments by status. */
+    @org.springframework.data.jpa.repository.Query("select p.status, count(p) from PendingPdf p where p.userId = :userId group by p.status")
+    java.util.List<Object[]> countByStatus(@org.springframework.data.repository.query.Param("userId") Long userId);
+
+    /** Event totals across every statement: extracted, imported, duplicate, conflict, needs review, failed. */
+    @org.springframework.data.jpa.repository.Query("select coalesce(sum(p.counts.extracted), 0), coalesce(sum(p.counts.imported), 0), "
+        + "coalesce(sum(p.counts.duplicates), 0), coalesce(sum(p.counts.conflicts), 0), "
+        + "coalesce(sum(p.counts.needsReview), 0), coalesce(sum(p.counts.failed), 0) "
+        + "from PendingPdf p where p.userId = :userId")
+    java.util.List<Object[]> eventTotals(@org.springframework.data.repository.query.Param("userId") Long userId);
 }

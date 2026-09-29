@@ -28,7 +28,7 @@ public class RecurringInvestmentHistory {
     private LocalDateTime changedAt = LocalDateTime.now();
 
     @Column(nullable = false, length = 30)
-    private String field; // "amount" | "status"
+    private String field; // "amount" | "status" | "failed" (newValue = the due date, oldValue = the reason)
 
     @Column(name = "old_value", length = 100)
     private String oldValue;

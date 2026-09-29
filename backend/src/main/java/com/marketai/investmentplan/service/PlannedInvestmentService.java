@@ -52,6 +52,7 @@ public class PlannedInvestmentService {
         // Idempotent (guarded by findBySourceKindAndSourceRef) — safe to re-run on every read
         // rather than needing a dedicated scheduled job for SIP-completion matching.
         matcher.matchRecurringInvestmentCompletions(userId, normalized);
+        matcher.matchPortfolioPurchases(userId, normalized);
         return planRepository.findByUserIdAndMonthOrderByCreatedAtAsc(userId, normalized)
             .stream().map(this::toResponse).collect(Collectors.toList());
     }
@@ -90,10 +91,24 @@ public class PlannedInvestmentService {
             .totalPlanned(totalPlanned).totalCompleted(totalCompleted)
             .totalPending(totalPending).totalOverInvested(totalOverInvested)
             .completionRate(completionRate)
+            .totalFunded(sum(lines, PlannedInvestmentResponse::getFundedAmount))
+            .totalInvested(sum(lines, PlannedInvestmentResponse::getInvestedAmount))
+            .totalAwaitingInvestment(sum(lines, PlannedInvestmentResponse::getAwaitingInvestment))
             .completed(lines.stream().filter(l -> "COMPLETE".equals(l.getStatus())).collect(Collectors.toList()))
             .pending(lines.stream().filter(l -> "PLANNED".equals(l.getStatus()) || "PARTIAL".equals(l.getStatus())).collect(Collectors.toList()))
             .overInvested(lines.stream().filter(l -> "OVER_INVESTED".equals(l.getStatus())).collect(Collectors.toList()))
             .build();
+    }
+
+    /** Within this share of the planned amount counts as all of it (stamp duty, NAV rounding). */
+    static final BigDecimal SETTLE_TOLERANCE = new BigDecimal("0.02");
+
+    static String stage(BigDecimal planned, BigDecimal funded, BigDecimal invested) {
+        if (planned != null && planned.signum() > 0
+                && invested.compareTo(planned.multiply(BigDecimal.ONE.subtract(SETTLE_TOLERANCE))) >= 0) return "SETTLED";
+        if (funded.compareTo(invested) > 0) return "FUNDED";
+        if (invested.signum() > 0) return "INVESTED";
+        return "PLANNED";
     }
 
     private BigDecimal sum(List<PlannedInvestmentResponse> lines, java.util.function.Function<PlannedInvestmentResponse, BigDecimal> f) {
@@ -113,7 +128,15 @@ public class PlannedInvestmentService {
             ? actual.min(planned).divide(planned, 4, java.math.RoundingMode.HALF_UP).doubleValue() * 100
             : 0.0;
 
+        BigDecimal invested = reconciliationRepository.matchedAmount(p.getId(), InvestmentReconciliationRepository.INVESTING_KINDS);
+        // Money that was invested was necessarily funded, whether or not the transfer itself was
+        // recorded (a SIP debits the bank directly).
+        BigDecimal funded = reconciliationRepository.matchedAmount(p.getId(), InvestmentReconciliationRepository.FUNDING_KINDS).max(invested);
+        String stage = stage(planned, funded, invested);
+
         return PlannedInvestmentResponse.builder()
+            .stage(stage).fundedAmount(funded).investedAmount(invested)
+            .awaitingInvestment(funded.subtract(invested).max(BigDecimal.ZERO))
             .id(p.getId()).month(p.getMonth()).sourceAccountId(p.getSourceAccountId())
             .plannedAmount(planned).investmentType(p.getInvestmentType().name())
             .destinationRef(p.getDestinationRef()).scheduled(p.isScheduled()).dueDate(p.getDueDate())

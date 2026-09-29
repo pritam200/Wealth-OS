@@ -45,7 +45,9 @@ public class GmailController {
     private final PdfImportService pdfImportService;
     private final ExcludedSenderRepository excludedSenderRepo;
     private final ReconciliationReportService reconciliationReportService;
-    private final com.marketai.gmail.repository.ImportedTransactionFingerprintRepository fingerprintRepo;
+    private final com.marketai.gmail.service.GmailResyncResetService resyncResetService;
+    private final com.marketai.gmail.ledger.EmailManifestService manifestService;
+    private final com.marketai.gmail.ledger.FinancialEventLedger eventLedger;
 
     @Value("${gmail.frontend-url:http://localhost:5174}")
     private String frontendUrl;
@@ -193,6 +195,29 @@ public class GmailController {
         return ResponseEntity.ok(reconciliationReportService.build(user.getId()));
     }
 
+    /** Every financial event from email not yet accounted for, each with its reason. */
+    @GetMapping("/events/unresolved")
+    public ResponseEntity<com.marketai.gmail.ledger.EmailManifestService.UnresolvedView> unresolvedEvents(
+            @AuthenticationPrincipal User user, @RequestParam(defaultValue = "300") int limit) {
+        return ResponseEntity.ok(manifestService.unresolved(user.getId(), limit));
+    }
+
+    /** The import manifest of one email: its body and attachments, every event and where it ended up. */
+    @GetMapping("/emails/{gmailMessageId}/manifest")
+    public ResponseEntity<com.marketai.gmail.ledger.EmailManifestService.Manifest> emailManifest(
+            @AuthenticationPrincipal User user, @PathVariable String gmailMessageId) {
+        return ResponseEntity.ok(manifestService.get(user.getId(), gmailMessageId));
+    }
+
+    /** Marks an email-level problem (totals mismatch, conflict, unreadable attachment) as checked. */
+    @PostMapping("/events/{id}/resolve")
+    public ResponseEntity<com.marketai.gmail.ledger.EmailFinancialEvent> resolveEvent(
+            @AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody(required = false) Map<String, String> body) {
+        var row = eventLedger.acknowledge(user.getId(), id, body != null ? body.get("note") : null);
+        manifestService.get(user.getId(), row.getGmailMessageId());
+        return ResponseEntity.ok(row);
+    }
+
     @GetMapping("/contract-note-debug")
     public ResponseEntity<List<PendingPdf>> contractNoteDebug(@AuthenticationPrincipal User user) {
         return ResponseEntity.ok(pdfImportService.listAll(user.getId()));
@@ -272,52 +297,29 @@ public class GmailController {
     }
 
     @PostMapping("/resync")
-    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<GmailSyncResult> fullResync(@AuthenticationPrincipal User user) {
         if (!gmailClientService.isConfigured()) {
             return ResponseEntity.ok(GmailSyncResult.builder().imported(0).skipped(0).failed(0)
                     .summaries(Collections.singletonList("Gmail not configured"))
                     .logEntries(Collections.emptyList()).build());
         }
-        // Full rebuild: delete ALL ProcessedEmail entries so every email is re-processed.
-        // Content-based dedup in ParsedEmailImporter prevents actual domain-data duplicates
-        // (same amount+date+merchant for expenses/income, same symbol+date+qty+price for trades).
-        // This means: if the user deleted a dividend and runs Full Resync, it will be re-imported
-        // from Gmail because the dedup check won't find a matching domain record.
-        processedRepo.deleteByUserId(user.getId());
-        // Also clear the SHA-256 content fingerprints, otherwise they would (correctly) refuse
-        // every re-import and a full resync would find nothing to do. Dropping them restores the
-        // documented Full Resync behaviour above: re-import is gated on whether the actual
-        // domain record still exists, not on whether it was ever imported before.
-        fingerprintRepo.deleteByUserId(user.getId());
-
-        // Reset importedCount for a clean baseline
-        tokenRepo.findByUserId(user.getId()).ifPresent(token -> {
-            token.setImportedCount(0);
-            tokenRepo.save(token);
-        });
-
-        // Reset all PASSWORD_FAILED and FAILED PDFs back to NEEDS_PASSWORD so they get retried
-        pdfImportService.resetFailedPasswords(user.getId());
-        pdfImportService.resetFailedPdfs(user.getId());
-
-        GmailSyncResult result = gmailSyncService.syncForUser(user.getId(), "365d");
-        return ResponseEntity.ok(result);
+        // Re-reads every email from the last year. The reset runs only once the sync lock is
+        // held, and keeps transaction fingerprints, so nothing already booked is booked again.
+        Long userId = user.getId();
+        return ResponseEntity.ok(gmailSyncService.syncForUser(userId, "365d",
+            () -> resyncResetService.resetForFullResync(userId)));
     }
 
     @PostMapping("/retry-failed")
-    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<GmailSyncResult> retryFailed(@AuthenticationPrincipal User user) {
         if (!gmailClientService.isConfigured()) {
             return ResponseEntity.ok(GmailSyncResult.builder().imported(0).skipped(0).failed(0)
                     .summaries(Collections.singletonList("Gmail not configured"))
                     .logEntries(Collections.emptyList()).build());
         }
-        processedRepo.deleteByUserIdAndStatusIn(user.getId(), java.util.Arrays.asList("SKIPPED", "FAILED"));
-        pdfImportService.resetFailedPasswords(user.getId());
-        pdfImportService.resetFailedPdfs(user.getId());
-        GmailSyncResult result = gmailSyncService.syncForUser(user.getId(), "30d");
-        return ResponseEntity.ok(result);
+        Long userId = user.getId();
+        return ResponseEntity.ok(gmailSyncService.syncForUser(userId, "30d",
+            () -> resyncResetService.resetForRetry(userId)));
     }
 
     @DeleteMapping("/disconnect")

@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class TrackingService {
 
     private final FixedDepositRepository fdRepo;
@@ -42,6 +43,7 @@ public class TrackingService {
             .maturityDate(req.getMaturityDate())
             .accountNumber(req.getAccountNumber())
             .accountLast4(resolveAccountLast4(req.getAccountNumber(), req.getAccountLast4()))
+            .provenance(req.getProvenance() != null ? req.getProvenance() : com.marketai.common.ledger.Provenance.manual())
             .build();
         fd = fdRepo.save(fd);
         markMaturedIfAlreadyPast(fd);
@@ -107,12 +109,34 @@ public class TrackingService {
 
         if (best != null) {
             best.setStatus("MATURED_RENEWED");
-            best.setMaturityAmount(bestMaturityValue);
+            // What actually rolled over is the new deposit's principal, not the computed value.
+            best.setMaturityAmount(newFd.getPrincipal() != null ? newFd.getPrincipal() : bestMaturityValue);
+            best.setClosedDate(newFd.getStartDate());
             best.setRenewedToId(newFd.getId());
             fdRepo.save(best);
 
             newFd.setRenewedFromId(best.getId());
             newFd = fdRepo.save(newFd);
+
+            // The interest rolled into the new principal was earned (and is taxable) even though
+            // no cash was paid out. A renewed deposit can't be closed afterwards, so this is the
+            // only point at which it is booked. It is what was rolled over; TDS withheld at
+            // renewal, if any, isn't stated, so the figure is the net amount.
+            if (newFd.getPrincipal() != null && best.getPrincipal() != null) {
+                BigDecimal rolled = newFd.getPrincipal().subtract(best.getPrincipal());
+                if (rolled.signum() > 0) {
+                    incomeRepo.save(com.marketai.income.entity.Income.builder()
+                        .userId(userId)
+                        .description("FD interest — " + best.getBank() + " (renewed)")
+                        .amount(rolled)
+                        .source(com.marketai.income.entity.IncomeSource.INTEREST)
+                        .incomeDate(newFd.getStartDate())
+                        .payer(best.getBank())
+                        .note("Rolled into the renewed FD. Old principal: ₹" + best.getPrincipal() + ", new principal: ₹"
+                            + newFd.getPrincipal() + ". Any TDS withheld at renewal is not included.")
+                        .build());
+                }
+            }
         }
 
         return toFdResponse(newFd);
@@ -132,25 +156,64 @@ public class TrackingService {
 
     @Transactional
     public FdResponse closeFd(Long id, Long userId, BigDecimal actualAmount) {
+        return closeFd(id, userId, actualAmount, null, null, null);
+    }
+
+    /**
+     * Closes an FD on the bank's own figures — the amount paid out, the TDS withheld and the day
+     * it was paid, as stated by the payout advice. The principal comes back as cash; only what
+     * exceeds it is interest, booked gross (paid out plus TDS) with the TDS recorded beside it.
+     *
+     * @param closedOn  the payout date; null means maturity date if past, else today
+     * @param sourceEmailId the email the payout was read from, or null for a manual close
+     */
+    @Transactional
+    public FdResponse closeFd(Long id, Long userId, BigDecimal actualAmount, BigDecimal tds, LocalDate closedOn,
+                              String sourceEmailId) {
         FixedDeposit fd = fdRepo.findByIdAndUserId(id, userId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        requireClosable(fd.getStatus(), "FD");
         BigDecimal received = actualAmount != null ? actualAmount :
             computeFdMaturity(fd.getPrincipal(), fd.getRate(), fd.getCompounding(), fd.getStartDate(), fd.getMaturityDate());
+        if (closedOn == null) closedOn = closingDate(fd.getMaturityDate());
         fd.setStatus("CLOSED");
         fd.setMaturityAmount(received);
-        fd.setClosedDate(LocalDate.now());
+        fd.setClosedDate(closedOn);
         fdRepo.save(fd);
-        BigDecimal interestEarned = received.subtract(fd.getPrincipal()).max(BigDecimal.ZERO);
+        BigDecimal withheld = tds != null && tds.signum() > 0 ? tds : null;
+        BigDecimal interestEarned = received.add(withheld != null ? withheld : BigDecimal.ZERO)
+            .subtract(fd.getPrincipal()).max(BigDecimal.ZERO);
         com.marketai.income.entity.Income inc = com.marketai.income.entity.Income.builder()
             .userId(userId)
             .description("FD interest — " + fd.getBank())
             .amount(interestEarned)
+            .tds(withheld)
             .source(com.marketai.income.entity.IncomeSource.INTEREST)
-            .incomeDate(LocalDate.now())
-            .note("FD closed. Principal: ₹" + fd.getPrincipal() + ", Maturity: ₹" + received + ", Rate: " + fd.getRate() + "%")
+            .incomeDate(closedOn)
+            .sourceEmailId(sourceEmailId)
+            .note("FD closed. Principal: ₹" + fd.getPrincipal() + ", Paid out: ₹" + received
+                + (withheld != null ? ", TDS: ₹" + withheld : "") + ", Rate: " + fd.getRate() + "%")
             .build();
         incomeRepo.save(inc);
         return toFdResponse(fd);
+    }
+
+    /**
+     * Closing books the interest. A deposit already closed or rolled into a renewal has had its
+     * money accounted for, so closing it again would book the same interest a second time.
+     */
+    private static void requireClosable(String status, String kind) {
+        if ("CLOSED".equalsIgnoreCase(status) || "MATURED_RENEWED".equalsIgnoreCase(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This " + kind + " is already " + ("CLOSED".equalsIgnoreCase(status) ? "closed" : "renewed")
+                + " — its interest has been accounted for.");
+        }
+    }
+
+    /** A deposit that ran to term paid out on its maturity date; one closed early, today. */
+    private static LocalDate closingDate(LocalDate maturityDate) {
+        LocalDate today = LocalDate.now();
+        return maturityDate != null && maturityDate.isBefore(today) ? maturityDate : today;
     }
 
     private FdResponse toFdResponse(FixedDeposit fd) {
@@ -228,6 +291,7 @@ public class TrackingService {
             .rate(req.getRate())
             .startDate(req.getStartDate())
             .tenureMonths(req.getTenureMonths())
+            .provenance(req.getProvenance() != null ? req.getProvenance() : com.marketai.common.ledger.Provenance.manual())
             .build();
         rd = rdRepo.save(rd);
         markMaturedIfAlreadyPast(rd);
@@ -279,11 +343,30 @@ public class TrackingService {
         if (best != null) {
             best.setStatus("MATURED_RENEWED");
             best.setMaturityAmount(bestCorpus);
+            best.setClosedDate(newRd.getStartDate());
             best.setRenewedToId(newRd.getId());
             rdRepo.save(best);
 
             newRd.setRenewedFromId(best.getId());
             newRd = rdRepo.save(newRd);
+
+            // As for FDs: a renewed RD can't be closed afterwards, so its interest is booked
+            // here. Nothing states what was actually paid, so the figure is the corpus computed
+            // from rate and tenure, and the note says so.
+            BigDecimal deposited = best.getMonthlyAmount().multiply(BigDecimal.valueOf(best.getTenureMonths()));
+            BigDecimal interest = bestCorpus.subtract(deposited);
+            if (interest.signum() > 0) {
+                incomeRepo.save(com.marketai.income.entity.Income.builder()
+                    .userId(userId)
+                    .description("RD interest — " + best.getBank() + " (renewed)")
+                    .amount(interest)
+                    .source(com.marketai.income.entity.IncomeSource.INTEREST)
+                    .incomeDate(newRd.getStartDate())
+                    .payer(best.getBank())
+                    .note("RD renewed. Computed from " + best.getRate() + "% over " + best.getTenureMonths()
+                        + " months on ₹" + deposited + " deposited; not a bank-stated figure. Correct it if the bank's differs.")
+                    .build());
+            }
         }
 
         return toRdResponse(newRd);
@@ -305,23 +388,46 @@ public class TrackingService {
      *  interest income and marks the RD CLOSED so it stops counting toward net worth. */
     @Transactional
     public RdResponse closeRd(Long id, Long userId, BigDecimal actualAmount) {
+        return closeRd(id, userId, actualAmount, null, null, null);
+    }
+
+    /** See {@link #closeFd(Long, Long, BigDecimal, BigDecimal, LocalDate, String)}. */
+    @Transactional
+    public RdResponse closeRd(Long id, Long userId, BigDecimal actualAmount, BigDecimal tds, LocalDate closedOn,
+                              String sourceEmailId) {
         RecurringDeposit rd = rdRepo.findByIdAndUserId(id, userId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        requireClosable(rd.getStatus(), "RD");
         BigDecimal received = actualAmount != null ? actualAmount :
             computeRdCorpus(rd.getMonthlyAmount(), rd.getRate(), rd.getTenureMonths());
-        BigDecimal totalDeposited = rd.getMonthlyAmount().multiply(BigDecimal.valueOf(rd.getTenureMonths()));
+        if (closedOn == null) {
+            closedOn = closingDate(rd.getStartDate() != null ? rd.getStartDate().plusMonths(rd.getTenureMonths()) : null);
+        }
+        // Instalments actually paid in: a premature closure returns fewer than the full tenure,
+        // and counting all of them as principal understated (to nil) the interest earned.
+        int instalments = rd.getTenureMonths();
+        if (rd.getStartDate() != null && closedOn.isBefore(rd.getStartDate().plusMonths(rd.getTenureMonths()))) {
+            instalments = (int) Math.max(1, Math.min(rd.getTenureMonths(),
+                ChronoUnit.MONTHS.between(rd.getStartDate(), closedOn) + 1));
+        }
+        BigDecimal totalDeposited = rd.getMonthlyAmount().multiply(BigDecimal.valueOf(instalments));
         rd.setStatus("CLOSED");
         rd.setMaturityAmount(received);
-        rd.setClosedDate(LocalDate.now());
+        rd.setClosedDate(closedOn);
         rdRepo.save(rd);
-        BigDecimal interestEarned = received.subtract(totalDeposited).max(BigDecimal.ZERO);
+        BigDecimal withheld = tds != null && tds.signum() > 0 ? tds : null;
+        BigDecimal interestEarned = received.add(withheld != null ? withheld : BigDecimal.ZERO)
+            .subtract(totalDeposited).max(BigDecimal.ZERO);
         com.marketai.income.entity.Income inc = com.marketai.income.entity.Income.builder()
             .userId(userId)
             .description("RD interest — " + rd.getBank())
             .amount(interestEarned)
+            .tds(withheld)
             .source(com.marketai.income.entity.IncomeSource.INTEREST)
-            .incomeDate(LocalDate.now())
-            .note("RD closed. Total deposited: ₹" + totalDeposited + ", Maturity: ₹" + received + ", Rate: " + rd.getRate() + "%")
+            .incomeDate(closedOn)
+            .sourceEmailId(sourceEmailId)
+            .note("RD closed. Deposited: ₹" + totalDeposited + " (" + instalments + " instalments), Paid out: ₹" + received
+                + (withheld != null ? ", TDS: ₹" + withheld : "") + ", Rate: " + rd.getRate() + "%")
             .build();
         incomeRepo.save(inc);
         return toRdResponse(rd);
@@ -623,21 +729,33 @@ public class TrackingService {
         }
     }
 
-    @Transactional
+    /**
+     * Not one transaction for everyone: each deposit is saved on its own, so a deposit being
+     * edited at that moment (a version conflict) is skipped until the next run instead of rolling
+     * back every other user's maturities with it.
+     */
     public void markMaturedDeposits() {
         LocalDate today = LocalDate.now();
         for (FixedDeposit fd : fdRepo.findByStatus("ACTIVE")) {
             if (fd.getMaturityDate() != null && !today.isBefore(fd.getMaturityDate())) {
                 fd.setStatus("MATURED");
-                fdRepo.save(fd);
+                saveOrSkip(() -> fdRepo.save(fd), "FD " + fd.getId());
             }
         }
         for (RecurringDeposit rd : rdRepo.findByStatus("ACTIVE")) {
             LocalDate maturity = rd.getMaturityDate();
             if (maturity != null && !today.isBefore(maturity)) {
                 rd.setStatus("MATURED");
-                rdRepo.save(rd);
+                saveOrSkip(() -> rdRepo.save(rd), "RD " + rd.getId());
             }
+        }
+    }
+
+    private static void saveOrSkip(Runnable save, String what) {
+        try {
+            save.run();
+        } catch (org.springframework.orm.ObjectOptimisticLockingFailureException e) {
+            log.info("{} changed while being marked matured; it is picked up on the next run", what);
         }
     }
 
@@ -706,6 +824,8 @@ public class TrackingService {
         BigDecimal totalFdPrincipal = activeFds.stream().map(FdResponse::getPrincipal).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalFdMaturity  = activeFds.stream().map(FdResponse::getMaturityValue).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalFdCurrent   = activeFds.stream().map(FdResponse::getCurrentValue).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalFdInterest  = activeFds.stream().map(FdResponse::getInterestEarned)
+            .filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
         // Same reasoning as FD above: a CLOSED or MATURED_RENEWED RD's money either left the
         // account or is now counted via the successor RD — including it here would double it.
         List<RdResponse> activeRds = rds.stream()
@@ -713,6 +833,8 @@ public class TrackingService {
             .collect(Collectors.toList());
         BigDecimal totalRdCorpus    = activeRds.stream().map(RdResponse::getProjectedCorpus).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalRdCurrent   = activeRds.stream().map(RdResponse::getCurrentValue).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalRdMonthly   = activeRds.stream().map(RdResponse::getMonthlyAmount)
+            .filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalOther       = others.stream().map(OtherAssetResponse::getValue).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalOutstanding = loans.stream().map(LoanResponse::getOutstanding).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal totalEmi         = loans.stream().map(LoanResponse::getEmi).reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -722,7 +844,9 @@ public class TrackingService {
             .totalFdPrincipal(totalFdPrincipal)
             .totalFdMaturityValue(totalFdMaturity)
             .totalFdCurrentValue(totalFdCurrent)
+            .totalFdInterest(totalFdInterest)
             .totalRdCorpus(totalRdCorpus)
+            .totalRdMonthly(totalRdMonthly)
             .totalRdCurrentValue(totalRdCurrent)
             .totalOtherAssets(totalOther)
             .totalEpf(totalEpf)

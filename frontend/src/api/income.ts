@@ -6,6 +6,7 @@ export interface IncomeRequest {
   source: string;
   incomeDate: string;
   note?: string;
+  confirmSeparate?: boolean;
 }
 
 export interface IncomeResponse {
@@ -17,6 +18,7 @@ export interface IncomeResponse {
   payer: string | null;
   paymentMethod: string | null;
   sourceEmailId: string | null;
+  alreadyRecorded?: boolean;
   note: string | null;
   createdAt: string;
 }

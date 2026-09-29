@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { AiProvenanceButton } from '../shared/AiProvenanceButton';
 import { Landmark, Plus, Edit2, Trash2, TrendingUp, Coins } from 'lucide-react';
 import { trackingApi } from '../../api/tracking';
 import type { FdRequest, FdResponse } from '../../api/tracking';
@@ -11,6 +12,7 @@ const fmtINR = (n: number) =>
 export function FDSection({ onRefresh }: { onRefresh: () => void }) {
   const maskText = useMaskedText();
   const [items, setItems] = useState<FdResponse[]>([]);
+  const [totals, setTotals] = useState<{ principal: number; interest: number; maturity: number }>({ principal: 0, interest: 0, maturity: 0 });
   const [open, setOpen]   = useState(false);
   const [saving, setSaving] = useState(false);
   const blank = { bank: '', principal: '', rate: '', compounding: 'quarterly', autoRenew: false, startDate: '', maturityDate: '' };
@@ -27,7 +29,13 @@ export function FDSection({ onRefresh }: { onRefresh: () => void }) {
   })();
 
   const load = useCallback(async () => {
-    try { const { data } = await trackingApi.listFds(); setItems(data); } catch {}
+    // The summary carries both the rows and the server's totals (live deposits only), so the
+    // tiles below show the same figures net worth uses rather than a browser-side sum.
+    try {
+      const { data } = await trackingApi.getSummary();
+      setItems(data.fds);
+      setTotals({ principal: data.totalFdPrincipal ?? 0, interest: data.totalFdInterest ?? 0, maturity: data.totalFdMaturityValue ?? 0 });
+    } catch {}
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -69,9 +77,7 @@ export function FDSection({ onRefresh }: { onRefresh: () => void }) {
     } catch {}
   };
 
-  const totalPrincipal = items.reduce((s, x) => s + x.principal, 0);
-  const totalInterest  = items.reduce((s, x) => s + x.interestEarned, 0);
-  const totalMaturity  = items.reduce((s, x) => s + x.maturityValue, 0);
+  const { principal: totalPrincipal, interest: totalInterest, maturity: totalMaturity } = totals;
 
   return (
     <div className="card">
@@ -167,6 +173,7 @@ export function FDSection({ onRefresh }: { onRefresh: () => void }) {
                     <button onClick={() => setClosingId(fd.id === closingId ? null : fd.id)}
                       className="btn-icon text-gray-500 hover:text-bull p-0.5 text-2xs" title="Record FD closure in your tracker (no real bank action)">✓</button>
                   )}
+                  <AiProvenanceButton record={{ kind: 'fd', id: fd.id }} />
                   <button aria-label="Delete" onClick={() => del(fd.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                 </div>
               </div>

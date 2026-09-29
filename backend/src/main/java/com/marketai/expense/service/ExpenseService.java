@@ -35,12 +35,15 @@ public class ExpenseService {
                 ? req.getMerchant()
                 : com.marketai.gmail.parser.SpendCategorizer.extractMerchant(req.getDescription());
 
-        Expense duplicate = findExistingDuplicate(userId, req.getAmount(), date, req.getDescription(), merchant);
+        Expense duplicate = req.isConfirmSeparate() ? null
+                : findRecordedFromEmail(userId, req.getAmount(), date, req.getDescription(), merchant);
         if (duplicate != null) {
-            // Same transaction already recorded (typically already imported from the bank's
-            // email alert). Return the existing row rather than silently creating a second one —
-            // the user's spend total must not double just because they also entered it by hand.
-            return toResponse(duplicate);
+            // Already imported from the bank's or merchant's email. Adding it again would double
+            // the spend, so the existing record is returned and flagged; the user can still add
+            // it with confirmSeparate if it really is a second payment.
+            ExpenseResponse existing = toResponse(duplicate);
+            existing.setAlreadyRecorded(true);
+            return existing;
         }
 
         Expense expense = Expense.builder()
@@ -58,18 +61,19 @@ public class ExpenseService {
     }
 
     /**
-     * Cross-source duplicate check: same amount, same date, and a matching merchant or
-     * description already on file. Deliberately same-day + exact-amount only — a looser window
-     * would start suppressing genuine repeat spends (two coffees, same price, same shop), which
-     * would understate real expenses.
+     * An email-imported expense this manual entry describes: same amount, same day, and the same
+     * counterparty (normalised, so "SWIGGY*BLR" and "Swiggy" match). Only rows that came from an
+     * email are considered — two hand-entered ₹250 coffees on one day are the user's own record
+     * of two payments, and are both kept.
      */
-    private Expense findExistingDuplicate(Long userId, BigDecimal amount, LocalDate date,
+    private Expense findRecordedFromEmail(Long userId, BigDecimal amount, LocalDate date,
                                           String description, String merchant) {
         if (amount == null || date == null) return null;
+        String[] mine = {merchant, description};
         for (Expense e : expenseRepository.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(userId, date, date)) {
+            if (e.getSourceEmailId() == null) continue;
             if (e.getAmount() == null || e.getAmount().compareTo(amount) != 0) continue;
-            if (merchant != null && merchant.equalsIgnoreCase(e.getMerchant())) return e;
-            if (description != null && description.equalsIgnoreCase(e.getDescription())) return e;
+            if (com.marketai.common.ledger.PartyNames.anySame(mine, new String[]{e.getMerchant(), e.getDescription()})) return e;
         }
         return null;
     }
@@ -166,6 +170,8 @@ public class ExpenseService {
         Map<String, Object> summary = new HashMap<>();
         summary.put("total", total);
         summary.put("byCategory", byCategory);
+        BigDecimal transfers = expenseRepository.sumTransfers(userId, from, to);
+        summary.put("transfers", transfers != null ? transfers : BigDecimal.ZERO);
         return summary;
     }
 

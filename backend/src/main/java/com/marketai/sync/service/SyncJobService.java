@@ -56,8 +56,14 @@ public class SyncJobService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void succeed(Long jobId, String resultSummary, Integer itemsProcessed) {
+        complete(jobId, SyncJobStatus.SUCCEEDED, resultSummary, itemsProcessed);
+    }
+
+    /** Finishes a job that ran to the end, with the outcome it actually had. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void complete(Long jobId, SyncJobStatus outcome, String resultSummary, Integer itemsProcessed) {
         repo.findById(jobId).ifPresent(job -> {
-            job.setStatus(SyncJobStatus.SUCCEEDED);
+            job.setStatus(outcome);
             job.setResultSummary(truncate(resultSummary, 20_000));
             if (itemsProcessed != null) job.setItemsProcessed(itemsProcessed);
             job.setFinishedAt(LocalDateTime.now());
@@ -91,6 +97,26 @@ public class SyncJobService {
         });
     }
 
+    /**
+     * Puts a claimed job back in the queue without using up an attempt — for a job that could
+     * not start because another sync for the same user was already running.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void release(Long jobId) {
+        repo.findById(jobId).ifPresent(job -> {
+            job.setStatus(SyncJobStatus.QUEUED);
+            job.setAttempts(Math.max(0, job.getAttempts() - 1));
+            job.setClaimedBy(null);
+            job.setClaimedAt(null);
+            repo.save(job);
+        });
+    }
+
+    /** Whether a job for this user is running, so the worker doesn't start a second one. */
+    public boolean hasRunningJob(Long userId) {
+        return repo.existsByUser_IdAndStatusIn(userId, List.of(SyncJobStatus.RUNNING));
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void progress(Long jobId, int processed, Integer total) {
         repo.findById(jobId).ifPresent(job -> {
@@ -117,12 +143,14 @@ public class SyncJobService {
     /**
      * Returns jobs stuck in RUNNING to the queue. A job whose worker died mid-run would
      * otherwise stay RUNNING forever, and the duplicate guard would refuse every later sync
-     * for that user.
+     * for that user. A job whose user's sync lock is still being refreshed is alive — however
+     * long it has run — and is left alone; requeuing it would run the same sync twice.
      */
     @Transactional
-    public int requeueStale(java.time.Duration staleAfter) {
-        List<SyncJob> stale = repo.findStaleRunning(LocalDateTime.now().minus(staleAfter));
-        for (SyncJob job : stale) {
+    public int requeueStale(java.time.Duration staleAfter, java.util.function.LongPredicate syncStillRunning) {
+        int requeued = 0;
+        for (SyncJob job : repo.findStaleRunning(LocalDateTime.now().minus(staleAfter))) {
+            if (job.getUser() != null && syncStillRunning.test(job.getUser().getId())) continue;
             log.warn("Requeuing stale job {} (claimed by {} at {})",
                 job.getId(), job.getClaimedBy(), job.getClaimedAt());
             job.setStatus(job.getAttempts() < job.getMaxAttempts()
@@ -134,8 +162,9 @@ public class SyncJobService {
                 job.setFinishedAt(LocalDateTime.now());
             }
             repo.save(job);
+            requeued++;
         }
-        return stale.size();
+        return requeued;
     }
 
     private static String truncate(String s, int max) {

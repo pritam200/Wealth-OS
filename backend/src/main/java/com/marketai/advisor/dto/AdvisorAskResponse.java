@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -18,6 +19,9 @@ public class AdvisorAskResponse {
     private String answer;
     private AdvisorTool tool;
     private Map<String, Object> groundedData;
+    /** The records behind the answer, each with a way to its source document. */
+    @Builder.Default
+    private List<AdvisorEvidence> evidence = List.of();
     private boolean available;
     private LocalDateTime generatedAt;
 }

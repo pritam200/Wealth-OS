@@ -73,4 +73,31 @@ public final class XirrCalculator {
         if (Double.isNaN(rate) || Double.isInfinite(rate)) return null;
         return rate * 100.0;
     }
+
+    /**
+     * The one XIRR for a holding: its BUY/SELL cash flows plus its current value as a final
+     * "as-if-sold-today" flow. Falls back to the stored {@link com.marketai.portfolio.entity.Holding#getXirr()}
+     * (a statement figure) only when the ledger cannot produce an answer — no transactions, or
+     * flows that do not converge.
+     */
+    public static java.math.BigDecimal holdingXirr(com.marketai.portfolio.entity.Holding h,
+                                                   java.util.List<com.marketai.portfolio.entity.Transaction> txns) {
+        if (txns == null || txns.isEmpty()) return h.getXirr();
+        java.util.List<CashFlow> flows = new java.util.ArrayList<>();
+        for (com.marketai.portfolio.entity.Transaction t : txns) {
+            if (t.getTransactionDate() == null || t.getPrice() == null || t.getQuantity() == null) continue;
+            // Bonus shares and splits move no money.
+            if (t.getType() == com.marketai.portfolio.entity.Transaction.TransactionType.BONUS
+                    || t.getType() == com.marketai.portfolio.entity.Transaction.TransactionType.SPLIT) continue;
+            java.math.BigDecimal amount = t.getPrice().multiply(t.getQuantity());
+            if (t.getType() == com.marketai.portfolio.entity.Transaction.TransactionType.BUY) amount = amount.negate();
+            flows.add(new CashFlow(t.getTransactionDate(), amount));
+        }
+        java.math.BigDecimal currentValue = h.getCurrentValue();
+        if (currentValue != null && currentValue.signum() > 0) {
+            flows.add(new CashFlow(java.time.LocalDate.now(), currentValue));
+        }
+        Double pct = computeXirrPercent(flows);
+        return pct != null ? java.math.BigDecimal.valueOf(pct).setScale(2, java.math.RoundingMode.HALF_UP) : h.getXirr();
+    }
 }

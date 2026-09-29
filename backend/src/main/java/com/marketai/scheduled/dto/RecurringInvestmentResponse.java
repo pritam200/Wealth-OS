@@ -20,5 +20,8 @@ public class RecurringInvestmentResponse {
     private List<InstallmentStatus> installments; // recent history + near-future, upcoming/completed/missed
     private int completedCount;
     private int missedCount;
+    private int partialCount;
+    private int failedCount;
+    private int pausedCount;
     private List<AmountChange> amountHistory; // amount/status changes over time, oldest first
 }

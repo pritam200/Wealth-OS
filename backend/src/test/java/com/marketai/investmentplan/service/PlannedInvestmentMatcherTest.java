@@ -33,7 +33,8 @@ class PlannedInvestmentMatcherTest {
         planRepository = mock(PlannedInvestmentRepository.class);
         reconciliationRepository = mock(InvestmentReconciliationRepository.class);
         recurringInvestmentService = mock(RecurringInvestmentService.class);
-        matcher = new PlannedInvestmentMatcher(planRepository, reconciliationRepository, recurringInvestmentService);
+        matcher = new PlannedInvestmentMatcher(planRepository, reconciliationRepository, recurringInvestmentService,
+            mock(com.marketai.portfolio.repository.TransactionRepository.class));
 
         when(planRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         when(reconciliationRepository.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -115,9 +116,10 @@ class PlannedInvestmentMatcherTest {
     @Test
     void completedSipInstallmentMatchesOpenMutualFundPlanLine() {
         PlannedInvestment plan = plan(new BigDecimal("5000"), PlannedInvestment.InvestmentType.MUTUAL_FUND, "HDFC Flexi Cap");
-        when(planRepository.findByUserIdAndMonthAndStatusIn(eq(7L), eq(LocalDate.of(2026, 9, 1)), anyList()))
+        when(planRepository.findByUserIdAndMonthOrderByCreatedAtAsc(eq(7L), eq(LocalDate.of(2026, 9, 1))))
             .thenReturn(List.of(plan));
-        when(reconciliationRepository.sumMatchedAmountByPlanId(1L)).thenReturn(BigDecimal.ZERO, new BigDecimal("5000"));
+        when(reconciliationRepository.matchedAmount(any(), any())).thenReturn(BigDecimal.ZERO);
+        when(reconciliationRepository.sumMatchedAmountByPlanId(1L)).thenReturn(new BigDecimal("5000"));
         when(reconciliationRepository.findBySourceKindAndSourceRef(eq("RECURRING_INVESTMENT"), anyString()))
             .thenReturn(Optional.empty());
 
@@ -136,7 +138,7 @@ class PlannedInvestmentMatcherTest {
 
     @Test
     void alreadyReconciledInstallmentIsSkippedIdempotently() {
-        when(planRepository.findByUserIdAndMonthAndStatusIn(eq(7L), any(), anyList()))
+        when(planRepository.findByUserIdAndMonthOrderByCreatedAtAsc(eq(7L), any()))
             .thenReturn(List.of(plan(new BigDecimal("5000"), PlannedInvestment.InvestmentType.MUTUAL_FUND, "HDFC Flexi Cap")));
         when(reconciliationRepository.findBySourceKindAndSourceRef(eq("RECURRING_INVESTMENT"), anyString()))
             .thenReturn(Optional.of(InvestmentReconciliation.builder().id(9L).build()));
@@ -169,5 +171,43 @@ class PlannedInvestmentMatcherTest {
         matcher.matchTransfer(7L, transfer);
 
         verifyNoInteractions(untouched);
+    }
+
+    @Test
+    void theSameTransferIsNeverCountedTwice() {
+        when(reconciliationRepository.findBySourceKindAndSourceRef("LEDGER_TRANSFER", "55"))
+            .thenReturn(Optional.of(InvestmentReconciliation.builder().planId(1L).build()));
+
+        matcher.matchTransfer(7L, transfer(new BigDecimal("15000"), "STOCK", "m.Stock", LocalDate.of(2026, 9, 23)));
+
+        verify(reconciliationRepository, never()).save(any());
+        verify(planRepository, never()).save(any());
+    }
+
+    @Test
+    void theTransferAndTheSipItPaidForAreOneAmountNotTwo() {
+        // ₹10,000 sent bank→AMC, and the ₹10,000 SIP installment it funded: the same money.
+        InvestmentReconciliationRepository repo = mock(InvestmentReconciliationRepository.class);
+        when(repo.sumMatchedAmountByPlanIdAndKind(1L)).thenReturn(List.of(
+            new Object[]{"LEDGER_TRANSFER", new BigDecimal("10000")},
+            new Object[]{"RECURRING_INVESTMENT", new BigDecimal("10000")}));
+        when(repo.sumMatchedAmountByPlanId(1L)).thenCallRealMethod();
+        when(repo.matchedAmount(any(), any())).thenCallRealMethod();
+
+        assertThat(repo.sumMatchedAmountByPlanId(1L)).isEqualByComparingTo("10000");
+    }
+
+    @Test
+    void anInstalmentAndAOneOffPurchaseAreBothInvested() {
+        // A ₹10,000 SIP instalment and a separate ₹10,000 top-up into the same line: ₹20,000 invested.
+        InvestmentReconciliationRepository repo = mock(InvestmentReconciliationRepository.class);
+        when(repo.sumMatchedAmountByPlanIdAndKind(1L)).thenReturn(List.of(
+            new Object[]{"RECURRING_INVESTMENT", new BigDecimal("10000")},
+            new Object[]{"PORTFOLIO_TRANSACTION", new BigDecimal("10000")}));
+        when(repo.sumMatchedAmountByPlanId(1L)).thenCallRealMethod();
+        when(repo.matchedAmount(any(), any())).thenCallRealMethod();
+
+        assertThat(repo.sumMatchedAmountByPlanId(1L)).isEqualByComparingTo("20000");
+        assertThat(repo.matchedAmount(1L, InvestmentReconciliationRepository.INVESTING_KINDS)).isEqualByComparingTo("20000");
     }
 }

@@ -134,6 +134,10 @@ export interface HoldingDto {
   folio?: string | null;
   buyDate?: string | null;
   xirr?: number | null;
+  /** Day the price is from; null when unknown. */
+  priceAsOf?: string | null;
+  /** MARKET = current price; STALE = price older than a few days; COST = no price, valued at cost. */
+  valuationBasis?: 'MARKET' | 'STALE' | 'COST';
 }
 
 export interface AllocationDto {
@@ -147,7 +151,8 @@ export interface TransactionDto {
   holdingId: number;
   symbol: string;
   fundName: string;
-  type: 'BUY' | 'SELL';
+  /** BONUS = nil-cost shares allotted; SPLIT = a split or merger ratio, carries no units or money. */
+  type: 'BUY' | 'SELL' | 'BONUS' | 'SPLIT';
   quantity: number;
   price: number;
   totalAmount: number;
@@ -166,6 +171,14 @@ export interface PortfolioSummary {
   currentValue: number;
   totalPnl: number;
   totalPnlPercent: number;
+  stocksInvested?: number;
+  stocksCurrentValue?: number;
+  mfInvested?: number;
+  mfCurrentValue?: number;
+  holdingsAtCost?: number;
+  valueAtCost?: number;
+  holdingsStale?: number;
+  valueStale?: number;
   holdings: HoldingDto[];
   allocation: AllocationDto[];
   lastUpdated: string;

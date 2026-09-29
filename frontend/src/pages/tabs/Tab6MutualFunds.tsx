@@ -482,8 +482,9 @@ export function Tab6MutualFunds() {
         p = data;
       }
       setPortfolio(p);
-      const results = await Promise.allSettled(portfolios.map(port => portfolioApi.getSummary(port.id)));
-      setSummaries(results.filter(r => r.status === 'fulfilled').map(r => (r as any).value.data));
+      // One server-side summary across every portfolio — totals are the backend's, not re-added here.
+      const { data } = await portfolioApi.getCombinedSummary();
+      setSummaries([data]);
     } catch {}
     setLoading(false);
   };
@@ -492,13 +493,14 @@ export function Tab6MutualFunds() {
 
   const allHoldings = summaries.flatMap(s => s.holdings ?? []).filter(h => (h.symbol ?? '').endsWith('.MF'));
 
-  const combined = allHoldings.reduce((acc, h) => ({
-    totalInvested: acc.totalInvested + (h.investedValue ?? 0),
-    currentValue: acc.currentValue + (h.currentValue ?? 0),
-    totalPnl: 0,
-    holdings: acc.holdings + 1,
-  }), { totalInvested: 0, currentValue: 0, totalPnl: 0, holdings: 0 });
-  combined.totalPnl = combined.currentValue - combined.totalInvested;
+  const mfInvested = summaries[0]?.mfInvested ?? 0;
+  const mfCurrent = summaries[0]?.mfCurrentValue ?? 0;
+  const combined = {
+    totalInvested: mfInvested,
+    currentValue: mfCurrent,
+    totalPnl: mfCurrent - mfInvested,
+    holdings: allHoldings.length,
+  };
 
   const cagr = combined.totalInvested > 0
     ? ((combined.currentValue - combined.totalInvested) / combined.totalInvested * 100)

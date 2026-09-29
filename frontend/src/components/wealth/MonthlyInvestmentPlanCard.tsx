@@ -23,6 +23,13 @@ const STATUS_LABEL: Record<string, string> = {
   OVER_INVESTED: 'Over-invested',
 };
 
+const STAGE_COLOR: Record<string, string> = {
+  PLANNED: '#6b7280', FUNDED: '#f59e0b', INVESTED: '#3b82f6', SETTLED: '#10b981',
+};
+const STAGE_LABEL: Record<string, string> = {
+  PLANNED: 'Planned', FUNDED: 'Funded', INVESTED: 'Invested', SETTLED: 'Settled',
+};
+
 /**
  * The Monthly Investment Plan (spec §3/§5/§6) — planned vs. actual, per source account,
  * for the selected calendar month. Purely a planning/tracking view: nothing here can ever
@@ -163,11 +170,25 @@ export function MonthlyInvestmentPlanCard() {
                       <div className="text-2xs text-gray-500 font-mono">
                         {maskText(fmtINR(l.actualAmount))} / {maskText(fmtINR(l.plannedAmount))}
                       </div>
+                      {l.stage && l.stage !== 'PLANNED' && (
+                        <div className="text-2xs text-gray-500">
+                          {maskText(fmtINR(l.fundedAmount ?? 0))} transferred · {maskText(fmtINR(l.investedAmount ?? 0))} invested
+                          {(l.awaitingInvestment ?? 0) > 0 && <span className="text-neutral"> · {maskText(fmtINR(l.awaitingInvestment ?? 0))} not yet invested</span>}
+                        </div>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-2xs font-medium px-1.5 py-0.5 rounded" style={{ color: STATUS_COLOR[l.status], backgroundColor: `${STATUS_COLOR[l.status]}1a` }}>
-                        {STATUS_LABEL[l.status]}
-                      </span>
+                      {l.stage && (
+                        <span className="text-2xs font-medium px-1.5 py-0.5 rounded" title="Where the money is: planned → funded (sent) → invested → settled"
+                          style={{ color: STAGE_COLOR[l.stage], backgroundColor: `${STAGE_COLOR[l.stage]}1a` }}>
+                          {STAGE_LABEL[l.stage]}
+                        </span>
+                      )}
+                      {(!l.stage || l.status === 'OVER_INVESTED') && (
+                        <span className="text-2xs font-medium px-1.5 py-0.5 rounded" style={{ color: STATUS_COLOR[l.status], backgroundColor: `${STATUS_COLOR[l.status]}1a` }}>
+                          {STATUS_LABEL[l.status]}
+                        </span>
+                      )}
                       {l.status === 'PLANNED' && (
                         <button aria-label="Delete" onClick={() => del(l.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                       )}

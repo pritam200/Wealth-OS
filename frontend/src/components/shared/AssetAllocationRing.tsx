@@ -15,6 +15,7 @@ const SLICES = [
   { key: 'equity', label: 'Equity',      color: CHART.bull },
   { key: 'debt',   label: 'Debt / Fixed', color: CHART.brand },
   { key: 'other',  label: 'Other',       color: '#64748B' },
+  { key: 'cash',   label: 'Cash',        color: '#22C55E' },
 ] as const;
 
 export function AssetAllocationRing({ wealth }: { wealth: PortfolioContext | null }) {
@@ -27,12 +28,16 @@ export function AssetAllocationRing({ wealth }: { wealth: PortfolioContext | nul
   const equityValue = (wealth.stocksValue ?? 0) + (wealth.mfValue ?? 0);
   const debtValue = (wealth.fdValue ?? 0) + (wealth.rdValue ?? 0) + (wealth.epfValue ?? 0);
   const otherValue = wealth.otherAssetsValue ?? 0;
-  const total = equityValue + debtValue + otherValue;
+  const cashValue = wealth.cashValue ?? 0;
+  // Percentages are the server's, of total assets (which includes cash) — so they match the
+  // equity/debt split every other screen shows.
+  const total = wealth.totalAssets;
 
   const data = [
     { key: 'equity', label: 'Equity', value: equityValue },
     { key: 'debt', label: 'Debt / Fixed', value: debtValue },
     { key: 'other', label: 'Other', value: otherValue },
+    { key: 'cash', label: 'Cash', value: cashValue },
   ].filter(d => d.value > 0);
 
   if (data.length === 0) {
@@ -64,7 +69,7 @@ export function AssetAllocationRing({ wealth }: { wealth: PortfolioContext | nul
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
           <span className="text-2xs text-gray-500 uppercase tracking-wider font-semibold">Equity</span>
           <span className="text-xl font-mono tabular-nums font-bold text-ink">
-            {total > 0 ? `${((equityValue / total) * 100).toFixed(0)}%` : '—'}
+            {wealth.equityPercent != null ? `${wealth.equityPercent.toFixed(0)}%` : '—'}
           </span>
         </div>
       </div>

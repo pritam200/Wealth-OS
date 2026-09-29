@@ -46,7 +46,7 @@ export function useSyncJob(onFinished?: (job: SyncJob) => void) {
         const { data } = await syncJobApi.get(id);
         setJob(data);
 
-        const done = data.status === 'SUCCEEDED' || data.status === 'FAILED' || data.status === 'CANCELLED';
+        const done = data.status !== 'QUEUED' && data.status !== 'RUNNING';
         if (done) {
           stop();
           if (data.status === 'FAILED') setError(data.lastError || 'Sync failed.');

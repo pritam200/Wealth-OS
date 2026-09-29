@@ -24,7 +24,8 @@ class MfNavHistorySchedulerTest {
         holdingRepository = mock(HoldingRepository.class);
         navHistoryService = mock(MfNavHistoryService.class);
         schemeLinkService = mock(MfSchemeLinkService.class);
-        scheduler = new MfNavHistoryScheduler(holdingRepository, navHistoryService, schemeLinkService);
+        scheduler = new MfNavHistoryScheduler(holdingRepository, navHistoryService, schemeLinkService,
+            new com.marketai.common.jobs.JobHealthRecorder(mock(com.marketai.common.jobs.ScheduledJobHealthRepository.class)));
     }
 
     @Test

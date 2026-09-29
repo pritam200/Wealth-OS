@@ -43,7 +43,12 @@ export function IncomeSection() {
   const nextMonth = () => { if (month === 12) { setYear(y => y + 1); setMonth(1); } else setMonth(m => m + 1); };
   const monthLabel = new Date(year, month - 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
 
-  const submit = async () => {
+  const [alreadyRecorded, setAlreadyRecorded] = useState<string | null>(null);
+  // The notice is about the entry exactly as it was compared; any change, edit or close drops it,
+  // so "Add anyway" can't confirm an entry the server never checked.
+  useEffect(() => { setAlreadyRecorded(null); }, [f, editId, open]);
+
+  const submit = async (confirmSeparate = false) => {
     if (!f.description || !f.amount) return;
     setSaving(true);
     try {
@@ -54,7 +59,17 @@ export function IncomeSection() {
         incomeDate: f.incomeDate || today(),
         note: f.note || undefined,
       };
-      if (editId) await incomeApi.update(editId, req); else await incomeApi.add(req);
+      if (editId) await incomeApi.update(editId, req);
+      else {
+        const { data } = await incomeApi.add({ ...req, confirmSeparate });
+        if (data.alreadyRecorded) {
+          // Already imported from email — nothing was added. Keep the form so the user can
+          // still add it if it really is a second transaction.
+          setAlreadyRecorded(`Already recorded from your email: ${data.description} on ${data.incomeDate}.`);
+          return;
+        }
+      }
+      setAlreadyRecorded(null);
       setF(blank); setOpen(false); setEditId(null);
       await load();
     } catch {} finally { setSaving(false); }
@@ -118,9 +133,15 @@ export function IncomeSection() {
           </div>
           <input value={f.note} onChange={e => setF(x => ({ ...x, note: e.target.value }))}
             placeholder="Note (optional)" className="input-field text-xs w-full" />
+          {alreadyRecorded && (
+            <div className="text-2xs text-gray-400 flex items-center justify-between gap-2">
+              <span>{alreadyRecorded}</span>
+              <button onClick={() => submit(true)} disabled={saving} className="text-ink underline shrink-0">Add anyway</button>
+            </div>
+          )}
           <div className="flex gap-2">
-            <button onClick={submit} disabled={saving} className="btn-primary text-xs py-1.5 flex-1">{saving ? 'Saving…' : 'Save Income'}</button>
-            <button onClick={() => { setF(blank); setOpen(false); }} className="btn-ghost text-xs py-1.5 flex-1">Cancel</button>
+            <button onClick={() => submit()} disabled={saving} className="btn-primary text-xs py-1.5 flex-1">{saving ? 'Saving…' : 'Save Income'}</button>
+            <button onClick={() => { setF(blank); setOpen(false); setEditId(null); }} className="btn-ghost text-xs py-1.5 flex-1">Cancel</button>
           </div>
         </div>
       )}
@@ -172,7 +193,7 @@ export function IncomeSection() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
                     <span className="text-bull text-xs font-mono font-semibold">{maskText(fmtINR(e.amount))}</span>
-                    {e.sourceEmailId && <AiProvenanceButton referenceId={e.sourceEmailId} />}
+                    <AiProvenanceButton referenceId={e.sourceEmailId} record={{ kind: 'income', id: e.id }} />
                     <button onClick={(ev) => { ev.stopPropagation(); startEdit(e); }} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit income"><Edit2 size={11} /></button>
                     <button aria-label="Delete" onClick={(ev) => { ev.stopPropagation(); del(e.id); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                   </div>

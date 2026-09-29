@@ -81,13 +81,27 @@ class MfNavHistoryServiceTest {
                         .date(LocalDate.of(2026, 9, 20)).nav(new BigDecimal("157.70")).build()));
 
         Holding upToDate = Holding.builder().id(2L).symbol("HDFCMID.MF").amfiSchemeCode("123456")
-                .quantity(new BigDecimal("10")).averageCost(new BigDecimal("142.99")).currentPrice(new BigDecimal("157.70")).build();
+                .quantity(new BigDecimal("10")).averageCost(new BigDecimal("142.99")).currentPrice(new BigDecimal("157.70"))
+                .priceAsOf(LocalDate.of(2026, 9, 20)).build();
         when(holdingRepository.findByAmfiSchemeCode("123456")).thenReturn(List.of(upToDate));
 
         int updated = service.syncHoldingValuations("123456");
 
         assertThat(updated).isEqualTo(0);
         verify(holdingRepository, never()).save(any());
+    }
+
+    @Test
+    void theSameNavWithNoDateOnRecordIsDatedRatherThanSkipped() {
+        when(navHistoryRepository.findTopBySchemeCodeOrderByDateDesc("123456"))
+                .thenReturn(Optional.of(MfNavHistory.builder().schemeCode("123456")
+                        .date(LocalDate.of(2026, 9, 20)).nav(new BigDecimal("157.70")).build()));
+        Holding undated = Holding.builder().id(3L).symbol("HDFCMID.MF").amfiSchemeCode("123456")
+                .quantity(new BigDecimal("10")).averageCost(new BigDecimal("142.99")).currentPrice(new BigDecimal("157.70")).build();
+        when(holdingRepository.findByAmfiSchemeCode("123456")).thenReturn(List.of(undated));
+
+        assertThat(service.syncHoldingValuations("123456")).isEqualTo(1);
+        assertThat(undated.getPriceAsOf()).isEqualTo(LocalDate.of(2026, 9, 20));
     }
 
     @Test

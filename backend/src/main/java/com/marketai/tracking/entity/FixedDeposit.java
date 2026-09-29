@@ -17,6 +17,17 @@ public class FixedDeposit {
     @EqualsAndHashCode.Include
     @ToString.Include    private Long id;
 
+    /** Where this record came from (source email, extraction method). */
+    @Embedded
+    private com.marketai.common.ledger.Provenance provenance;
+
+    /** Optimistic lock: a sync and a user edit changing the same record at once can't silently
+     *  overwrite each other — the second write fails and is retried or reported. */
+    @Version
+    @Column(name = "version")
+    @lombok.EqualsAndHashCode.Exclude
+    private Long version;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
     private User user;

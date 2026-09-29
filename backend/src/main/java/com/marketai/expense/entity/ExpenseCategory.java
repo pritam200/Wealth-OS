@@ -27,6 +27,8 @@ public enum ExpenseCategory {
     // persisted (it's a real cash movement a user should be able to see), just excluded from
     // spend totals — see ExpenseRepository.sumByUserIdAndDateRange.
     ACCOUNT_TRANSFER("Account Transfer"),
+    /** Bank and card charges: fees, late-payment charges, interest charged. Real spending. */
+    BANK_CHARGES("Bank Charges"),
     UNCATEGORIZED("Uncategorized");
 
     private final String label;

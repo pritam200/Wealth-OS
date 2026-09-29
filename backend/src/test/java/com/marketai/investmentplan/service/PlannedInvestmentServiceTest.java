@@ -33,6 +33,7 @@ class PlannedInvestmentServiceTest {
         service = new PlannedInvestmentService(planRepository, reconciliationRepository, matcher);
         when(planRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         when(reconciliationRepository.sumMatchedAmountByPlanId(any())).thenReturn(BigDecimal.ZERO);
+        when(reconciliationRepository.matchedAmount(any(), any())).thenReturn(BigDecimal.ZERO);
     }
 
     @Test
@@ -101,5 +102,33 @@ class PlannedInvestmentServiceTest {
         assertThat(lines.get(0).getRemainingAmount()).isEqualByComparingTo("4000");
         assertThat(lines.get(0).getOverInvestedAmount()).isEqualByComparingTo("0");
         assertThat(lines.get(0).getCompletionPercent()).isEqualTo(60.0);
+    }
+
+    @Test
+    void stageFollowsTheMoneyFromPlannedToSettled() {
+        BigDecimal planned = new BigDecimal("35000");
+        assertThat(PlannedInvestmentService.stage(planned, BigDecimal.ZERO, BigDecimal.ZERO)).isEqualTo("PLANNED");
+        // ₹35,000 transferred, ₹30,000 invested: funded, ₹5,000 still at the broker.
+        assertThat(PlannedInvestmentService.stage(planned, planned, new BigDecimal("30000"))).isEqualTo("FUNDED");
+        assertThat(PlannedInvestmentService.stage(planned, new BigDecimal("20000"), new BigDecimal("20000"))).isEqualTo("INVESTED");
+        assertThat(PlannedInvestmentService.stage(planned, planned, new BigDecimal("34998.25"))).isEqualTo("SETTLED");
+    }
+
+    @Test
+    void fundedAndInvestedAreReportedSeparately() {
+        PlannedInvestment plan = PlannedInvestment.builder().id(1L).userId(1L)
+            .month(LocalDate.of(2026, 9, 1)).plannedAmount(new BigDecimal("35000"))
+            .investmentType(PlannedInvestment.InvestmentType.STOCK)
+            .status(PlannedInvestment.PlanStatus.COMPLETE).build();
+        when(planRepository.findByUserIdAndMonthOrderByCreatedAtAsc(1L, LocalDate.of(2026, 9, 1))).thenReturn(List.of(plan));
+        when(reconciliationRepository.matchedAmount(1L, InvestmentReconciliationRepository.FUNDING_KINDS)).thenReturn(new BigDecimal("35000"));
+        when(reconciliationRepository.matchedAmount(1L, InvestmentReconciliationRepository.INVESTING_KINDS)).thenReturn(new BigDecimal("30000"));
+
+        PlannedInvestmentResponse line = service.listPlan(1L, LocalDate.of(2026, 9, 1)).get(0);
+
+        assertThat(line.getStage()).isEqualTo("FUNDED");
+        assertThat(line.getFundedAmount()).isEqualByComparingTo("35000");
+        assertThat(line.getInvestedAmount()).isEqualByComparingTo("30000");
+        assertThat(line.getAwaitingInvestment()).isEqualByComparingTo("5000");
     }
 }

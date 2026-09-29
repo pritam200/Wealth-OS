@@ -1,5 +1,7 @@
 package com.marketai.sync.worker;
 
+import com.marketai.sync.entity.SyncJobStatus;
+
 import com.google.api.services.gmail.Gmail;
 import com.marketai.gmail.dto.GmailSyncResult;
 import com.marketai.gmail.entity.GmailToken;
@@ -38,6 +40,8 @@ public class SyncJobRunner {
     private final GmailSyncService gmailSyncService;
     private final GmailIncrementalSyncService incrementalService;
     private final ProcessedEmailRepository processedEmailRepo;
+    private final com.marketai.reconciliation.service.ReconciliationIssueService issueService;
+    private final com.marketai.common.jobs.JobHealthRecorder jobHealth;
 
     public void run(Long jobId) {
         SyncJob job = jobRepo.findById(jobId).orElse(null);
@@ -63,12 +67,29 @@ public class SyncJobRunner {
                     break;
             }
 
+            if (result != null && GmailSyncService.SYNC_IN_PROGRESS.equals(result.getError())) {
+                // Another sync for this mailbox is running (a manual sync, or another instance).
+                // Not a failure: the job waits its turn without using up a retry.
+                log.info("Sync job {} deferred — a sync for user {} is already running", jobId, userId);
+                jobService.release(jobId);
+                return;
+            }
             if (result != null && result.getError() != null) {
                 jobService.fail(jobId, result.getError());
                 return;
             }
             int imported = result != null ? result.getImported() : 0;
-            jobService.succeed(jobId, summarize(result), imported);
+            jobService.complete(jobId, outcomeOf(result), summarize(result), imported);
+            // What the sync changed is checked straight away, so the Reconciliation Center
+            // reflects it without waiting for the nightly sweep.
+            jobHealth.record("reconciliation-after-sync", run -> {
+                try {
+                    issueService.refresh(userId);
+                } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                    // The Reconciliation Center refreshed at the same moment and stored the same
+                    // new issue first; nothing is lost.
+                }
+            });
 
         } catch (Exception e) {
             log.error("Sync job {} threw: {}", jobId, e.getMessage(), e);
@@ -214,6 +235,16 @@ public class SyncJobRunner {
             .logEntries(new java.util.ArrayList<>())
             .error(error)
             .build();
+    }
+
+    /** A run that failed some messages, or left something for the user, is not a success. */
+    static SyncJobStatus outcomeOf(GmailSyncResult r) {
+        if (r == null) return SyncJobStatus.SUCCEEDED;
+        if (r.getFailed() > 0) return SyncJobStatus.PARTIAL_SUCCESS;
+        if (r.getReconciliation() != null && !"OK".equals(r.getReconciliation().getStatus())) {
+            return SyncJobStatus.RECONCILIATION_REQUIRED;
+        }
+        return SyncJobStatus.SUCCEEDED;
     }
 
     private String summarize(GmailSyncResult r) {

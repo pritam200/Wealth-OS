@@ -81,7 +81,7 @@ public class PendingPdf {
 
     @Builder.Default
     @Column(length = 20)
-    private String status = "NEEDS_PASSWORD"; // NEEDS_PASSWORD | PASSWORD_FAILED | IMPORTED | FAILED | DISMISSED
+    private String status = "NEEDS_PASSWORD"; // NEEDS_PASSWORD | PASSWORD_FAILED | IMPORTED | FAILED | NEEDS_OCR | DUPLICATE_DOCUMENT | DISMISSED
 
     @Column(length = 500)
     private String resultSummary;
@@ -94,6 +94,10 @@ public class PendingPdf {
 
     private Integer tradesExtracted;
     private Integer tradesImported;
+
+    /** What the statement produced, line by line. */
+    @Embedded
+    private DocumentCounts counts;
 
     @Column(columnDefinition = "TEXT")
     private String textSnippet;

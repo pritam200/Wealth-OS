@@ -45,7 +45,7 @@ public class UnlinkedIdentifierCheck implements ReconciliationCheck {
         List<ReconciliationIssue> issues = new ArrayList<>();
 
         for (Portfolio portfolio : portfolioRepository.findByUserId(userId)) {
-            for (Holding h : holdingRepository.findByPortfolioId(portfolio.getId())) {
+            for (Holding h : holdingRepository.findOpenByPortfolioId(portfolio.getId())) {
                 if (h.getSymbol() == null || !h.getSymbol().endsWith(".MF")) continue;
                 if (h.getFolio() != null && !h.getFolio().isBlank()) continue;
 

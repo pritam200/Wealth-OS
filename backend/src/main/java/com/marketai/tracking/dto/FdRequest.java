@@ -16,4 +16,8 @@ public class FdRequest {
     private LocalDate maturityDate;
     private String accountNumber;
     private String accountLast4;
+
+    /** Set by the importer only; never read from a request body. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private com.marketai.common.ledger.Provenance provenance;
 }

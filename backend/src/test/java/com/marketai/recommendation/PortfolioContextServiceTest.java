@@ -36,6 +36,7 @@ class PortfolioContextServiceTest {
     private StockRepository stockRepo;
     private TrackingService tracking;
     private com.marketai.ledger.repository.CashAccountRepository cashRepo;
+    private com.marketai.card.service.CardReconciliationService cards;
     private PortfolioContextService service;
 
     @BeforeEach
@@ -46,7 +47,11 @@ class PortfolioContextServiceTest {
         tracking = mock(TrackingService.class);
         cashRepo = mock(com.marketai.ledger.repository.CashAccountRepository.class);
         when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(BigDecimal.ZERO);
-        service = new PortfolioContextService(portfolioRepo, holdingRepo, stockRepo, tracking, cashRepo);
+        cards = mock(com.marketai.card.service.CardReconciliationService.class);
+        when(cards.outstandingDues(anyLong()))
+            .thenReturn(new com.marketai.card.service.CardReconciliationService.CardDues(BigDecimal.ZERO, 0, 0));
+        service = new PortfolioContextService(portfolioRepo, holdingRepo, stockRepo, tracking, cashRepo, cards,
+            mock(com.marketai.portfolio.repository.TransactionRepository.class));
 
         when(portfolioRepo.findByUserIdOrderByIdAsc(USER))
             .thenReturn(Collections.singletonList(Portfolio.builder().id(PF).build()));
@@ -70,6 +75,7 @@ class PortfolioContextServiceTest {
             .quantity(BigDecimal.valueOf(units))
             .averageCost(BigDecimal.valueOf(avgNav))
             .currentPrice(BigDecimal.valueOf(nav))
+            .priceAsOf(java.time.LocalDate.now())
             .build();
     }
 
@@ -80,6 +86,7 @@ class PortfolioContextServiceTest {
             .quantity(BigDecimal.valueOf(qty))
             .averageCost(BigDecimal.valueOf(avgCost))
             .currentPrice(BigDecimal.valueOf(price))
+            .priceAsOf(java.time.LocalDate.now())
             .build();
     }
 
@@ -92,7 +99,7 @@ class PortfolioContextServiceTest {
     @DisplayName("Flags a single stock that dominates the portfolio")
     void flagsSingleStockConcentration() {
         // One position worth 90,000 of a 100,000 book.
-        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Arrays.asList(
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(Arrays.asList(
             stock("BIGCO.NS", 900, 100, 100),
             stock("SMALLCO.NS", 100, 100, 100)));
 
@@ -109,7 +116,7 @@ class PortfolioContextServiceTest {
         withStock("BANKA.NS", "Financial Services");
         withStock("BANKB.NS", "Financial Services");
         // BANKC has no Stock row → unknown sector, must reduce reported coverage.
-        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Arrays.asList(
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(Arrays.asList(
             stock("BANKA.NS", 100, 100, 100),
             stock("BANKB.NS", 100, 100, 100),
             stock("BANKC.NS", 100, 100, 100)));
@@ -127,7 +134,7 @@ class PortfolioContextServiceTest {
     @Test
     @DisplayName("Declares MF look-through as unavailable rather than implying full coverage")
     void declaresMfLookThroughGap() {
-        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Arrays.asList(
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(Arrays.asList(
             stock("RELIANCE.NS", 10, 100, 120),
             stock("SOMEFUND.MF", 100, 50, 55)));
 
@@ -143,7 +150,7 @@ class PortfolioContextServiceTest {
     @Test
     @DisplayName("Percentages are null, not zero, when there is nothing to divide by")
     void undefinedPercentagesAreNull() {
-        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Collections.<Holding>emptyList());
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(Collections.<Holding>emptyList());
 
         PortfolioContext ctx = service.build(USER);
 
@@ -159,9 +166,9 @@ class PortfolioContextServiceTest {
         Long pf2 = 11L;
         when(portfolioRepo.findByUserIdOrderByIdAsc(USER)).thenReturn(Arrays.asList(
             Portfolio.builder().id(PF).build(), Portfolio.builder().id(pf2).build()));
-        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Collections.singletonList(
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(Collections.singletonList(
             stock("AAA.NS", 10, 100, 150)));   // invested 1000, current 1500
-        when(holdingRepo.findByPortfolioId(pf2)).thenReturn(Collections.singletonList(
+        when(holdingRepo.findOpenByPortfolioId(pf2)).thenReturn(Collections.singletonList(
             stock("BBB.NS", 10, 100, 50)));    // invested 1000, current 500
 
         PortfolioContext ctx = service.build(USER);
@@ -176,7 +183,7 @@ class PortfolioContextServiceTest {
     @DisplayName("Cash is part of total assets, so a bank balance is no longer invisible")
     void cashCountsTowardTotalAssets() {
         when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(new BigDecimal("100000"));
-        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Collections.singletonList(
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(Collections.singletonList(
             stock("AAA.NS", 10, 100, 100)));   // 1000 of equity
 
         PortfolioContext ctx = service.build(USER);
@@ -190,17 +197,60 @@ class PortfolioContextServiceTest {
     void internalTransferDoesNotChangeNetWorth() {
         // Before: 100,000 in cash, no fund holding.
         when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(new BigDecimal("100000"));
-        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Collections.emptyList());
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(Collections.emptyList());
         BigDecimal before = service.build(USER).getNetWorth();
 
         // After: 50,000 moved into a mutual fund. Cash drops by exactly what the fund gained.
         when(cashRepo.sumBalanceByUser(anyLong())).thenReturn(new BigDecimal("50000"));
-        when(holdingRepo.findByPortfolioId(PF)).thenReturn(Collections.singletonList(
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(Collections.singletonList(
             mf("PPFAS.MF", 500, 100, 100)));   // 500 units at NAV 100 = 50,000
         BigDecimal after = service.build(USER).getNetWorth();
 
         // The invariant: allocation shifted from cash to equity, total wealth did not move.
         assertThat(after).isEqualByComparingTo(before);
         assertThat(before).isEqualByComparingTo("100000.00");
+    }
+
+    @Test
+    @DisplayName("Credit-card dues are a liability: net worth falls by what is owed on the cards")
+    void cardDuesReduceNetWorth() {
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(List.of(stock("AAA.NS", 10, 100, 100)));
+        when(cards.outstandingDues(USER))
+            .thenReturn(new com.marketai.card.service.CardReconciliationService.CardDues(new BigDecimal("300"), 1, 0));
+
+        PortfolioContext ctx = service.build(USER);
+
+        assertThat(ctx.getTotalAssets()).isEqualByComparingTo("1000");
+        assertThat(ctx.getCardDues()).isEqualByComparingTo("300");
+        assertThat(ctx.getTotalLiabilities()).isEqualByComparingTo("300");
+        assertThat(ctx.getNetWorth()).isEqualByComparingTo("700");
+    }
+
+    @Test
+    @DisplayName("A zero price is not a value: the holding is carried at cost and named as such")
+    void zeroPriceIsCarriedAtCostAndFlagged() {
+        Holding zero = stock("ZERO.NS", 10, 100, 0);
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(List.of(zero));
+
+        PortfolioContext ctx = service.build(USER);
+
+        assertThat(ctx.getStocksValue()).isEqualByComparingTo("1000");
+        assertThat(ctx.getHoldingsAtCost()).isEqualTo(1);
+        assertThat(ctx.getDataQuality()).isEqualTo("PARTIAL");
+        assertThat(ctx.getDataGaps()).anyMatch(g -> g.contains("no current price"));
+    }
+
+    @Test
+    @DisplayName("An out-of-date price is counted and dated, not passed off as current")
+    void stalePriceIsFlagged() {
+        Holding old = stock("OLD.NS", 10, 100, 120);
+        old.setPriceAsOf(java.time.LocalDate.now().minusDays(20));
+        when(holdingRepo.findOpenByPortfolioId(PF)).thenReturn(List.of(old));
+
+        PortfolioContext ctx = service.build(USER);
+
+        assertThat(ctx.getHoldingsStale()).isEqualTo(1);
+        assertThat(ctx.getValueStale()).isEqualByComparingTo("1200");
+        assertThat(ctx.getDataGaps()).anyMatch(g -> g.contains("out-of-date price"));
     }
 }

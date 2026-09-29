@@ -26,6 +26,20 @@ public class PortfolioSummaryDto {
     private BigDecimal maxDrawdown;
     private BigDecimal cagr;
 
+    /** The same totals split into direct stocks and mutual funds, so the Stocks and MF screens
+     *  show the backend's figure instead of re-adding holdings in the browser. */
+    private BigDecimal stocksInvested;
+    private BigDecimal stocksCurrentValue;
+    private BigDecimal mfInvested;
+    private BigDecimal mfCurrentValue;
+
+    /** Holdings with no usable price, carried at cost, and the value so carried. */
+    private int holdingsAtCost;
+    private BigDecimal valueAtCost;
+    /** Holdings whose price is older than the staleness window. */
+    private int holdingsStale;
+    private BigDecimal valueStale;
+
     private List<HoldingDto> holdings;
     private List<AllocationDto> allocation;
     private LocalDateTime lastUpdated;
@@ -52,6 +66,10 @@ public class PortfolioSummaryDto {
         private String clientId;
         private java.time.LocalDate buyDate;
         private BigDecimal xirr;
+        /** Day the price is from; null when unknown. */
+        private java.time.LocalDate priceAsOf;
+        /** MARKET | STALE | COST — see {@code Holding.ValuationBasis}. */
+        private String valuationBasis;
     }
 
     @Data

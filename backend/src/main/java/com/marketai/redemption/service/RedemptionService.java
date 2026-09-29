@@ -39,17 +39,21 @@ public class RedemptionService {
     private final TechnicalIndicatorService technicalIndicatorService;
 
     /**
-     * Called from PortfolioService.sellHolding when the sold symbol is a mutual fund, in
-     * addition to (not instead of) the existing Income record — this is what gives a
-     * redemption a persistent lifecycle instead of just vanishing on delete.
+     * Called from PortfolioService.sellHolding when the sold symbol is a mutual fund. This is
+     * the one realized-gain record for a redemption.
+     *
+     * @param costBasis cost of the units redeemed, taken before the sale was replayed into the
+     *                  holding (a full redemption zeroes the holding's average cost)
+     * @param redemptionDate the day of the redemption, not the day it was imported
      */
     @Transactional
-    public MfRedemption recordRedemption(Long userId, Holding holding, BigDecimal unitsRedeemed, BigDecimal nav) {
+    public MfRedemption recordRedemption(Long userId, Holding holding, BigDecimal unitsRedeemed, BigDecimal nav,
+                                         BigDecimal costBasis, LocalDate redemptionDate) {
         BigDecimal redeemedAmount = nav.multiply(unitsRedeemed).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal investedPortion = holding.getAverageCost().multiply(unitsRedeemed).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal investedPortion = costBasis.setScale(2, RoundingMode.HALF_UP);
         BigDecimal gain = redeemedAmount.subtract(investedPortion);
 
-        LocalDate today = LocalDate.now();
+        LocalDate today = redemptionDate;
         long daysHeld = holding.getBuyDate() != null ? ChronoUnit.DAYS.between(holding.getBuyDate(), today) : 0;
         boolean isLongTerm = daysHeld >= 365;
         String gainType = isLongTerm ? "LTCG" : "STCG";
@@ -177,7 +181,7 @@ public class RedemptionService {
         List<String> names = new ArrayList<>();
         try {
             for (Portfolio p : portfolioRepository.findByUserId(userId)) {
-                for (Holding h : holdingRepository.findByPortfolioId(p.getId())) {
+                for (Holding h : holdingRepository.findOpenByPortfolioId(p.getId())) {
                     if (h.getSymbol() != null && h.getSymbol().endsWith(".MF") && !h.getSymbol().equals(excludeSymbol)) {
                         names.add(h.getName());
                     }

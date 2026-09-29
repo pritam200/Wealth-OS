@@ -26,38 +26,33 @@ public class MfNavHistoryScheduler {
     private final HoldingRepository holdingRepository;
     private final MfNavHistoryService navHistoryService;
     private final MfSchemeLinkService schemeLinkService;
+    private final com.marketai.common.jobs.JobHealthRecorder jobHealth;
 
     @Scheduled(cron = "0 0 22 * * *")
     public void refreshHeldSchemeHistory() {
-        try {
-            schemeLinkService.linkUnlinkedHoldings();
-        } catch (Exception e) {
-            log.warn("MF scheme linking pass failed: {}", e.getMessage());
-        }
-
-        List<String> codes;
-        try {
-            codes = holdingRepository.findDistinctAmfiSchemeCodes();
-        } catch (Exception e) {
-            log.error("Could not list linked MF scheme codes: {}", e.getMessage());
-            return;
-        }
-        if (codes.isEmpty()) return;
-
-        int updated = 0;
-        int failed = 0;
-        int holdingsSynced = 0;
-        for (String code : codes) {
-            // Per-scheme isolation: one dead scheme code must not abort the rest of the run.
+        jobHealth.record("mf-nav-refresh", run -> {
             try {
-                updated += navHistoryService.fetchAndStoreHistory(code);
-                holdingsSynced += navHistoryService.syncHoldingValuations(code);
+                schemeLinkService.linkUnlinkedHoldings();
             } catch (Exception e) {
-                failed++;
-                log.warn("NAV history refresh failed for scheme {}: {}", code, e.getMessage());
+                run.failed("scheme linking", e);
             }
-        }
-        log.info("MF NAV history refresh: {} schemes, {} new rows, {} holdings revalued, {} failed",
-                codes.size(), updated, holdingsSynced, failed);
+
+            List<String> codes = holdingRepository.findDistinctAmfiSchemeCodes();
+            if (codes.isEmpty()) return;
+
+            int updated = 0;
+            int holdingsSynced = 0;
+            for (String code : codes) {
+                // Per-scheme isolation: one dead scheme code must not abort the rest of the run.
+                try {
+                    updated += navHistoryService.fetchAndStoreHistory(code);
+                    holdingsSynced += navHistoryService.syncHoldingValuations(code);
+                } catch (Exception e) {
+                    run.failed("scheme " + code, e);
+                }
+            }
+            log.info("MF NAV history refresh: {} schemes, {} new rows, {} holdings revalued",
+                    codes.size(), updated, holdingsSynced);
+        });
     }
 }

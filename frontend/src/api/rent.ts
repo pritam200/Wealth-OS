@@ -27,10 +27,13 @@ export interface RentRequest {
   paymentMethod?: string;
   referenceId?: string;
   note?: string;
+  scheduleId?: number;
+  confirmSeparate?: boolean;
 }
 
 export interface RentResponse {
-  id: number;
+  /** null for this month's instalment of a schedule with nothing recorded yet */
+  id: number | null;
   scheduleId: number | null;
   month: string;
   amount: number;
@@ -41,7 +44,8 @@ export interface RentResponse {
   referenceId: string | null;
   note: string | null;
   sourceEmailId: string | null;
-  status: 'PAID' | 'UPCOMING';
+  status: 'PAID' | 'UPCOMING' | 'OVERDUE' | 'MISSED';
+  alreadyRecorded?: boolean;
 }
 
 export const rentApi = {

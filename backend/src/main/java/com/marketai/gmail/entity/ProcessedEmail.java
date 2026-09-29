@@ -38,6 +38,41 @@ public class ProcessedEmail {
     @Column(length = 1000)
     private String resultSummary;
 
+    @Column(length = 500)
+    private String subject;
+
+    /** What the email body produced (attachments are counted on their PendingPdf). */
+    @Embedded
+    private DocumentCounts counts;
+
+    // --- Import manifest: the email as a whole, body and every attachment together. The event
+    // counts come from the financial-event ledger (email_financial_events) for this message.
+
+    @Column(name = "attachments_found")
+    private Integer attachmentsFound;
+
+    /** Attachments that were read (or are queued to be read once unlocked). */
+    @Column(name = "attachments_processed")
+    private Integer attachmentsProcessed;
+
+    /** Per attachment that was not read, why — e.g. "report.xlsx: spreadsheet, not read automatically". */
+    @Column(name = "attachment_notes", length = 1000)
+    private String attachmentNotes;
+
+    /** Body (when it held anything financial) plus each attachment that was read. */
+    @Column(name = "documents_detected")
+    private Integer documentsDetected;
+
+    @Column(name = "events_detected")
+    private Integer eventsDetected;
+
+    @Column(name = "events_unresolved")
+    private Integer eventsUnresolved;
+
+    /** COMPLETE, RECONCILIATION_REQUIRED, NO_FINANCIAL_EVENTS or FAILED. */
+    @Column(name = "manifest_status", length = 30)
+    private String manifestStatus;
+
     @PrePersist
     void onCreate() { if (processedAt == null) processedAt = LocalDateTime.now(); }
 }

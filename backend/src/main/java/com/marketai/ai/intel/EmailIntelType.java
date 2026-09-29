@@ -24,10 +24,13 @@ public enum EmailIntelType {
     AUTO_DEBIT_EXPENSE(ParsedEmail.Type.EXPENSE),
     EMI_PAYMENT(ParsedEmail.Type.EXPENSE),
     BILL_PAYMENT(ParsedEmail.Type.EXPENSE),
+    OTHER_EXPENSE(ParsedEmail.Type.EXPENSE),
 
     /* ── Cards ── */
     CARD_BILL_GENERATED(ParsedEmail.Type.CARD_BILL),
-    CARD_BILL_PAID(ParsedEmail.Type.EXPENSE),
+    // Paying the card bill settles purchases that are already booked as spend, one by one.
+    // Booking it as an expense counted that spend twice; it is a card payment.
+    CARD_BILL_PAID(ParsedEmail.Type.CARD_PAYMENT),
 
     /* ── Equity ── */
     STOCK_BUY(ParsedEmail.Type.TRADE_BUY),
@@ -42,15 +45,19 @@ public enum EmailIntelType {
 
     /* ── Deposits ── */
     FD_OPEN(ParsedEmail.Type.FD_OPEN),
-    FD_MATURITY(null),        // handled by the FD lifecycle, not as a fresh record
+    // Closes the open deposit it belongs to (FD lifecycle), never a fresh record.
+    FD_MATURITY(ParsedEmail.Type.DEPOSIT_CLOSE),
     RD_OPEN(ParsedEmail.Type.RD_OPEN),
     RD_INSTALLMENT(null),     // an RD debit is already implied by the RD schedule
 
     /* ── Income ── */
     SALARY(ParsedEmail.Type.INCOME),
     INTEREST_CREDIT(ParsedEmail.Type.INCOME),
-    REFUND(ParsedEmail.Type.INCOME),
+    // A refund reverses spending; it is not income. It is booked against the purchase it
+    // reverses (or held for review when that purchase can't be found).
+    REFUND(ParsedEmail.Type.REFUND),
     RENTAL_INCOME(ParsedEmail.Type.INCOME),
+    OTHER_INCOME(ParsedEmail.Type.INCOME),
 
     /* ── Movements that must never change net worth ── */
     INTERNAL_TRANSFER(null),
@@ -73,6 +80,39 @@ public enum EmailIntelType {
 
     /** True for classifications that shift money between the user's own accounts. */
     public boolean isTransfer() { return this == INTERNAL_TRANSFER || this == SELF_TRANSFER; }
+
+    /** The closest classification for a record the importer already built — so a held-back
+     *  item shows what it would book as, instead of UNKNOWN. */
+    public static EmailIntelType forParsed(ParsedEmail pe) {
+        if (pe == null || pe.getType() == null) return UNKNOWN;
+        return switch (pe.getType()) {
+            case TRADE_BUY -> STOCK_BUY;
+            case TRADE_SELL -> STOCK_SELL;
+            case MF_SIP -> MF_SIP;
+            case MF_REDEEM -> MF_REDEMPTION;
+            case FD_OPEN -> FD_OPEN;
+            case RD_OPEN -> RD_OPEN;
+            case DIVIDEND -> DIVIDEND;
+            case CARD_BILL -> CARD_BILL_GENERATED;
+            case CARD_PAYMENT -> CARD_BILL_PAID;
+            case EXPENSE -> OTHER_EXPENSE;
+            case REFUND -> REFUND;
+            case DEPOSIT_CLOSE -> FD_MATURITY;
+            case DEPOSIT_INTEREST -> INTEREST_CREDIT;
+            case OWN_TRANSFER -> SELF_TRANSFER;
+            case CORPORATE_ACTION -> STATEMENT_ONLY;
+            case INCOME -> {
+                String src = pe.getIncomeSource() == null ? "" : pe.getIncomeSource().trim().toLowerCase();
+                yield switch (src) {
+                    case "salary" -> SALARY;
+                    case "interest" -> INTEREST_CREDIT;
+                    case "rental" -> RENTAL_INCOME;
+                    default -> OTHER_INCOME;
+                };
+            }
+            case UNKNOWN -> UNKNOWN;
+        };
+    }
 
     public static EmailIntelType fromLabel(String s) {
         if (s == null) return UNKNOWN;

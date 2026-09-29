@@ -76,6 +76,15 @@ public class EmailReviewItem {
     @Column(name = "extracted_fields", columnDefinition = "text")
     private String extractedFields;
 
+    /**
+     * The complete extracted transaction (a serialised ParsedEmail) that was held back. ACCEPT
+     * books exactly this. Without it an approved trade, MF, FD or RD item could only be rebuilt
+     * from amount, date and counterparty, which none of them can be booked from.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "parsed_payload", columnDefinition = "text")
+    private String parsedPayload;
+
     /* Denormalised headline figures so the queue can be listed without parsing JSON. */
     @Column(precision = 18, scale = 2)
     private BigDecimal amount;

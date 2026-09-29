@@ -22,7 +22,7 @@ class AnalystWeightValidationTest {
             mock(com.marketai.technical.service.TechnicalIndicatorService.class),
             mock(com.marketai.market.service.MarketDataService.class),
             mock(com.marketai.news.service.NewsService.class),
-            mock(com.marketai.ai.llm.LlmProviderRouter.class),
+            mock(com.marketai.ai.llm.LlmService.class),
             mock(com.marketai.ai.llm.LlmJsonParser.class));
 
         ReflectionTestUtils.setField(svc, "weightTechnical", technical);

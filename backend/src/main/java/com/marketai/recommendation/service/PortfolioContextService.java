@@ -53,6 +53,15 @@ public class PortfolioContextService {
     private final StockRepository stockRepository;
     private final TrackingService trackingService;
     private final CashAccountRepository cashAccountRepository;
+    private final com.marketai.card.service.CardReconciliationService cardReconciliationService;
+    private final com.marketai.portfolio.repository.TransactionRepository transactionRepository;
+
+    /** The holding's XIRR from its own ledger — the same figure the portfolio screens show. */
+    @Transactional(readOnly = true)
+    public BigDecimal holdingXirr(Holding h) {
+        return com.marketai.portfolio.util.XirrCalculator.holdingXirr(h,
+            transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId()));
+    }
 
     /**
      * Every holding across EVERY portfolio the user owns. A user can accumulate several
@@ -65,7 +74,7 @@ public class PortfolioContextService {
     public List<Holding> getAllHoldings(Long userId) {
         List<Holding> holdings = new ArrayList<>();
         for (Portfolio p : portfolioRepository.findByUserIdOrderByIdAsc(userId)) {
-            holdings.addAll(holdingRepository.findByPortfolioId(p.getId()));
+            holdings.addAll(holdingRepository.findOpenByPortfolioId(p.getId()));
         }
         return holdings;
     }
@@ -80,8 +89,9 @@ public class PortfolioContextService {
         int stockCount = 0, mfCount = 0;
 
         List<Holding> stocks = new ArrayList<>();
-        int unpriced = 0;
-        BigDecimal unpricedValue = BigDecimal.ZERO;
+        int unpriced = 0, stale = 0;
+        BigDecimal unpricedValue = BigDecimal.ZERO, staleValue = BigDecimal.ZERO;
+        java.time.LocalDate oldestPrice = null;
         for (Holding h : holdings) {
             BigDecimal cur = nz(h.getCurrentValue());
             BigDecimal inv = nz(h.getInvestedValue());
@@ -89,9 +99,17 @@ public class PortfolioContextService {
             // fallback is right — a blank would be worse — but it was invisible: the position was
             // summed into net worth at cost, showed exactly 0.00% return, and dataQuality still
             // reported FULL. Counting it means the figure can be qualified instead of trusted.
-            if (h.getCurrentPrice() == null) {
-                unpriced++;
-                unpricedValue = unpricedValue.add(inv);
+            // A zero price counts as none (Holding treats it so), and a price older than the
+            // staleness window is named too — a months-old NAV is a number, but not today's.
+            switch (h.getValuationBasis()) {
+                case COST -> { unpriced++; unpricedValue = unpricedValue.add(inv); }
+                case STALE -> {
+                    stale++;
+                    staleValue = staleValue.add(cur);
+                    if (h.getPriceAsOf() != null && (oldestPrice == null || h.getPriceAsOf().isBefore(oldestPrice)))
+                        oldestPrice = h.getPriceAsOf();
+                }
+                case MARKET -> { }
             }
             equityInvested = equityInvested.add(inv);
             equityCurrent = equityCurrent.add(cur);
@@ -124,13 +142,31 @@ public class PortfolioContextService {
         // the funding side was invisible.
         BigDecimal cash = nz(cashAccountRepository.sumBalanceByUser(userId));
 
+        // Credit-card balances are debt exactly as a loan is. Leaving them out overstated net
+        // worth by whatever was on the cards, and made paying a card bill look like a loss.
+        BigDecimal cardDues = BigDecimal.ZERO;
+        try {
+            var dues = cardReconciliationService.outstandingDues(userId);
+            cardDues = dues.total();
+            if (dues.fromEnteredFigure() > 0) {
+                gaps.add(String.format("%d credit card%s ha%s no statement on file, so the due amount entered on %s is used.",
+                    dues.fromEnteredFigure(), dues.fromEnteredFigure() == 1 ? "" : "s",
+                    dues.fromEnteredFigure() == 1 ? "s" : "ve", dues.fromEnteredFigure() == 1 ? "it" : "them"));
+            }
+        } catch (Exception e) {
+            log.warn("Card dues unavailable for user {}: {}", userId, e.getMessage());
+            gaps.add("Credit-card balances could not be loaded, so they are not deducted from net worth.");
+        }
+
         BigDecimal totalAssets = stocksValue.add(mfValue).add(fd).add(rd).add(epf).add(other).add(cash);
-        BigDecimal netWorth = totalAssets.subtract(loans);
+        BigDecimal liabilities = loans.add(cardDues);
+        BigDecimal netWorth = totalAssets.subtract(liabilities);
         BigDecimal equityValue = stocksValue.add(mfValue);
 
         Double equityPct = pct(equityValue, totalAssets);
         Double debtPct   = pct(fd.add(rd).add(epf), totalAssets);
         Double otherPct  = pct(other, totalAssets);
+        Double cashPct   = pct(cash, totalAssets);
 
         BigDecimal equityPnl = equityCurrent.subtract(equityInvested);
         Double equityPnlPct = equityInvested.compareTo(BigDecimal.ZERO) > 0
@@ -217,8 +253,8 @@ public class PortfolioContextService {
                 .message(String.format("%.0f%% of assets are in equity — an aggressive allocation with little debt cushion.", equityPct))
                 .build());
         }
-        if (loans.compareTo(BigDecimal.ZERO) > 0 && totalAssets.compareTo(BigDecimal.ZERO) > 0) {
-            Double leverage = pct(loans, totalAssets);
+        if (liabilities.compareTo(BigDecimal.ZERO) > 0 && totalAssets.compareTo(BigDecimal.ZERO) > 0) {
+            Double leverage = pct(liabilities, totalAssets);
             if (leverage != null && leverage > 50) {
                 flags.add(PortfolioContext.Flag.builder()
                     .type("LEVERAGE").label("Outstanding loans").percent(round1(leverage)).severity("MODERATE")
@@ -242,6 +278,13 @@ public class PortfolioContextService {
                 unpriced == 1 ? "s" : "ve", unpriced == 1 ? "it is" : "they are"));
         }
 
+        if (stale > 0) {
+            gaps.add(String.format(
+                "%d holding%s (₹%s) %s valued at an out-of-date price%s — refresh prices for a current figure.",
+                stale, stale == 1 ? "" : "s", scale(staleValue).toPlainString(), stale == 1 ? "is" : "are",
+                oldestPrice != null ? " (oldest from " + oldestPrice + ")" : " whose date is not known"));
+        }
+
         if (mfCount > 0) {
             // The single genuinely-blocked analysis: without per-fund constituent disclosures
             // there is no way to know a fund's underlying stocks, so true look-through overlap
@@ -258,8 +301,9 @@ public class PortfolioContextService {
             .stocksValue(scale(stocksValue)).mfValue(scale(mfValue))
             .fdValue(scale(fd)).rdValue(scale(rd)).epfValue(scale(epf))
             .otherAssetsValue(scale(other)).cashValue(scale(cash)).loansOutstanding(scale(loans))
+            .cardDues(scale(cardDues)).totalLiabilities(scale(liabilities))
             .totalAssets(scale(totalAssets)).netWorth(scale(netWorth))
-            .equityPercent(round1(equityPct)).debtPercent(round1(debtPct)).otherPercent(round1(otherPct))
+            .equityPercent(round1(equityPct)).debtPercent(round1(debtPct)).otherPercent(round1(otherPct)).cashPercent(round1(cashPct))
             .equityInvested(scale(equityInvested)).equityCurrent(scale(equityCurrent))
             .equityPnl(scale(equityPnl)).equityPnlPercent(round1(equityPnlPct))
             .stockCount(stockCount).mfCount(mfCount)
@@ -270,6 +314,8 @@ public class PortfolioContextService {
             .sectorScopeNote("Direct stocks only — mutual fund underlying holdings are not available.")
             .dataQuality(dataQuality)
             .dataGaps(gaps)
+            .holdingsAtCost(unpriced).valueAtCost(scale(unpricedValue))
+            .holdingsStale(stale).valueStale(scale(staleValue))
             .build();
     }
 

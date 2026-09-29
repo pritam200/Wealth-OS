@@ -38,6 +38,20 @@ public class RecurringInvestmentController {
         return ResponseEntity.ok(service.update(user.getId(), id, req));
     }
 
+    /** Records that one instalment's debit failed, so it reads FAILED (with the reason), not MISSED. */
+    @PostMapping("/{id}/failed-installments")
+    public ResponseEntity<RecurringInvestmentResponse> markFailed(
+            @AuthenticationPrincipal User user, @PathVariable Long id,
+            @RequestBody java.util.Map<String, String> body) {
+        java.time.LocalDate due;
+        try {
+            due = java.time.LocalDate.parse(body.getOrDefault("dueDate", ""));
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST, "dueDate must be YYYY-MM-DD");
+        }
+        return ResponseEntity.ok(service.markInstallmentFailed(user.getId(), id, due, body.get("reason")));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@AuthenticationPrincipal User user, @PathVariable Long id) {
         service.delete(user.getId(), id);

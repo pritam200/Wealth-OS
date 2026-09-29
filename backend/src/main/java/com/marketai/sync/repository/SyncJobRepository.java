@@ -21,6 +21,8 @@ public interface SyncJobRepository extends JpaRepository<SyncJob, Long> {
 
     List<SyncJob> findByUser_IdOrderByCreatedAtDesc(Long userId, PageRequest page);
 
+    boolean existsByUser_IdAndStatusIn(Long userId, List<SyncJobStatus> statuses);
+
     boolean existsByUser_IdAndTypeAndStatusIn(Long userId, SyncJobType type, List<SyncJobStatus> statuses);
 
     Optional<SyncJob> findFirstByUser_IdOrderByCreatedAtDesc(Long userId);

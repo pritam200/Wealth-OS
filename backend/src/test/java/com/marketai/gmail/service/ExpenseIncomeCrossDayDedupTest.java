@@ -74,8 +74,8 @@ class ExpenseIncomeCrossDayDedupTest {
             fingerprints.put(row.getFingerprint(), row);
             return i.getArgument(0);
         });
-        when(expenseRepo.save(any())).thenAnswer(i -> { expenses.add(i.getArgument(0)); return i.getArgument(0); });
-        when(incomeRepo.save(any())).thenAnswer(i -> { incomes.add(i.getArgument(0)); return i.getArgument(0); });
+        when(expenseRepo.save(any())).thenAnswer(i -> { if (expenses.stream().noneMatch(e -> e == i.getArgument(0))) expenses.add(i.getArgument(0)); return i.getArgument(0); });
+        when(incomeRepo.save(any())).thenAnswer(i -> { if (incomes.stream().noneMatch(e -> e == i.getArgument(0))) incomes.add(i.getArgument(0)); return i.getArgument(0); });
         when(expenseRepo.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(any(), any(), any()))
             .thenAnswer(i -> expenses.stream().filter(e -> e.getExpenseDate().equals(i.getArgument(1))).toList());
         when(incomeRepo.findByUserIdAndIncomeDateBetweenOrderByIncomeDateDesc(any(), any(), any()))
@@ -241,5 +241,55 @@ class ExpenseIncomeCrossDayDedupTest {
         importAll("stmt-6", a, b);
 
         assertThat(incomes).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("a re-read transaction is reported as already recorded, not as a fresh import")
+    void reReadIsReportedAsDuplicate() throws Exception {
+        ParsedEmail line = expense("Swiggy", "250.00", DAY, 0);
+        assertThat(importer.importParsedEmail(USER, new User(), line, "stmt-7"))
+            .isEqualTo(ParsedEmailImporter.ImportOutcome.IMPORTED);
+        assertThat(importer.importParsedEmail(USER, new User(), line, "stmt-7"))
+            .isEqualTo(ParsedEmailImporter.ImportOutcome.DUPLICATE);
+        assertThat(expenses).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("the email for an expense already entered by hand is linked to it, not booked a second time")
+    void emailForHandEnteredExpenseIsLinked() throws Exception {
+        Expense byHand = Expense.builder().userId(USER).description("Lunch at Swiggy").merchant("Swiggy")
+            .amount(new BigDecimal("250.00")).expenseDate(DAY).build();
+        expenses.add(byHand);
+
+        importAll("alert-9", expense("SWIGGY*BANGALORE", "250.00", DAY, 0));
+
+        assertThat(expenses).containsExactly(byHand);
+        assertThat(byHand.getSourceEmailId()).isEqualTo("alert-9");
+        assertThat(byHand.getSourceFingerprint()).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("each statement line carries its own line key, so a statement's lines never collide")
+    void statementLinesHaveDistinctLineKeys() throws Exception {
+        importAll("stmt-9",
+            expense("Blue Tokai", "250.00", DAY, 0),
+            expense("Blue Tokai", "250.00", DAY, 1));
+
+        assertThat(expenses).extracting(Expense::getSourceFingerprint).doesNotContainNull().doesNotHaveDuplicates();
+    }
+
+    @Test
+    @DisplayName("a credit already entered by hand is linked to the email that reports it")
+    void emailForHandEnteredIncomeIsLinked() throws Exception {
+        Income byHand = Income.builder().userId(USER).description("Salary from Acme")
+            .amount(new BigDecimal("90000")).incomeDate(DAY).build();
+        incomes.add(byHand);
+
+        ParsedEmail credit = ParsedEmail.builder().type(ParsedEmail.Type.INCOME).incomeSource("Salary")
+            .merchant("ACME").amount(new BigDecimal("90000")).tradeDate(DAY).sourceDescription("Salary credit ACME").build();
+        importer.importParsedEmail(USER, new User(), credit, "salary-1");
+
+        assertThat(incomes).containsExactly(byHand);
+        assertThat(byHand.getSourceEmailId()).isEqualTo("salary-1");
     }
 }

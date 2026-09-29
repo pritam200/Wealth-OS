@@ -42,14 +42,15 @@ class ExpenseRepositoryTest {
     }
 
     @Test
-    @DisplayName("sumByCategory still reports ACCOUNT_TRANSFER on its own line, just not in the spend total")
-    void sumByCategoryStillIncludesAccountTransfer() {
+    @DisplayName("sumByCategory leaves transfers out so categories add up to the spend total; transfers are summed apart")
+    void sumByCategoryExcludesAccountTransfer() {
         LocalDate day = LocalDate.of(2026, 9, 2);
         saved(new BigDecimal("500"), ExpenseCategory.GROCERIES, day);
         saved(new BigDecimal("2000"), ExpenseCategory.ACCOUNT_TRANSFER, day);
 
         var rows = repo.sumByCategory(1L, day, day);
 
-        assertThat(rows).hasSize(2);
+        assertThat(rows).hasSize(1);
+        assertThat(repo.sumTransfers(1L, day, day)).isEqualByComparingTo("2000");
     }
 }

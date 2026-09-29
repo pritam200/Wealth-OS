@@ -291,17 +291,34 @@ public class GmailClientService {
         return sb.toString();
     }
 
+    /**
+     * Reads the readable text of every part, once. A multipart/alternative holds the SAME
+     * content in several forms (plain and HTML); appending both used to hand the model every
+     * transaction twice, and an identical second line is numbered as a second occurrence — a
+     * second transaction. Only the richest alternative is read: HTML (tables survive as rows),
+     * else plain text.
+     */
     private void extractText(MessagePart part, StringBuilder sb) {
         if (part == null) return;
-        String mimeType = part.getMimeType();
-        if ("text/plain".equalsIgnoreCase(mimeType) || "text/html".equalsIgnoreCase(mimeType)) {
+        String mimeType = part.getMimeType() == null ? "" : part.getMimeType().toLowerCase();
+        if ("multipart/alternative".equals(mimeType) && part.getParts() != null && !part.getParts().isEmpty()) {
+            MessagePart chosen = null;
+            for (MessagePart child : part.getParts()) {
+                if (contains(child, "text/html")) { chosen = child; break; }
+            }
+            if (chosen == null) {
+                for (MessagePart child : part.getParts()) {
+                    if (contains(child, "text/plain")) { chosen = child; break; }
+                }
+            }
+            extractText(chosen != null ? chosen : part.getParts().get(0), sb);
+            return;
+        }
+        if ("text/plain".equals(mimeType) || "text/html".equals(mimeType)) {
             if (part.getBody() != null && part.getBody().getData() != null) {
                 byte[] decoded = Base64.getUrlDecoder().decode(part.getBody().getData());
                 String text = new String(decoded, StandardCharsets.UTF_8);
-                // Strip basic HTML tags for text/html
-                if ("text/html".equalsIgnoreCase(mimeType)) {
-                    text = text.replaceAll("<[^>]+>", " ").replaceAll("&nbsp;", " ").replaceAll("\\s+", " ");
-                }
+                if ("text/html".equals(mimeType)) text = htmlToText(text);
                 sb.append(text).append("\n");
             }
         }
@@ -310,6 +327,39 @@ public class GmailClientService {
                 extractText(child, sb);
             }
         }
+    }
+
+    private static boolean contains(MessagePart part, String mimeType) {
+        if (part == null) return false;
+        if (mimeType.equalsIgnoreCase(part.getMimeType())) return true;
+        if (part.getParts() != null) {
+            for (MessagePart child : part.getParts()) if (contains(child, mimeType)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * HTML to readable text that keeps table structure: a row becomes a line and cells are
+     * separated by " | ", so "Date | Description | Amount" rows stay attributable. Style and
+     * script blocks are dropped, and the entities banks actually use are decoded (₹ included).
+     */
+    static String htmlToText(String html) {
+        if (html == null) return "";
+        String t = html
+            .replaceAll("(?is)<(style|script|head)[^>]*>.*?</\\1>", " ")
+            .replaceAll("(?is)<!--.*?-->", " ")
+            .replaceAll("(?i)<br\\s*/?>", "\n")
+            .replaceAll("(?i)</(p|div|tr|li|h[1-6]|table)>", "\n")
+            .replaceAll("(?i)</t[dh]>", " | ")
+            .replaceAll("<[^>]+>", " ")
+            .replace("&nbsp;", " ").replace("&#160;", " ")
+            .replace("&#8377;", "₹").replace("&#x20B9;", "₹").replace("&#x20b9;", "₹")
+            .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'");
+        t = t.replaceAll("[ \\t\\x0B\\f\\r]+", " ")
+             .replaceAll("(\\s*\\|\\s*)+\n", "\n")
+             .replaceAll(" *\n[\\s]*", "\n");
+        return t.trim();
     }
 
     public String getUserEmail(Gmail gmail) {
@@ -331,6 +381,9 @@ public class GmailClientService {
         public PdfAttachmentRef(String attachmentId, String filename) { this.attachmentId = attachmentId; this.filename = filename; }
     }
 
+    /** Below this an image attachment is a logo or signature, not a document. */
+    static final int MIN_IMAGE_ATTACHMENT_BYTES = 30_000;
+
     public List<PdfAttachmentRef> findPdfAttachments(Message message) {
         List<PdfAttachmentRef> out = new ArrayList<>();
         if (message.getPayload() != null) collectPdfParts(message.getPayload(), out);
@@ -345,9 +398,115 @@ public class GmailClientService {
         if (looksLikePdf && part.getBody() != null && part.getBody().getAttachmentId() != null) {
             out.add(new PdfAttachmentRef(part.getBody().getAttachmentId(), filename != null ? filename : "statement.pdf"));
         }
+        // A photographed receipt or a scanned statement sent as an image. Only named attachments
+        // of a real size — inline logos and tracking pixels are neither.
+        boolean namedImage = com.marketai.document.ocr.ScanTranscriber.isImageFile(filename)
+            && part.getMimeType() != null && part.getMimeType().toLowerCase().startsWith("image/");
+        if (namedImage && part.getBody() != null && part.getBody().getAttachmentId() != null
+                && part.getBody().getSize() != null && part.getBody().getSize() >= MIN_IMAGE_ATTACHMENT_BYTES) {
+            out.add(new PdfAttachmentRef(part.getBody().getAttachmentId(), filename));
+        }
         if (part.getParts() != null) {
             for (MessagePart child : part.getParts()) collectPdfParts(child, out);
         }
+    }
+
+    /** How an attachment is handled. Every attachment gets one, so none is passed over unrecorded. */
+    public enum AttachmentKind {
+        /** PDF or a real-size image: read through the statement pipeline (unlock, OCR, extraction). */
+        DOCUMENT,
+        /** CSV, TXT, HTML, XML: downloaded and read as text. */
+        TEXT,
+        /** Already part of the body text (a small text part sent inline). */
+        INLINE_TEXT,
+        /** A format that is not read automatically (spreadsheet, word document, archive, attached email). */
+        UNSUPPORTED,
+        /** Calendar invites, contact cards, signatures, logos — never financial documents. */
+        NOT_A_DOCUMENT
+    }
+
+    public record AttachmentInfo(String attachmentId, String filename, String mimeType, Integer size, AttachmentKind kind) {
+        /** "report.xlsx (spreadsheet)" — for the manifest. */
+        public String label() {
+            return filename + (kind == AttachmentKind.UNSUPPORTED ? " (" + formatName(filename, mimeType) + ")" : "");
+        }
+    }
+
+    private static final java.util.Set<String> TEXT_EXTENSIONS = java.util.Set.of("csv", "txt", "html", "htm", "xml", "tsv");
+    private static final java.util.Set<String> NOISE_EXTENSIONS = java.util.Set.of("ics", "vcs", "vcf", "p7s", "asc", "sig", "gpg", "pgp");
+
+    /** Every named attachment in the message, each with how it is handled. */
+    public List<AttachmentInfo> listAttachments(Message message) {
+        List<AttachmentInfo> out = new ArrayList<>();
+        if (message.getPayload() != null) collectAttachments(message.getPayload(), out, true);
+        return out;
+    }
+
+    private void collectAttachments(MessagePart part, List<AttachmentInfo> out, boolean root) {
+        if (part == null) return;
+        String filename = part.getFilename();
+        String mime = part.getMimeType() == null ? "" : part.getMimeType().toLowerCase();
+        boolean named = filename != null && !filename.isBlank();
+        String attachmentId = part.getBody() != null ? part.getBody().getAttachmentId() : null;
+        Integer size = part.getBody() != null ? part.getBody().getSize() : null;
+        // The unnamed root part is the body itself; a named root part is a message that is only an attachment.
+        if (!mime.startsWith("multipart/") && (named || (!root && attachmentId != null))) {
+            String name = named ? filename : "(unnamed " + (mime.isEmpty() ? "attachment" : mime) + ")";
+            String ext = extension(name);
+            AttachmentKind kind;
+            boolean pdf = "application/pdf".equals(mime) || "pdf".equals(ext);
+            boolean image = mime.startsWith("image/");
+            if (pdf && attachmentId != null) {
+                kind = AttachmentKind.DOCUMENT;
+            } else if (image) {
+                kind = com.marketai.document.ocr.ScanTranscriber.isImageFile(filename) && attachmentId != null
+                    && size != null && size >= MIN_IMAGE_ATTACHMENT_BYTES ? AttachmentKind.DOCUMENT : AttachmentKind.NOT_A_DOCUMENT;
+            } else if (NOISE_EXTENSIONS.contains(ext) || mime.equals("text/calendar") || mime.equals("text/vcard")
+                    || mime.contains("pkcs7-signature") || mime.contains("pgp-signature")) {
+                kind = AttachmentKind.NOT_A_DOCUMENT;
+            } else if (TEXT_EXTENSIONS.contains(ext) || mime.equals("text/csv") || mime.equals("text/plain")
+                    || mime.equals("text/html") || mime.equals("text/xml") || mime.equals("application/xml")) {
+                // A small text part arrives inline and extractText() has already read it with the body.
+                kind = attachmentId != null ? AttachmentKind.TEXT
+                    : part.getBody() != null && part.getBody().getData() != null ? AttachmentKind.INLINE_TEXT
+                    : AttachmentKind.UNSUPPORTED;
+            } else if ("message/rfc822".equals(mime) && attachmentId == null) {
+                kind = AttachmentKind.INLINE_TEXT; // a forwarded email: its parts are read with the body
+            } else {
+                kind = AttachmentKind.UNSUPPORTED;
+            }
+            out.add(new AttachmentInfo(attachmentId, name, mime, size, kind));
+            if (kind != AttachmentKind.INLINE_TEXT || !"message/rfc822".equals(mime)) return;
+        }
+        if (part.getParts() != null) {
+            for (MessagePart child : part.getParts()) collectAttachments(child, out, false);
+        }
+    }
+
+    private static String extension(String filename) {
+        if (filename == null) return "";
+        int dot = filename.lastIndexOf('.');
+        return dot < 0 ? "" : filename.substring(dot + 1).toLowerCase();
+    }
+
+    static String formatName(String filename, String mime) {
+        String ext = extension(filename);
+        return switch (ext) {
+            case "xls", "xlsx", "ods", "numbers" -> "spreadsheet";
+            case "doc", "docx", "odt", "rtf" -> "word document";
+            case "zip", "rar", "7z", "gz" -> "archive";
+            case "eml", "msg" -> "attached email";
+            default -> mime != null && !mime.isBlank() ? mime : "unknown format";
+        };
+    }
+
+    /** An attachment's text, for the kinds read as text; HTML keeps its table rows. */
+    public static String attachmentText(byte[] bytes, String filename, String mimeType) {
+        String text = new String(bytes, StandardCharsets.UTF_8);
+        if (!text.isEmpty() && text.charAt(0) == '\uFEFF') text = text.substring(1);
+        String ext = extension(filename);
+        boolean html = "html".equals(ext) || "htm".equals(ext) || (mimeType != null && mimeType.contains("html"));
+        return html ? htmlToText(text) : text;
     }
 
     /** Downloads attachment bytes on-demand — only called when the user actually clicks

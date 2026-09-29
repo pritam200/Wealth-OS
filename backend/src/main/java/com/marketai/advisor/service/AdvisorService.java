@@ -1,13 +1,17 @@
 package com.marketai.advisor.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.marketai.ai.prompt.PromptLibrary;
+
+import com.marketai.ai.llm.LlmTask;
+
+import com.marketai.ai.llm.LlmService;
+
 import com.marketai.advisor.dto.AdvisorAskRequest;
 import com.marketai.advisor.dto.AdvisorAskResponse;
 import com.marketai.advisor.dto.AdvisorTool;
 import com.marketai.ai.audit.service.AiAuditService;
 import com.marketai.ai.llm.LlmCompletion;
 import com.marketai.ai.llm.LlmJsonParser;
-import com.marketai.ai.llm.LlmProviderRouter;
 import com.marketai.ai.llm.LlmUnavailableException;
 import com.marketai.expense.dto.ExpenseResponse;
 import com.marketai.expense.service.ExpenseService;
@@ -22,6 +26,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -42,55 +47,61 @@ import java.util.Map;
 @Slf4j
 public class AdvisorService {
 
-    private final LlmProviderRouter llm;
+    private final LlmService llm;
     private final LlmJsonParser json;
     private final AiAuditService audit;
     private final PortfolioContextService portfolioContextService;
     private final ExpenseService expenseService;
     private final ReminderService reminderService;
+    private final LedgerInvestigator investigator;
 
     private static final String TASK = "ADVISOR_ASK";
 
-    private static final String CLASSIFY_SYSTEM =
-        "You route a personal-finance question to exactly one read-only data tool. Return ONLY " +
-        "a JSON object, no prose, no markdown fences: {\"tool\": one of NET_WORTH|" +
-        "RECENT_EXPENSES|UPCOMING_REMINDERS|PORTFOLIO_HOLDINGS|UNKNOWN}. " +
-        "NET_WORTH = total assets, net worth, asset allocation. " +
-        "RECENT_EXPENSES = recent spending, expenses by category, how much was spent. " +
-        "UPCOMING_REMINDERS = upcoming bills, EMIs, FD/RD maturities, SIP due dates. " +
-        "PORTFOLIO_HOLDINGS = stock/mutual-fund holdings, positions, portfolio value. " +
-        "Use UNKNOWN when the question does not clearly match one of the above — never guess.";
+    
+    /** Words that name an asset class, not a provider — dropped from a filter ("HDFC MF" → "HDFC"). */
+    private static final java.util.Set<String> GENERIC_WORDS = java.util.Set.of(
+        "mf", "mfs", "mutual", "fund", "funds", "stock", "stocks", "share", "shares", "equity", "portfolio",
+        "investments", "investment", "holding", "holdings", "all", "email", "emails", "gmail", "my", "value");
 
     public AdvisorAskResponse ask(Long userId, AdvisorAskRequest request) {
         String question = request.getQuestion();
 
-        if (!llm.isEnabled()) {
-            audit.recordFailure(userId, TASK, null, CLASSIFY_SYSTEM, question,
+        if (!llm.isAvailable(LlmTask.AI_ADVISOR)) {
+            audit.recordFailure(userId, TASK, null, PromptLibrary.ADVISOR_ROUTING.system(), question,
                 "UNAVAILABLE", "No LLM provider configured");
             return unavailable();
         }
 
-        AdvisorTool tool;
+        Route route;
         try {
-            LlmCompletion completion = llm.complete(CLASSIFY_SYSTEM, question);
-            tool = parseTool(completion);
-            audit.record(userId, TASK, null, CLASSIFY_SYSTEM, question, completion, null,
-                "CLASSIFIED", "tool=" + tool);
+            LlmCompletion completion = llm.complete(LlmTask.AI_ADVISOR, PromptLibrary.ADVISOR_ROUTING, question);
+            route = parseRoute(completion, question);
+            audit.record(userId, TASK, null, PromptLibrary.ADVISOR_ROUTING.system(), question, completion, null,
+                "CLASSIFIED", "tool=" + route.tool() + (route.subject() == null ? "" : ", subject=" + route.subject()));
         } catch (LlmUnavailableException e) {
             log.warn("Advisor classify rejected — no model available: {}", e.getMessage());
-            audit.recordFailure(userId, TASK, null, CLASSIFY_SYSTEM, question,
+            audit.recordFailure(userId, TASK, null, PromptLibrary.ADVISOR_ROUTING.system(), question,
                 "UNAVAILABLE", e.getMessage());
             return unavailable();
         }
 
-        return switch (tool) {
+        LocalDate today = LocalDate.now();
+        return switch (route.tool()) {
             case NET_WORTH -> answerNetWorth(userId);
             case RECENT_EXPENSES -> answerRecentExpenses(userId);
             case UPCOMING_REMINDERS -> answerUpcomingReminders(userId);
             case PORTFOLIO_HOLDINGS -> answerPortfolioHoldings(userId);
-            default -> AdvisorAskResponse.builder()
-                .answer("I can answer questions about your net worth, recent expenses, "
-                    + "upcoming reminders, or portfolio holdings — try rephrasing around one of those.")
+            case NET_WORTH_CHANGE -> grounded(route.tool(), investigator.netWorthChange(userId, today));
+            case INVESTMENT_PLAN -> grounded(route.tool(), investigator.investmentPlan(userId, today));
+            case IMPORTED_TRANSACTIONS -> grounded(route.tool(), investigator.importedTransactions(userId, route.subject(), today));
+            case VALUE_CHANGE -> grounded(route.tool(), investigator.valueChange(userId, route.subject(), route.scope()));
+            case DUPLICATES -> grounded(route.tool(), investigator.duplicates(userId));
+            case MISSING_TRANSACTIONS -> grounded(route.tool(), investigator.missingTransactions(userId));
+            case HOLDING_SOURCES -> grounded(route.tool(), investigator.holdingSources(userId, route.subject(), route.scope()));
+            case UNKNOWN -> AdvisorAskResponse.builder()
+                .answer("I can answer questions about your net worth and how it changed, spending, upcoming "
+                    + "reminders, holdings and the documents behind them, this month's investment plan, imported "
+                    + "transactions, fund value changes, duplicates and missing records — try rephrasing around one of those.")
                 .tool(AdvisorTool.UNKNOWN)
                 .groundedData(Map.of())
                 .available(true)
@@ -99,19 +110,47 @@ public class AdvisorService {
         };
     }
 
-    private AdvisorTool parseTool(LlmCompletion completion) {
-        return json.parse(completion.getText())
-            .map(n -> json.str(n, "tool"))
-            .map(s -> {
-                try { return AdvisorTool.valueOf(s.trim().toUpperCase()); }
-                catch (IllegalArgumentException e) { return AdvisorTool.UNKNOWN; }
-            })
-            .orElse(AdvisorTool.UNKNOWN);
+    /** What the model picked: a tool and, for some tools, a filter taken from the question. */
+    record Route(AdvisorTool tool, String subject, LedgerInvestigator.Scope scope) {}
+
+    /**
+     * The subject is only a filter, and only kept when it is actually in the question — so the
+     * model can narrow an answer to what the user named but can't invent a provider to look up.
+     */
+    Route parseRoute(LlmCompletion completion, String question) {
+        var node = json.parse(completion.getText());
+        AdvisorTool tool = node.map(n -> json.str(n, "tool")).map(s -> {
+            try { return AdvisorTool.valueOf(s.trim().toUpperCase()); }
+            catch (IllegalArgumentException e) { return AdvisorTool.UNKNOWN; }
+        }).orElse(AdvisorTool.UNKNOWN);
+        String subject = node.map(n -> json.str(n, "subject")).map(s -> cleanSubject(s, question)).orElse(null);
+        LedgerInvestigator.Scope scope = node.map(n -> json.str(n, "scope")).map(s -> {
+            try { return LedgerInvestigator.Scope.valueOf(s.trim().toUpperCase()); }
+            catch (IllegalArgumentException e) { return LedgerInvestigator.Scope.ALL; }
+        }).orElse(LedgerInvestigator.Scope.ALL);
+        return new Route(tool, subject, scope);
+    }
+
+    static String cleanSubject(String raw, String question) {
+        if (raw == null) return null;
+        String s = raw.replaceAll("[^\\p{L}\\p{N} &.\\-]", " ").trim().replaceAll("\\s+", " ");
+        if (s.isEmpty() || s.length() > 40 || s.equalsIgnoreCase("null")) return null;
+        if (question == null || !question.toLowerCase(java.util.Locale.ROOT).contains(s.toLowerCase(java.util.Locale.ROOT))) return null;
+        String kept = java.util.Arrays.stream(s.split(" "))
+            .filter(w -> !GENERIC_WORDS.contains(w.toLowerCase(java.util.Locale.ROOT)))
+            .collect(java.util.stream.Collectors.joining(" "));
+        return kept.isEmpty() ? null : kept;
+    }
+
+    private AdvisorAskResponse grounded(AdvisorTool tool, LedgerInvestigator.Answer a) {
+        return AdvisorAskResponse.builder()
+            .answer(a.text()).tool(tool).groundedData(a.data()).evidence(a.evidence())
+            .available(true).generatedAt(LocalDateTime.now()).build();
     }
 
     private AdvisorAskResponse unavailable() {
         return AdvisorAskResponse.builder()
-            .answer(LlmProviderRouter.NONE_AVAILABLE)
+            .answer(LlmService.NONE_AVAILABLE)
             .tool(AdvisorTool.UNKNOWN)
             .groundedData(Map.of())
             .available(false)
@@ -136,9 +175,7 @@ public class AdvisorService {
             if (ctx.getDebtPercent() != null) sb.append(" and ").append(ctx.getDebtPercent()).append("% in debt");
             sb.append(".");
         }
-        if (!ctx.getDataGaps().isEmpty()) {
-            sb.append(" Note: ").append(ctx.getDataGaps().get(0));
-        }
+        sb.append(LedgerInvestigator.gapNote(ctx));
         return AdvisorAskResponse.builder()
             .answer(sb.toString()).tool(AdvisorTool.NET_WORTH).groundedData(data)
             .available(true).generatedAt(LocalDateTime.now()).build();

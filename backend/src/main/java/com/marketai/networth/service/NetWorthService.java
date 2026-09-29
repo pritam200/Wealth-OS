@@ -31,6 +31,9 @@ public class NetWorthService {
             .orElse(NetWorthSnapshot.builder().userId(userId).snapshotDate(today).build());
         snap.setTotalAssets(ctx.getTotalAssets());
         snap.setNetWorth(ctx.getNetWorth());
+        snap.setTotalLiabilities(ctx.getTotalLiabilities());
+        snap.setDataQuality(ctx.getDataQuality());
+        snap.setDataGaps(ctx.getDataGaps() == null || ctx.getDataGaps().isEmpty() ? null : String.join("\n", ctx.getDataGaps()));
         return repo.save(snap);
     }
 

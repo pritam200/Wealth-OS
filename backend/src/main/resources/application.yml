@@ -9,6 +9,12 @@ spring:
 # overridden by environment variables; the prod document at the end of the file only tightens
 # what must differ in a hosted deployment.
 spring:
+  # More than Spring's single default thread: the sync-lock heartbeat (every 30s) must not wait
+  # behind a long nightly sweep, or a live sync's lock goes stale and a second sync takes it over.
+  task:
+    scheduling:
+      pool:
+        size: ${SCHEDULER_POOL_SIZE:6}
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketai_db}
     username: ${DB_USER:marketai}
@@ -112,6 +118,8 @@ app:
   # AI reasoning layer. Local-first: Ollama needs no key and nothing leaves the machine.
   # provider = ollama | gemini | none  ("none" disables every LLM path; the deterministic
   # parsers and all arithmetic keep working, since the AI layer is strictly additive.)
+  # These are first-run defaults only: once Settings → LLM Configuration is saved, the saved
+  # configuration (LlmConfigService) decides, and a key saved there overrides GEMINI_API_KEY.
   llm:
     provider: ${LLM_PROVIDER:ollama}
     fallback-enabled: ${LLM_FALLBACK_ENABLED:true}
@@ -182,6 +190,11 @@ app:
   signup:
     allowed-emails: ${SIGNUP_ALLOWED_EMAILS:}
     open-when-empty: ${SIGNUP_OPEN_WHEN_EMPTY:true}
+
+  # Who may change installation-wide settings such as LLM Configuration: comma-separated
+  # emails. Empty = only the first account created (see AdminAccess).
+  admin:
+    emails: ${ADMIN_EMAILS:}
 
   otp:
     from: ${MAIL_FROM:MarketAI <no-reply@marketai.local>}

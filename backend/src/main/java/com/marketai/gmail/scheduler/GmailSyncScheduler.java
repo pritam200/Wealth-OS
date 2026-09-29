@@ -28,6 +28,7 @@ public class GmailSyncScheduler {
     private final GmailTokenRepository tokenRepo;
     private final SyncJobService jobService;
     private final GmailWatchService watchService;
+    private final com.marketai.common.jobs.JobHealthRecorder jobHealth;
 
     /**
      * Safety-net poll. Gmail caps push notifications at one per second per user and silently
@@ -39,15 +40,17 @@ public class GmailSyncScheduler {
      */
     @Scheduled(fixedDelay = 1_800_000)
     public void scheduledSync() {
-        for (GmailToken token : tokenRepo.findAll()) {
-            try {
-                if (token.getUser() == null) continue;
-                jobService.enqueue(token.getUser(), SyncJobType.GMAIL_INCREMENTAL_SYNC,
-                    SyncTrigger.SCHEDULED, null);
-            } catch (Exception e) {
-                log.error("Could not queue scheduled sync for token {}: {}", token.getId(), e.getMessage());
+        jobHealth.record("gmail-scheduled-sync", run -> {
+            for (GmailToken token : tokenRepo.findAll()) {
+                try {
+                    if (token.getUser() == null) continue;
+                    jobService.enqueue(token.getUser(), SyncJobType.GMAIL_INCREMENTAL_SYNC,
+                        SyncTrigger.SCHEDULED, null);
+                } catch (Exception e) {
+                    run.failed("queueing sync for token " + token.getId(), e);
+                }
             }
-        }
+        });
     }
 
     /**
@@ -61,15 +64,17 @@ public class GmailSyncScheduler {
      */
     @Scheduled(fixedDelay = 604_800_000, initialDelay = 300_000)
     public void scheduledRetrySweep() {
-        for (GmailToken token : tokenRepo.findAll()) {
-            try {
-                if (token.getUser() == null) continue;
-                jobService.enqueue(token.getUser(), SyncJobType.GMAIL_RETRY_FAILED,
-                    SyncTrigger.SCHEDULED, null);
-            } catch (Exception e) {
-                log.error("Could not queue backlog retry sweep for token {}: {}", token.getId(), e.getMessage());
+        jobHealth.record("gmail-retry-sweep", run -> {
+            for (GmailToken token : tokenRepo.findAll()) {
+                try {
+                    if (token.getUser() == null) continue;
+                    jobService.enqueue(token.getUser(), SyncJobType.GMAIL_RETRY_FAILED,
+                        SyncTrigger.SCHEDULED, null);
+                } catch (Exception e) {
+                    run.failed("queueing retry for token " + token.getId(), e);
+                }
             }
-        }
+        });
     }
 
     /**
@@ -82,10 +87,6 @@ public class GmailSyncScheduler {
      */
     @Scheduled(fixedDelay = 86_400_000, initialDelay = 120_000)
     public void renewWatches() {
-        try {
-            watchService.renewAllDueWatches();
-        } catch (Exception e) {
-            log.error("Gmail watch renewal sweep failed: {}", e.getMessage());
-        }
+        jobHealth.record("gmail-watch-renewal", run -> watchService.renewAllDueWatches());
     }
 }

@@ -5,6 +5,16 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ImportedTransactionFingerprintRepository extends JpaRepository<ImportedTransactionFingerprint, Long> {
     boolean existsByUserIdAndFingerprint(Long userId, String fingerprint);
+
+    /** Lines booked from this email before {@code before} by a read other than {@code version}
+     *  (or by one that predates versions). */
+    @org.springframework.data.jpa.repository.Query("SELECT COUNT(f) > 0 FROM ImportedTransactionFingerprint f "
+        + "WHERE f.userId = :userId AND f.gmailMessageId = :msgId AND f.importedAt < :before "
+        + "AND f.extractionMethod IS NOT NULL AND (f.extractionVersion IS NULL OR f.extractionVersion <> :version)")
+    boolean existsReadByOtherVersion(@org.springframework.data.repository.query.Param("userId") Long userId,
+                                     @org.springframework.data.repository.query.Param("msgId") String gmailMessageId,
+                                     @org.springframework.data.repository.query.Param("version") String version,
+                                     @org.springframework.data.repository.query.Param("before") java.time.LocalDateTime before);
     java.util.Optional<ImportedTransactionFingerprint> findFirstByUserIdAndFingerprint(Long userId, String fingerprint);
     void deleteByUserId(Long userId);
 

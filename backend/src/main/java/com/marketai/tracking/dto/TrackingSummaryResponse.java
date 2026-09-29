@@ -16,6 +16,8 @@ public class TrackingSummaryResponse {
     private BigDecimal totalFdPrincipal;
     private BigDecimal totalFdMaturityValue;
     private BigDecimal totalFdCurrentValue;
+    private BigDecimal totalFdInterest;
+    private BigDecimal totalRdMonthly;
     private BigDecimal totalRdCorpus;
     private BigDecimal totalRdCurrentValue;
     private BigDecimal totalOtherAssets;

@@ -16,7 +16,10 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "investment_reconciliations",
-    indexes = @Index(name = "idx_investment_reconciliation_plan", columnList = "plan_id"))
+    indexes = @Index(name = "idx_investment_reconciliation_plan", columnList = "plan_id"),
+    // One source row is evidence for at most one plan line, once.
+    uniqueConstraints = @UniqueConstraint(name = "uq_investment_reconciliation_source",
+        columnNames = {"source_kind", "source_ref"}))
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 public class InvestmentReconciliation {
 

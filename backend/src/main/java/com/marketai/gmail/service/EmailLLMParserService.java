@@ -1,12 +1,17 @@
 package com.marketai.gmail.service;
 
+import com.marketai.ai.prompt.PromptLibrary;
+
+import com.marketai.ai.llm.LlmTask;
+
+import com.marketai.ai.llm.LlmService;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.marketai.ai.audit.service.AiAuditService;
 import com.marketai.ai.intel.EmailIntelResult;
 import com.marketai.ai.intel.EmailIntelType;
 import com.marketai.ai.llm.LlmCompletion;
 import com.marketai.ai.llm.LlmJsonParser;
-import com.marketai.ai.llm.LlmProviderRouter;
 import com.marketai.ai.llm.LlmUnavailableException;
 import com.marketai.ai.review.service.EmailReviewService;
 import com.marketai.auth.entity.User;
@@ -16,6 +21,9 @@ import com.marketai.document.classify.SenderTrustEvaluator;
 import com.marketai.document.extract.ExtractedField;
 import com.marketai.document.extract.SpanVerifier;
 import com.marketai.expense.entity.ExpenseCategory;
+import com.marketai.gmail.ledger.EmailFinancialEvent;
+import com.marketai.gmail.ledger.EventState;
+import com.marketai.gmail.ledger.FinancialEventLedger;
 import com.marketai.gmail.parser.ParsedEmail;
 import com.marketai.gmail.parser.SpendCategorizer;
 import com.marketai.identity.service.PasswordStrategy;
@@ -71,7 +79,7 @@ import java.util.Optional;
 @Slf4j
 public class EmailLLMParserService {
 
-    private final LlmProviderRouter llm;
+    private final LlmService llm;
     private final LlmJsonParser json;
     private final AiAuditService audit;
     private final MarketDataService marketDataService;
@@ -80,13 +88,9 @@ public class EmailLLMParserService {
     private final EmailReviewService emailReviewService;
     private final ParsedEmailImporter importer;
     private final CasBalanceSnapshotRepository casBalanceSnapshotRepository;
+    private final FinancialEventLedger ledger;
 
     private static final TransactionFingerprinter FINGERPRINTER = new TransactionFingerprinter();
-
-    /** Provider that reads email — independent of app.llm.provider, which the other AI
-     *  features use. Blank = same as app.llm.provider. */
-    @Value("${app.llm.email-provider:}")
-    private String emailProvider = "";
 
     @Value("${app.llm.min-confidence:0.85}")
     private double minConfidence;
@@ -95,6 +99,9 @@ public class EmailLLMParserService {
     private static final String CLASSIFY_TASK = "EMAIL_LLM_CLASSIFY";
     private static final String EXTRACT_TASK = "EMAIL_LLM_EXTRACT";
 
+    // Deliberately wide: this screen only decides whether a plain email body is worth an LLM
+    // call. Missing a financial email here would lose it with no trace, while letting a
+    // newsletter through costs one call that finds nothing.
     private static final String[] MONEY_SIGNALS = {
         "₹", "rs.", "rs ", "inr", "debited", "credited", "spent", "paid", "purchase",
         "sip", "mutual fund", "nav", "folio", "fd", "rd", "salary", "dividend", "upi",
@@ -102,84 +109,12 @@ public class EmailLLMParserService {
         "transfer", "neft", "imps", "rtgs", "bought", "sold", "buy", "sell", "trade",
         "contract note", "order", "shares", "units", "brokerage", "settlement", "demat",
         "maturity", "interest", "refund", "statement", "password",
+        "$", "€", "£", "usd", "eur", "gbp", "aed", "sgd",
+        "invoice", "receipt", "bill", "premium", "cashback", "reward", "loan", "tax", "gst", "tds",
+        "policy", "a/c", "acct", "account", "card", "wallet", "charge", "fee", "reversal", "reversed",
+        "subscription", "renewal", "booking", "reimburse", "payout", "deposit", "allotment",
+        "bonus", "split", "buyback", "rights issue", "merger", "demerger", "redemption", "switch",
     };
-
-    private static final String CLASSIFY_SYSTEM =
-        "You classify an Indian bank/broker/AMC/RTA email. Return ONLY a JSON object, no prose, " +
-        "no markdown fences:\n" +
-        "{\"is_financial_statement\": true|false, " +
-        "\"statement_provider\": one of CAMS|KFINTECH|CDSL|NSDL|ZERODHA|GROWW|UPSTOX|ANGELONE|" +
-        "ICICIDIRECT|MSTOCK|HDFC_BANK|ICICI_BANK|AXIS_BANK|SBI|KOTAK|IDFC_FIRST|YES_BANK|" +
-        "HDFC_AMC|OTHER|null, " +
-        "\"password_hint_type\": one of PAN|PAN_LOWERCASE|DOB|DOB_SHORT|PAN_DOB|PAN_FIRST4_DOB|" +
-        "PAN_FIRST5_DOB|USER_DEFINED|null (null when the email states no password format at all; " +
-        "USER_DEFINED when it says the password was chosen by the user at request time)}\n" +
-        "Never invent a provider or hint that isn't actually stated or clearly implied by the " +
-        "sender/content. Use null rather than a guess.";
-
-    private static final String EXTRACT_SYSTEM =
-        "You extract financial transactions from an Indian bank/broker/AMC/RTA email or " +
-        "statement. Return ONLY a JSON object of the form {\"transactions\": [...], " +
-        "\"closing_balances\": [...], \"confidence\": number 0..1 (your genuine certainty " +
-        "across all transactions; be conservative)}, no prose, no markdown fences. Each " +
-        "transactions[] element has exactly these fields (use null when unknown, never invent " +
-        "a value):\n" +
-        "{\"instrument_type\": one of MF|EQUITY|FD|RD|BANK|UPI (FD/RD for a fixed or recurring " +
-        "deposit being opened, renewed, matured or closed — never report those as a BANK debit or " +
-        "credit), " +
-        "\"transaction_type\": for MF one of PURCHASE|SIP|REDEMPTION|DIVIDEND_REINVEST; " +
-        "for EQUITY one of BUY|SELL|DIVIDEND; for FD/RD one of OPEN|MATURITY (a renewal is OPEN " +
-        "of the new deposit; a premature closure is MATURITY); for BANK/UPI one of CREDIT|DEBIT, " +
-        "\"bank\": the bank holding the deposit, null unless FD/RD, " +
-        "\"rate\": annual interest rate in percent, null unless FD/RD, " +
-        "\"maturity_date\": ISO date yyyy-MM-dd, null unless FD/RD, " +
-        "\"tenure_months\": integer, null unless RD, " +
-        "\"scheme_name\": full MF scheme name exactly as written (e.g. \\\"HDFC Small Cap Fund " +
-        "- Direct Plan - Growth\\\"), null unless MF, " +
-        "\"plan_type\": Direct|Regular, null unless MF, " +
-        "\"option_type\": Growth|IDCW, null unless MF, " +
-        "\"folio_number\": string, null unless MF, " +
-        "\"symbol\": the EXACT NSE trading ticker (e.g. RELIANCE, TCS, ADANIENT — never a " +
-        "shortened form like ADANI or LARSEN; use null if not certain), null unless EQUITY, " +
-        "\"isin\": the ISIN code (e.g. INF179K01158, INE002A01018), null unless MF or EQUITY " +
-        "and the text clearly states it, " +
-        "\"dp_id\": demat Depository Participant id, null unless EQUITY and clearly stated, " +
-        "\"client_id\": broker client id, null unless EQUITY and clearly stated, " +
-        "\"transaction_date\": ISO date yyyy-MM-dd (for FD/RD OPEN, the deposit start date), " +
-        "\"amount_inr\": total transaction amount (for FD OPEN the principal; for RD OPEN the " +
-        "monthly instalment), " +
-        "\"nav\": per-unit NAV, null unless MF, " +
-        "\"units\": units transacted, null unless MF, " +
-        "\"quantity\": integer shares, null unless EQUITY, " +
-        "\"price\": per-share price, null unless EQUITY, " +
-        "\"merchant\": payee/merchant/company name, null unless BANK/UPI or DIVIDEND, " +
-        "\"payment_method\": payment channel (bank name, UPI app, card), " +
-        "\"category\": one of Food|Food Delivery|Groceries|Restaurant / Outing|Shopping|Travel|" +
-        "Fuel|Bills|Medical|Entertainment|EMI|UPI|Account Transfer|Uncategorized, null unless " +
-        "BANK/UPI debit — a hint only, the app recomputes the real category deterministically, " +
-        "\"evidence\": the exact sentence or line from the source text that the amount and date " +
-        "were read from — required for every transaction, verbatim, not paraphrased}\n" +
-        "A credit card STATEMENT (as opposed to a payment confirmation) lists many individual " +
-        "purchases in a table: extract EVERY purchase line item as its own BANK/UPI DEBIT " +
-        "transaction, each with its own merchant, amount, date, and evidence line — do not " +
-        "collapse them into one transaction and do not extract the statement's aggregate " +
-        "\\\"Total Amount Due\\\" / \\\"Minimum Amount Due\\\" figure as a transaction at all; " +
-        "it is a bill total, not something that was actually debited yet. A CRED payment or a " +
-        "bank debit described as paying/settling a credit card bill is a single transaction " +
-        "(the payment itself, not its line items) with transaction_type DEBIT and category " +
-        "\\\"Account Transfer\\\".\n" +
-        "A CAS/AMC statement often also states a per-folio closing balance separately from any " +
-        "transaction rows (e.g. \\\"Closing Balance: 1234.567 units as of 31-Jan-2026\\\"). " +
-        "Extract each such line as its own element of closing_balances[], each with exactly " +
-        "these fields: {\"folio\": string, \"scheme_name\": full MF scheme name exactly as " +
-        "written, \"as_of_date\": ISO date yyyy-MM-dd, \"units\": the stated closing unit " +
-        "balance, \"evidence\": the exact sentence or line the folio and units were read from, " +
-        "verbatim}. Omit closing_balances entirely (empty array) when the statement states no " +
-        "such summary line — never derive or estimate a closing balance from the transaction " +
-        "rows yourself.\n" +
-        "If nothing in the text is a real, clearly-stated transaction, return {\"transactions\": " +
-        "[], \"closing_balances\": [], \"confidence\": 1}. Never guess a transaction, amount, " +
-        "date, scheme, ticker, or closing balance that isn't clearly stated in the text.";
 
     // --- Call 1: classify + password hint -------------------------------------------------
 
@@ -189,6 +124,15 @@ public class EmailLLMParserService {
     }
 
     public boolean looksFinancial(String subject, String body) {
+        return looksFinancial(null, subject, body);
+    }
+
+    /** As {@link #looksFinancial(String, String)}; mail from a known bank, broker, AMC or RTA always passes. */
+    public boolean looksFinancial(String from, String subject, String body) {
+        if (from != null) {
+            String domain = ClassificationCandidate.email(from, subject, null).senderDomain();
+            if (domain != null && IssuerDomainRegistry.issuerFor(domain).isPresent()) return true;
+        }
         String text = (subject == null ? "" : subject) + "\n" + (body == null ? "" : body);
         String lower = text.toLowerCase(Locale.ROOT);
         for (String signal : MONEY_SIGNALS) if (lower.contains(signal)) return true;
@@ -201,7 +145,13 @@ public class EmailLLMParserService {
      * thing the model ever contributes to password resolution.
      */
     public Classification classify(String from, String subject, String body) {
-        if (!looksFinancial(subject, body)) return Classification.none();
+        return classify(null, null, from, subject, body);
+    }
+
+    /** As {@link #classify(String, String, String)}, with the audit record attributed to the
+     *  user and email it was run for (it used to be saved with neither). */
+    public Classification classify(Long userId, String gmailMessageId, String from, String subject, String body) {
+        if (!looksFinancial(from, subject, body)) return Classification.none();
 
         String text = (subject == null ? "" : subject) + "\n" + (body == null ? "" : body);
         String truncated = text.length() > MAX_CHARS ? text.substring(0, MAX_CHARS) : text;
@@ -209,19 +159,21 @@ public class EmailLLMParserService {
 
         LlmCompletion completion;
         try {
-            completion = llm.completeWith(emailProvider, CLASSIFY_SYSTEM, prompt);
+            completion = llm.complete(LlmTask.EMAIL_CLASSIFICATION, PromptLibrary.EMAIL_CLASSIFICATION, prompt);
         } catch (LlmUnavailableException e) {
-            audit.recordFailure(null, CLASSIFY_TASK, null, CLASSIFY_SYSTEM, prompt,
+            audit.recordFailure(userId, CLASSIFY_TASK, gmailMessageId, PromptLibrary.EMAIL_CLASSIFICATION.system(), prompt,
                 "UNAVAILABLE", "No LLM provider available: " + e.getMessage());
             return Classification.none();
         } catch (Exception e) {
-            log.debug("Classification call failed: {}", e.getMessage());
+            log.warn("Classification call failed for {}: {}", gmailMessageId, e.getMessage());
+            audit.recordFailure(userId, CLASSIFY_TASK, gmailMessageId, PromptLibrary.EMAIL_CLASSIFICATION.system(), prompt,
+                "UNAVAILABLE", "Classification call failed: " + e.getMessage());
             return Classification.none();
         }
 
         Optional<JsonNode> parsed = json.parse(completion.getText());
         if (parsed.isEmpty()) {
-            audit.record(null, CLASSIFY_TASK, null, CLASSIFY_SYSTEM, prompt, completion, null,
+            audit.record(userId, CLASSIFY_TASK, gmailMessageId, PromptLibrary.EMAIL_CLASSIFICATION.system(), prompt, completion, null,
                 "PARSE_FAILED", "Model output was not valid JSON");
             return Classification.none();
         }
@@ -230,7 +182,7 @@ public class EmailLLMParserService {
         String provider = json.str(node, "statement_provider");
         PasswordStrategy strategy = mapPasswordHint(json.str(node, "password_hint_type"));
 
-        audit.record(null, CLASSIFY_TASK, null, CLASSIFY_SYSTEM, prompt, completion, null,
+        audit.record(userId, CLASSIFY_TASK, gmailMessageId, PromptLibrary.EMAIL_CLASSIFICATION.system(), prompt, completion, null,
             "ACCEPTED", "is_financial_statement=" + isStatement + " provider=" + provider);
         return new Classification(isStatement, provider, strategy);
     }
@@ -263,18 +215,92 @@ public class EmailLLMParserService {
 
     public enum Outcome { IMPORTED, REVIEW, NOT_FINANCIAL, UNAVAILABLE }
 
+    /** The per-document record of what {@code r} produced (see {@link DocumentCounts}). */
+    public static com.marketai.gmail.entity.DocumentCounts countsOf(Result r) {
+        String outcome;
+        if (r.getOutcome() == Outcome.NOT_FINANCIAL && r.getExtracted() == 0 && !r.isIncomplete()) {
+            outcome = com.marketai.gmail.entity.DocumentCounts.NO_TRANSACTION;
+        } else if (r.isIncomplete()) {
+            outcome = r.getImported() + r.getDuplicates() + r.getResolved() > 0
+                ? com.marketai.gmail.entity.DocumentCounts.PARTIAL_SUCCESS
+                : com.marketai.gmail.entity.DocumentCounts.FAILED;
+        } else if (r.getQueuedForReview() > 0 || r.getConflicts() > 0 || "MISMATCHED".equals(r.getTotalsCheck())) {
+            outcome = com.marketai.gmail.entity.DocumentCounts.RECONCILIATION_REQUIRED;
+        } else if (r.getExtracted() > 0 && r.getImported() + r.getDuplicates() + r.getResolved() == 0) {
+            outcome = com.marketai.gmail.entity.DocumentCounts.FAILED;
+        } else {
+            outcome = com.marketai.gmail.entity.DocumentCounts.SUCCESS;
+        }
+        return com.marketai.gmail.entity.DocumentCounts.builder()
+            .extracted(r.getExtracted()).imported(r.getImported()).duplicates(r.getDuplicates())
+            .conflicts(r.getConflicts()).needsReview(r.getQueuedForReview()).failed(r.getRejected())
+            .resolved(r.getResolved())
+            .totalsCheck(r.getTotalsCheck())
+            .totalsDetail(r.getTotalsDetail() != null && r.getTotalsDetail().length() > 500
+                ? r.getTotalsDetail().substring(0, 500) : r.getTotalsDetail())
+            .outcome(outcome).build();
+    }
+
     @Data
     @Builder
     public static class Result {
         private Outcome outcome;
         @Builder.Default private int imported = 0;
+        /** Items recognised as already recorded — accounted for, but not new. */
+        @Builder.Default private int duplicates = 0;
+        /** Items quoting the same payment reference as a recorded one with different details —
+         *  not booked; flagged on the original for a person to resolve. */
+        @Builder.Default private int conflicts = 0;
+        /** Transaction lines the model reported, before any validation. */
+        @Builder.Default private int extracted = 0;
+        /** MATCHED / MISMATCHED against the statement's own stated totals; null when it states none. */
+        private String totalsCheck;
+        private String totalsDetail;
         @Builder.Default private int queuedForReview = 0;
         @Builder.Default private int rejected = 0;
+        /** Events that need no record, for a stated reason (a failed or cancelled payment). */
+        @Builder.Default private int resolved = 0;
         @Builder.Default private List<String> summaries = new ArrayList<>();
         // True when part of the source could not be read; the caller must not mark the email done.
         @Builder.Default private boolean incomplete = false;
         private String detail;
         private String matchedProvider;
+    }
+
+    /**
+     * One result for several documents of the same email (its body and its text attachments),
+     * decided the same way a single document's is.
+     */
+    public static Result merge(Result a, Result b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        int imported = a.getImported() + b.getImported();
+        int duplicates = a.getDuplicates() + b.getDuplicates();
+        int conflicts = a.getConflicts() + b.getConflicts();
+        int resolved = a.getResolved() + b.getResolved();
+        int queued = a.getQueuedForReview() + b.getQueuedForReview();
+        boolean incomplete = a.isIncomplete() || b.isIncomplete();
+        boolean unavailable = a.getOutcome() == Outcome.UNAVAILABLE || b.getOutcome() == Outcome.UNAVAILABLE;
+        Outcome outcome = incomplete ? (unavailable && imported == 0 ? Outcome.UNAVAILABLE : Outcome.REVIEW)
+            : imported > 0 || ((duplicates + conflicts + resolved) > 0 && queued == 0) ? Outcome.IMPORTED
+            : queued > 0 ? Outcome.REVIEW : Outcome.NOT_FINANCIAL;
+        String totalsCheck = "MISMATCHED".equals(a.getTotalsCheck()) || "MISMATCHED".equals(b.getTotalsCheck()) ? "MISMATCHED"
+            : a.getTotalsCheck() != null ? a.getTotalsCheck() : b.getTotalsCheck();
+        List<String> summaries = new ArrayList<>(a.getSummaries());
+        summaries.addAll(b.getSummaries());
+        return Result.builder().outcome(outcome)
+            .imported(imported).duplicates(duplicates).conflicts(conflicts).resolved(resolved)
+            .extracted(a.getExtracted() + b.getExtracted()).queuedForReview(queued)
+            .rejected(a.getRejected() + b.getRejected()).incomplete(incomplete)
+            .totalsCheck(totalsCheck).totalsDetail(joinNonNull(a.getTotalsDetail(), b.getTotalsDetail()))
+            .detail(joinNonNull(a.getDetail(), b.getDetail()))
+            .summaries(summaries).build();
+    }
+
+    private static String joinNonNull(String x, String y) {
+        if (x == null) return y;
+        if (y == null) return x;
+        return x + "; " + y;
     }
 
     /**
@@ -304,9 +330,53 @@ public class EmailLLMParserService {
      */
     public Result process(Long userId, User user, String from, String subject, String sourceText,
                           String gmailMessageId, Classification classification, int itemIndexBase) {
-        if (!looksFinancial(subject, sourceText)) {
+        return process(userId, user, from, subject, sourceText, gmailMessageId, classification, itemIndexBase, null, null);
+    }
+
+    /**
+     * @param attachmentId  the PDF attachment {@code sourceText} came from; null for an email body
+     * @param documentHash  SHA-256 of the attachment's text; recorded against every event read
+     *                      from it, so each can be traced to its document
+     */
+    public Result process(Long userId, User user, String from, String subject, String sourceText,
+                          String gmailMessageId, Classification classification, int itemIndexBase,
+                          String attachmentId, String documentHash) {
+        return process(userId, user, from, subject, sourceText, gmailMessageId, classification, itemIndexBase,
+            attachmentId, documentHash, null);
+    }
+
+    /** @param extractionMethod recorded on each event; null means email body or PDF by attachment */
+    public Result process(Long userId, User user, String from, String subject, String sourceText,
+                          String gmailMessageId, Classification classification, int itemIndexBase,
+                          String attachmentId, String documentHash, String extractionMethod) {
+        return process(userId, user, from, subject, sourceText, gmailMessageId, classification, itemIndexBase,
+            new SourceDoc(attachmentId, null, documentHash, extractionMethod));
+    }
+
+    /**
+     * The document {@code sourceText} came from. All null for an email body.
+     *
+     * @param extractionMethod recorded on each event; null means email body, or PDF when there is an attachment
+     */
+    public record SourceDoc(String attachmentId, String name, String documentHash, String extractionMethod) {
+        public static final SourceDoc BODY = new SourceDoc(null, null, null, null);
+
+        boolean isDocument() { return attachmentId != null || extractionMethod != null; }
+    }
+
+    public Result process(Long userId, User user, String from, String subject, String sourceText,
+                          String gmailMessageId, Classification classification, int itemIndexBase, SourceDoc src) {
+        if (src == null) src = SourceDoc.BODY;
+        String attachmentId = src.attachmentId();
+        String documentHash = src.documentHash();
+        String extractionMethod = src.extractionMethod();
+        // A document someone attached is always read. Only a plain body is screened first, and
+        // the screen is wide on purpose: it lets through anything naming money, an account, a
+        // card, a bill or a known issuer, and the reason is kept when it does not.
+        if (!src.isDocument() && !looksFinancial(from, subject, sourceText)) {
             return Result.builder().outcome(Outcome.NOT_FINANCIAL)
-                .detail("No monetary signal in subject or body").build();
+                .detail("Screened out before extraction: no amount, account, payment, bill or known "
+                    + "financial sender in the subject or body").build();
         }
 
         // --- Sender-trust gate. Runs once per email, ahead of any per-transaction decision (and
@@ -328,18 +398,27 @@ public class EmailLLMParserService {
             : llmClaimMismatch ? "The model identified this as a " + classification.statementProvider()
                 + " statement, but the sending domain " + domain + " does not belong to that issuer"
             : null;
+        String statementProvider = classification != null && classification.statementProvider() != null
+            ? classification.statementProvider() : domain;
 
         // Long sources (a month of statement lines) used to be cut at MAX_CHARS and everything
         // after the cut was silently never read. Each chunk is now extracted in turn; chunks
         // split on line boundaries and never overlap, so every line is read exactly once.
         List<String> chunks = chunk(sourceText, MAX_CHARS);
-        int imported = 0, queuedForReview = 0, rejected = 0;
+        java.time.LocalDateTime readStartedAt = java.time.LocalDateTime.now();
+        // An attachment or a transcribed scan is a document; a plain alert body is routine email.
+        // Both run the same prompt and the same validation below — only the configured model differs.
+        LlmTask extractTask = src.isDocument() ? LlmTask.DOCUMENT_EXTRACTION : LlmTask.EMAIL_EXTRACTION;
+        int imported = 0, duplicates = 0, conflicts = 0, extracted = 0, queuedForReview = 0, rejected = 0, resolved = 0;
+        StatementTotals totals = new StatementTotals();
         List<String> summaries = new ArrayList<>();
         java.util.Map<String, Integer> occurrences = new java.util.HashMap<>();
+        java.util.Map<String, Integer> rawOccurrences = new java.util.HashMap<>();
         int itemIndex = itemIndexBase;
         List<String> unreadParts = new ArrayList<>();
         boolean anyTransactions = false;
         boolean extractorUnavailable = false;
+        LlmCompletion lastCompletion = null;
 
         for (int c = 0; c < chunks.size(); c++) {
             String part = chunks.size() == 1 ? "" : " (part " + (c + 1) + " of " + chunks.size() + ")";
@@ -347,20 +426,21 @@ public class EmailLLMParserService {
 
             LlmCompletion completion;
             try {
-                completion = llm.completeWith(emailProvider, EXTRACT_SYSTEM, prompt);
+                completion = llm.complete(extractTask, PromptLibrary.TRANSACTION_EXTRACTION, prompt);
             } catch (LlmUnavailableException e) {
-                audit.recordFailure(userId, EXTRACT_TASK, gmailMessageId, EXTRACT_SYSTEM, prompt,
+                audit.recordFailure(userId, EXTRACT_TASK, gmailMessageId, PromptLibrary.TRANSACTION_EXTRACTION.system(), prompt,
                     "UNAVAILABLE", "No LLM provider available: " + e.getMessage());
                 extractorUnavailable = true;
-                unreadParts.add(chunks.size() == 1 ? "the email" : "part " + (c + 1) + " of " + chunks.size());
+                unreadParts.add(chunks.size() == 1 ? "the " + (src.isDocument() ? "document" : "email") : "part " + (c + 1) + " of " + chunks.size());
                 continue;
             }
+            lastCompletion = completion;
 
             Optional<JsonNode> parsedJson = json.parse(completion.getText());
             if (parsedJson.isEmpty()) {
-                audit.record(userId, EXTRACT_TASK, gmailMessageId, EXTRACT_SYSTEM, prompt, completion, null,
+                audit.record(userId, EXTRACT_TASK, gmailMessageId, PromptLibrary.TRANSACTION_EXTRACTION.system(), prompt, completion, null,
                     "PARSE_FAILED", "Model output was not valid JSON");
-                unreadParts.add(chunks.size() == 1 ? "the email" : "part " + (c + 1) + " of " + chunks.size());
+                unreadParts.add(chunks.size() == 1 ? "the " + (src.isDocument() ? "document" : "email") : "part " + (c + 1) + " of " + chunks.size());
                 continue;
             }
 
@@ -375,9 +455,11 @@ public class EmailLLMParserService {
                 persistClosingBalances(userId, root.get("closing_balances"), sourceText, gmailMessageId);
             }
 
+            totals.readStated(root.get("statement_totals"), sourceText);
             JsonNode txns = root.get("transactions");
+            if (txns != null && txns.isArray()) totals.addLines(txns);
             if (txns == null || !txns.isArray() || txns.isEmpty()) {
-                audit.record(userId, EXTRACT_TASK, gmailMessageId, EXTRACT_SYSTEM, prompt, completion,
+                audit.record(userId, EXTRACT_TASK, gmailMessageId, PromptLibrary.TRANSACTION_EXTRACTION.system(), prompt, completion,
                     overallConfidence, "ACCEPTED", "No transactions found");
                 continue;
             }
@@ -388,18 +470,34 @@ public class EmailLLMParserService {
             String referenceText = chunks.size() == 1 && txns.size() == 1 ? sourceText : null;
 
             int chunkImported = 0, chunkQueued = 0;
+            extracted += txns.size();
             for (JsonNode tNode : txns) {
+                // Every event the model reported gets a ledger row, whatever happens to it below.
+                String rawKey = rawEventKey(tNode);
+                int rawN = rawOccurrences.merge(rawKey, 1, Integer::sum) - 1;
+                EmailFinancialEvent event = eventFrom(tNode, userId, gmailMessageId,
+                    "d" + itemIndexBase + ":" + sha256(rawKey).substring(0, 24) + "#" + rawN,
+                    itemIndex, src, statementProvider, completion, overallConfidence);
+
                 String why = senderBlocked
                     ? "Sender could not be verified — " + senderBlockReason
                     : null;
 
                 ParsedEmail pe = null;
+                Extraction extraction = null;
                 if (why == null) {
-                    Extraction extraction = toParsedEmail(tNode, sourceText);
+                    extraction = toParsedEmail(tNode, sourceText);
                     pe = extraction.parsed();
                     why = extraction.reason();
                 }
                 if (pe != null) {
+                    pe.setSourceAttachmentId(attachmentId);
+                    pe.setSourceDocumentHash(documentHash);
+                    pe.setExtractionMethod(extractionMethod != null ? extractionMethod : attachmentId != null
+                        ? com.marketai.common.ledger.Provenance.PDF_LLM : com.marketai.common.ledger.Provenance.EMAIL_LLM);
+                    pe.setExtractionConfidence(overallConfidence);
+                    pe.setExtractionVersion(completion.extractionVersion());
+                    pe.setReadStartedAt(readStartedAt);
                     // Two identical lines in one statement are two transactions; numbering them
                     // keeps the second from being deduplicated against the first, and keeps each
                     // line's identity stable when the same email is re-synced.
@@ -407,8 +505,21 @@ public class EmailLLMParserService {
                     pe.setOccurrenceInSource(n);
                 }
 
+                if (extraction != null && extraction.resolved()) {
+                    // A failed or cancelled payment: nothing to book, and the reason is kept.
+                    ledger.record(event.toBuilder().state(EventState.RESOLVED).reason(why)
+                        .validationStatus(VERIFIED).dedupStatus(NOT_CHECKED).build());
+                    summaries.add("Not booked — " + why);
+                    resolved++;
+                    itemIndex++;
+                    continue;
+                }
+
                 if (why != null) {
                     enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, pe, why);
+                    ledger.record(event.toBuilder().state(EventState.REQUIRES_REVIEW).reason(why)
+                        .validationStatus(senderBlocked ? NOT_CHECKED : pe == null ? FAILED : VERIFIED)
+                        .dedupStatus(NOT_CHECKED).build());
                     chunkQueued++;
                     if (pe == null) rejected++;
                     itemIndex++;
@@ -421,6 +532,8 @@ public class EmailLLMParserService {
                         : String.format("Confidence %.2f is below the %.2f threshold required to import automatically.",
                             overallConfidence, minConfidence);
                     enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, pe, reason);
+                    ledger.record(event.toBuilder().state(EventState.REQUIRES_REVIEW).reason(reason)
+                        .validationStatus(VERIFIED).dedupStatus(NOT_CHECKED).build());
                     chunkQueued++;
                     itemIndex++;
                     continue;
@@ -430,17 +543,41 @@ public class EmailLLMParserService {
                 // transaction for good whenever another item in the same email imported, because
                 // the email was then marked IMPORTED and never looked at again.
                 try {
-                    importer.importParsedEmail(userId, user, pe, gmailMessageId, referenceText);
-                    summaries.add(pe.getSourceDescription());
-                    chunkImported++;
+                    ParsedEmailImporter.ImportOutcome booked =
+                        importer.importParsedEmail(userId, user, pe, gmailMessageId, referenceText);
+                    if (booked == ParsedEmailImporter.ImportOutcome.DUPLICATE) {
+                        // Counted, never reported as a fresh import: a sync that re-reads a
+                        // statement it already booked says "N already recorded", not "N imported".
+                        duplicates++;
+                        summaries.add("Already recorded: " + pe.getSourceDescription());
+                        ledger.record(event.toBuilder().state(EventState.DUPLICATE_OF_EXISTING)
+                            .reason("Already on record — " + pe.getSourceDescription())
+                            .validationStatus(VERIFIED).dedupStatus("DUPLICATE").build());
+                    } else if (booked == ParsedEmailImporter.ImportOutcome.CONFLICT) {
+                        conflicts++;
+                        summaries.add("Conflicts with a recorded transaction: " + pe.getSourceDescription());
+                        ledger.record(event.toBuilder().state(EventState.RECONCILIATION_REQUIRED)
+                            .reason("Quotes the same payment reference as a recorded transaction, with different details. "
+                                + "The recorded one was kept; compare them and mark this resolved.")
+                            .validationStatus(VERIFIED).dedupStatus("CONFLICT").build());
+                    } else {
+                        summaries.add(pe.getSourceDescription());
+                        chunkImported++;
+                        ledger.record(event.toBuilder().state(EventState.IMPORTED).reason(pe.getSourceDescription())
+                            .validationStatus(VERIFIED).dedupStatus("NEW").build());
+                    }
                 } catch (ImportRejectedException e) {
                     enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, pe, e.getMessage());
+                    ledger.record(event.toBuilder().state(EventState.REQUIRES_REVIEW).reason(e.getMessage())
+                        .validationStatus(VERIFIED).dedupStatus("POSSIBLE_DUPLICATE").build());
                     chunkQueued++;
                     rejected++;
                 } catch (Exception e) {
                     log.error("Import failed for {}: {}", pe.getSourceDescription(), e.getMessage(), e);
-                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, pe,
-                        "Could not be saved automatically (" + e.getMessage() + ") — accept to retry.");
+                    String reason = "Could not be saved automatically (" + e.getMessage() + ") — accept to retry.";
+                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, pe, reason);
+                    ledger.record(event.toBuilder().state(EventState.FAILED_WITH_REASON).reason(reason)
+                        .validationStatus(VERIFIED).dedupStatus(NOT_CHECKED).build());
                     chunkQueued++;
                     rejected++;
                 }
@@ -449,11 +586,13 @@ public class EmailLLMParserService {
             imported += chunkImported;
             queuedForReview += chunkQueued;
 
-            audit.record(userId, EXTRACT_TASK, gmailMessageId, EXTRACT_SYSTEM, prompt, completion,
+            audit.record(userId, EXTRACT_TASK, gmailMessageId, PromptLibrary.TRANSACTION_EXTRACTION.system(), prompt, completion,
                 overallConfidence, chunkImported > 0 ? "ACCEPTED" : "REVIEW_REQUIRED",
                 chunkImported + " imported, " + chunkQueued + " queued for review");
         }
 
+        String unreadKey = "d" + itemIndexBase + ":unread";
+        String totalsKey = "d" + itemIndexBase + ":totals";
         if (!unreadParts.isEmpty()) {
             // Some or all of the source could not be read. The email is reported as incomplete so
             // the sync retries it (already-booked lines are recognised and not booked twice), and
@@ -461,24 +600,132 @@ public class EmailLLMParserService {
             String reason = (extractorUnavailable ? "The extractor was unavailable" : "The extractor returned unreadable output")
                 + " for " + String.join(", ", unreadParts) + ", so it was left unprocessed — it will be retried on the next sync.";
             enqueueWholeEmailForReview(userId, gmailMessageId, itemIndexBase - 1, from, subject, reason);
+            ledger.record(emailLevelEvent(userId, gmailMessageId, unreadKey, itemIndexBase - 1, src, statementProvider,
+                lastCompletion, EventState.RECONCILIATION_REQUIRED, reason));
             queuedForReview++;
             return Result.builder()
                 .outcome(extractorUnavailable && imported == 0 ? Outcome.UNAVAILABLE : Outcome.REVIEW)
-                .imported(imported).queuedForReview(queuedForReview).rejected(rejected)
+                .imported(imported).duplicates(duplicates).conflicts(conflicts).extracted(extracted)
+                .queuedForReview(queuedForReview).rejected(rejected).resolved(resolved)
                 .summaries(summaries).incomplete(true).detail(reason).build();
+            // (totals are not compared for a partly unread document — lines are missing by definition)
         }
         emailReviewService.clearWholeEmailPlaceholder(userId, gmailMessageId, itemIndexBase - 1);
+        ledger.resolveIfOpen(userId, gmailMessageId, unreadKey, "Read in full on a later sync.");
 
+        String totalsCheck = totals.check();
+        if (!anyTransactions && totals.statesActivity()) {
+            // The statement says money moved but no line was read: a complete miss, not "no
+            // transactions". Kept retryable instead of being closed as resolved.
+            String detail = "The statement states totals, but no transaction lines could be read from it.";
+            ledger.record(emailLevelEvent(userId, gmailMessageId, totalsKey, null, src, statementProvider,
+                lastCompletion, EventState.RECONCILIATION_REQUIRED, detail));
+            return Result.builder().outcome(Outcome.REVIEW).incomplete(true)
+                .totalsCheck("MISMATCHED").totalsDetail(detail).detail(detail).build();
+        }
+        if ("MISMATCHED".equals(totalsCheck)) {
+            // A line the model skipped, or read wrong. What was read is kept; the gap stays open
+            // until a person checks the document against what was recorded.
+            log.warn("Statement totals do not match the extracted lines for {}: {}", gmailMessageId, totals.detail());
+            ledger.record(emailLevelEvent(userId, gmailMessageId, totalsKey, null, src, statementProvider,
+                lastCompletion, EventState.RECONCILIATION_REQUIRED, totals.detail()));
+        } else {
+            ledger.resolveIfOpen(userId, gmailMessageId, totalsKey, "The document's own totals match the lines read from it.");
+        }
         if (!anyTransactions) {
             return Result.builder().outcome(Outcome.NOT_FINANCIAL)
+                .totalsCheck(totalsCheck).totalsDetail(totals.detail())
                 .detail("Model found no transactions").build();
         }
 
-        Outcome outcome = imported > 0 ? Outcome.IMPORTED
+        // Everything found was either booked, already on record, or needs nothing: the email is accounted for.
+        Outcome outcome = imported > 0 || ((duplicates + conflicts + resolved) > 0 && queuedForReview == 0) ? Outcome.IMPORTED
             : queuedForReview > 0 ? Outcome.REVIEW : Outcome.NOT_FINANCIAL;
         return Result.builder()
-            .outcome(outcome).imported(imported).queuedForReview(queuedForReview).rejected(rejected)
+            .outcome(outcome).imported(imported).duplicates(duplicates).conflicts(conflicts).extracted(extracted)
+            .queuedForReview(queuedForReview).rejected(rejected).resolved(resolved)
+            .totalsCheck(totalsCheck).totalsDetail(totals.detail())
             .summaries(summaries).build();
+    }
+
+    private static final String VERIFIED = "VERIFIED";
+    private static final String FAILED = "FAILED";
+    private static final String NOT_CHECKED = "NOT_CHECKED";
+
+    /** What the model reported, before any of it is trusted: identifies the event within its document. */
+    private String rawEventKey(JsonNode t) {
+        BigDecimal amount = json.decimal(t, "amount_inr");
+        if (amount == null) amount = json.decimal(t, "amount");
+        return String.join("|", String.valueOf(up(json.str(t, "instrument_type"))),
+            String.valueOf(up(json.str(t, "transaction_type"))), String.valueOf(up(json.str(t, "sub_type"))),
+            amount == null ? "" : amount.stripTrailingZeros().toPlainString(),
+            String.valueOf(json.str(t, "transaction_date")));
+    }
+
+    private EmailFinancialEvent eventFrom(JsonNode t, Long userId, String gmailMessageId, String key, int itemIndex,
+                                          SourceDoc src, String statementProvider, LlmCompletion completion, Double confidence) {
+        String instrumentType = up(json.str(t, "instrument_type"));
+        String transactionType = up(json.str(t, "transaction_type"));
+        String subType = up(json.str(t, "sub_type"));
+        BigDecimal amountInr = json.decimal(t, "amount_inr");
+        String currency = up(json.str(t, "currency"));
+        BigDecimal amount = amountInr != null ? amountInr : json.decimal(t, "amount");
+        String merchant = firstNonBlank(json.str(t, "merchant"), json.str(t, "scheme_name"), json.str(t, "bank"));
+        String instrument = firstNonBlank(json.str(t, "scheme_name"), json.str(t, "symbol"), json.str(t, "isin"));
+        return base(userId, gmailMessageId, key, itemIndex, src, statementProvider, completion)
+            .confidence(confidence)
+            .eventType(String.join("/", java.util.stream.Stream.of(instrumentType, transactionType, subType)
+                .filter(java.util.Objects::nonNull).toList()))
+            .eventStatus(Optional.ofNullable(up(json.str(t, "status"))).orElse("SUCCESS"))
+            .amount(amount)
+            .currency(amountInr != null ? "INR" : currency != null ? currency : amount != null ? "INR" : null)
+            .eventDate(parseDate(json.str(t, "transaction_date")))
+            .merchant(merchant != null ? merchant : "UNKNOWN")
+            .account(firstNonBlank(json.str(t, "folio_number"), json.str(t, "payment_method"), json.str(t, "client_id")))
+            .instrument(instrument)
+            .reference(json.str(t, "trade_number"))
+            .evidence(json.str(t, "evidence"))
+            .build();
+    }
+
+    private EmailFinancialEvent emailLevelEvent(Long userId, String gmailMessageId, String key, Integer itemIndex,
+                                                SourceDoc src, String statementProvider, LlmCompletion completion,
+                                                EventState state, String reason) {
+        return base(userId, gmailMessageId, key, itemIndex, src, statementProvider, completion)
+            .sourceKind(EmailFinancialEvent.EMAIL).eventType("DOCUMENT").state(state).reason(reason)
+            .validationStatus(NOT_CHECKED).dedupStatus(NOT_CHECKED).build();
+    }
+
+    private static EmailFinancialEvent.EmailFinancialEventBuilder base(Long userId, String gmailMessageId, String key,
+                                                                        Integer itemIndex, SourceDoc src,
+                                                                        String statementProvider, LlmCompletion completion) {
+        return EmailFinancialEvent.builder()
+            .userId(userId).gmailMessageId(gmailMessageId).eventKey(key).itemIndex(itemIndex)
+            .sourceKind(src.isDocument() ? EmailFinancialEvent.ATTACHMENT : EmailFinancialEvent.BODY)
+            .attachmentId(src.attachmentId()).attachmentName(src.name()).documentHash(src.documentHash())
+            .extractionMethod(src.extractionMethod() != null ? src.extractionMethod() : src.attachmentId() != null
+                ? com.marketai.common.ledger.Provenance.PDF_LLM : com.marketai.common.ledger.Provenance.EMAIL_LLM)
+            .statementProvider(statementProvider)
+            .llmProvider(completion != null ? completion.getProvider() : null)
+            .llmModel(completion != null ? completion.getModel() : null)
+            .promptVersion(completion != null && completion.getPromptVersion() != null
+                ? completion.getPromptVersion() : PromptLibrary.TRANSACTION_EXTRACTION.tag())
+            .extractedAt(java.time.LocalDateTime.now());
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String v : values) if (v != null && !v.isBlank()) return v;
+        return null;
+    }
+
+    static String sha256(String s) {
+        try {
+            byte[] d = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(d);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /**
@@ -599,6 +846,12 @@ public class EmailLLMParserService {
                 ? mfSchemeLinkService.resolveSchemeCodeByFundName(schemeName).orElse(null)
                 : null;
 
+            // Snapshots are append-only history, one per statement date: re-reading the same
+            // statement (a resync, a forwarded copy) must not add it again.
+            if (casBalanceSnapshotRepository.existsByUserIdAndFolioAndSchemeCodeAndAsOfDate(
+                    userId, folio, schemeCode, asOfDate)) {
+                continue;
+            }
             casBalanceSnapshotRepository.save(CasBalanceSnapshot.builder()
                 .userId(userId)
                 .folio(folio)
@@ -610,10 +863,116 @@ public class EmailLLMParserService {
         }
     }
 
+    /**
+     * A bank statement's own stated totals against the lines extracted from it: the check that
+     * catches a line the model skipped. Only span-verified totals are used — a total that isn't
+     * written in the cited line is ignored, never compared.
+     */
+    final class StatementTotals {
+        /** Rounding across many lines; anything larger is a missing or misread line. */
+        private static final BigDecimal TOLERANCE = new BigDecimal("1.00");
+
+        private BigDecimal statedDebits, statedCredits, opening, closing;
+        private BigDecimal lineDebits = BigDecimal.ZERO, lineCredits = BigDecimal.ZERO;
+        private int bankLines;
+        /** The number of transactions (or trades) the document says it lists, and how many were read. */
+        private Integer statedCount;
+        private int lines;
+
+        void readStated(JsonNode node, String sourceText) {
+            if (node == null || !node.isObject()) return;
+            String evidence = json.str(node, "evidence");
+            if (!SpanVerifier.appearsIn(sourceText, evidence)) return;
+            statedDebits = first(statedDebits, grounded(node, "total_debits", evidence));
+            statedCredits = first(statedCredits, grounded(node, "total_credits", evidence));
+            opening = first(opening, grounded(node, "opening_balance", evidence));
+            closing = first(closing, grounded(node, "closing_balance", evidence));
+            if (statedCount == null) {
+                Integer count = json.integer(node, "transaction_count");
+                if (count != null && count >= 0 && SpanVerifier.containsAmount(evidence, BigDecimal.valueOf(count))) {
+                    statedCount = count;
+                }
+            }
+        }
+
+        private BigDecimal grounded(JsonNode node, String field, String evidence) {
+            BigDecimal v = json.decimal(node, field);
+            return v != null && SpanVerifier.containsAmount(evidence, v) ? v : null;
+        }
+
+        private static BigDecimal first(BigDecimal current, BigDecimal next) {
+            return current != null ? current : next;
+        }
+
+        void addLines(JsonNode txns) {
+            lines += txns.size();
+            for (JsonNode t : txns) {
+                String instrument = up(json.str(t, "instrument_type"));
+                if (!"BANK".equals(instrument) && !"UPI".equals(instrument)) continue;
+                BigDecimal amount = json.decimal(t, "amount_inr");
+                if (amount == null) continue;
+                bankLines++;
+                String type = up(json.str(t, "transaction_type"));
+                if ("DEBIT".equals(type)) lineDebits = lineDebits.add(amount.abs());
+                else if ("CREDIT".equals(type)) lineCredits = lineCredits.add(amount.abs());
+            }
+        }
+
+        /** The statement's own figures say money moved in the period. */
+        boolean statesActivity() {
+            return (statedCount != null && statedCount > 0) || (statedDebits != null && statedDebits.signum() != 0)
+                || (statedCredits != null && statedCredits.signum() != 0)
+                || (opening != null && closing != null && opening.compareTo(closing) != 0);
+        }
+
+        /** null when the statement states no usable totals or has no bank lines. */
+        String check() {
+            boolean amounts = bankLines > 0
+                && (statedDebits != null || statedCredits != null || (opening != null && closing != null));
+            if (!amounts && statedCount == null) return null;
+            return detail() == null ? "MATCHED" : "MISMATCHED";
+        }
+
+        /** What didn't add up, or null when everything stated matched. */
+        String detail() {
+            List<String> gaps = new ArrayList<>();
+            if (statedCount != null && statedCount != lines) {
+                gaps.add("count: the document says " + statedCount + " transaction(s), " + lines + " were read");
+            }
+            if (bankLines > 0) addAmountGaps(gaps);
+            return gaps.isEmpty() ? null
+                : "The statement's totals don't match the lines read from it (" + String.join("; ", gaps)
+                    + ") — a line may have been missed or misread.";
+        }
+
+        private void addAmountGaps(List<String> gaps) {
+            if (statedDebits != null && off(statedDebits, lineDebits)) {
+                gaps.add("debits: statement says ₹" + statedDebits.toPlainString() + ", lines add up to ₹" + lineDebits.toPlainString());
+            }
+            if (statedCredits != null && off(statedCredits, lineCredits)) {
+                gaps.add("credits: statement says ₹" + statedCredits.toPlainString() + ", lines add up to ₹" + lineCredits.toPlainString());
+            }
+            if (opening != null && closing != null) {
+                BigDecimal expected = opening.add(lineCredits).subtract(lineDebits);
+                if (off(closing, expected)) {
+                    gaps.add("balance: opening ₹" + opening.toPlainString() + " + credits − debits = ₹"
+                        + expected.toPlainString() + ", but the closing balance is ₹" + closing.toPlainString());
+                }
+            }
+        }
+
+        private static boolean off(BigDecimal stated, BigDecimal computed) {
+            return stated.subtract(computed).abs().compareTo(TOLERANCE) > 0;
+        }
+    }
+
     /** Either a bookable transaction or the specific reason it has to go to review instead. */
-    record Extraction(ParsedEmail parsed, String reason) {
+    record Extraction(ParsedEmail parsed, String reason, boolean resolved) {
+        Extraction(ParsedEmail parsed, String reason) { this(parsed, reason, false); }
         static Extraction ok(ParsedEmail pe) { return new Extraction(pe, null); }
         static Extraction review(String reason) { return new Extraction(null, reason); }
+        /** Nothing to book, for the stated reason — recorded as resolved, not sent to review. */
+        static Extraction noMoneyMoved(String reason) { return new Extraction(null, reason, true); }
         static Extraction orReview(ParsedEmail pe, String reason) { return pe != null ? ok(pe) : review(reason); }
     }
 
@@ -635,7 +994,17 @@ public class EmailLLMParserService {
         if (evidence == null || evidence.isBlank()) {
             return Extraction.review("The extractor did not cite the source line for this transaction.");
         }
+        if ("EQUITY".equals(instrumentType) && CORPORATE_ACTIONS.contains(transactionType)) {
+            return toCorporateAction(t, transactionType, date, evidence, sourceText);
+        }
         if (amount == null) {
+            String currency = up(json.str(t, "currency"));
+            BigDecimal foreign = json.decimal(t, "amount");
+            if (currency != null && !"INR".equals(currency) && foreign != null) {
+                // Booking the foreign figure as rupees would be wrong by the exchange rate.
+                return Extraction.review("A " + currency + " " + foreign.toPlainString() + " transaction with no rupee "
+                    + "amount stated — enter the amount in ₹ that was actually charged or credited.");
+            }
             return Extraction.review("No amount could be read for this transaction.");
         }
         // Defaulting to today mis-dated every historical transaction on a full resync — booked
@@ -660,6 +1029,44 @@ public class EmailLLMParserService {
             return Extraction.review("The figures for " + verification.unfoundFields()
                 + " could not be found in the email text, so they were not trusted.");
         }
+        // The cited line exists; now the figures must actually be in it. A real line quoted
+        // with a different amount is exactly the error span-existence alone cannot catch.
+        if (!SpanVerifier.containsAmount(evidence, amount)) {
+            return Extraction.review("The amount ₹" + amount.toPlainString()
+                + " does not appear in the line it was read from, so it was not trusted.");
+        }
+        // The date must be in the cited line, or at least stated in the document (an alert
+        // often gives the date once, apart from the amount line).
+        if (!SpanVerifier.containsDate(evidence, date) && !SpanVerifier.containsDate(sourceText, date)) {
+            return Extraction.review("The date " + date + " is not stated in the document, so it was not trusted.");
+        }
+
+        // Whether the money actually moved. A failed or cancelled payment is recorded as needing
+        // nothing — but only when the source line itself says so; the model's word alone sends
+        // it to review instead, so a mislabelled real payment is never closed unseen.
+        String status = up(json.str(t, "status"));
+        if (status != null && !"SUCCESS".equals(status) && !"REFUNDED".equals(status)
+                && !"PARTIALLY_REFUNDED".equals(status)) {
+            String what = "₹" + amount.toPlainString() + " on " + date;
+            switch (status) {
+                case "FAILED", "CANCELLED", "DECLINED", "REVERSED" -> {
+                    if (NO_MONEY_MOVED.matcher(evidence).find()) {
+                        return Extraction.noMoneyMoved("A " + status.toLowerCase(Locale.ROOT) + " payment of " + what
+                            + " — no money moved, so nothing was booked.");
+                    }
+                    return Extraction.review("The extractor marked the payment of " + what + " as "
+                        + status.toLowerCase(Locale.ROOT) + ", but the line it quoted does not say so — confirm whether money moved.");
+                }
+                case "PENDING" -> {
+                    return Extraction.review("The payment of " + what + " is still pending — accept it once it has "
+                        + "gone through, or reject it if it failed.");
+                }
+                default -> {
+                    return Extraction.review("It is unclear whether the payment of " + what + " went through (status "
+                        + status + ").");
+                }
+            }
+        }
 
         return switch (instrumentType == null ? "" : instrumentType) {
             case "MF" -> Extraction.orReview(toMfParsedEmail(t, transactionType, amount, date),
@@ -675,12 +1082,41 @@ public class EmailLLMParserService {
     private Extraction toDepositParsedEmail(JsonNode t, String instrumentType, String transactionType,
                                             BigDecimal amount, LocalDate date) {
         String bank = json.str(t, "bank");
+        String kind = instrumentType.equals("FD") ? "Fixed" : "Recurring";
+        if ("MATURITY".equals(transactionType) || "PREMATURE_CLOSURE".equals(transactionType)) {
+            // Matched to the open deposit by the importer, which closes it with the amount paid —
+            // the principal comes back as cash and only the excess is interest income.
+            if (bank == null) {
+                return Extraction.review(kind + " deposit payout of ₹" + amount.toPlainString() + " — the bank could not be read, so it cannot be matched to a deposit.");
+            }
+            return Extraction.ok(ParsedEmail.builder()
+                .type(ParsedEmail.Type.DEPOSIT_CLOSE)
+                .instrumentKind(instrumentType)
+                .bank(bank)
+                .principal(json.decimal(t, "principal_inr"))
+                .amount(amount)
+                .tds(json.decimal(t, "tds_inr"))
+                .tradeDate(date)
+                .sourceDescription("AI-extracted " + kind.toLowerCase(Locale.ROOT) + " deposit "
+                    + ("PREMATURE_CLOSURE".equals(transactionType) ? "premature closure" : "maturity") + ": " + bank + " ₹" + amount)
+                .build());
+        }
+        if ("INTEREST_PAYOUT".equals(transactionType) || "TDS".equals(transactionType)) {
+            boolean tdsOnly = "TDS".equals(transactionType);
+            return Extraction.ok(ParsedEmail.builder()
+                .type(ParsedEmail.Type.DEPOSIT_INTEREST)
+                .instrumentKind(instrumentType)
+                .bank(bank)
+                .amount(tdsOnly ? null : amount)
+                .tds(tdsOnly ? amount : json.decimal(t, "tds_inr"))
+                .tradeDate(date)
+                .sourceDescription("AI-extracted " + (tdsOnly ? "TDS on deposit interest" : "deposit interest")
+                    + (bank != null ? ": " + bank : "") + " ₹" + amount)
+                .build());
+        }
         if (!"OPEN".equals(transactionType)) {
-            // A maturity/closure payout is mostly your own principal coming back — booking it as
-            // income would overstate income by the whole principal.
-            return Extraction.review((instrumentType.equals("FD") ? "Fixed" : "Recurring")
-                + " deposit maturity/closure" + (bank != null ? " at " + bank : "")
-                + " for ₹" + amount.toPlainString() + " — the principal is not income. Confirm the interest portion if you want it recorded.");
+            return Extraction.review(kind + " deposit event" + (bank != null ? " at " + bank : "")
+                + " for ₹" + amount.toPlainString() + " could not be identified (" + transactionType + ").");
         }
         if (bank == null) {
             return Extraction.review("A new deposit was found but the bank could not be read.");
@@ -728,15 +1164,34 @@ public class EmailLLMParserService {
             return null;
         }
 
-        ParsedEmail.Type type = switch (transactionType == null ? "" : transactionType) {
-            case "REDEMPTION" -> ParsedEmail.Type.MF_REDEEM;
-            case "PURCHASE", "SIP", "DIVIDEND_REINVEST" -> ParsedEmail.Type.MF_SIP;
+        String tt = transactionType == null ? "" : transactionType;
+        if ("IDCW_PAYOUT".equals(tt)) {
+            // A distribution paid out to the bank: dividend income from the fund. Units unchanged.
+            return ParsedEmail.builder()
+                .type(ParsedEmail.Type.DIVIDEND)
+                .symbol(schemeName)
+                .merchant(schemeName)
+                .amount(amount)
+                .tds(json.decimal(t, "tds_inr"))
+                .tradeDate(date)
+                .sourceDescription("AI-extracted IDCW payout: " + schemeName + " ₹" + amount)
+                .build();
+        }
+        ParsedEmail.Type type = switch (tt) {
+            case "REDEMPTION", "SWITCH_OUT" -> ParsedEmail.Type.MF_REDEEM;
+            case "PURCHASE", "SIP", "DIVIDEND_REINVEST", "IDCW_REINVEST", "SWITCH_IN" -> ParsedEmail.Type.MF_SIP;
             default -> null;
         };
         if (type == null) return null;
+        boolean isSwitch = tt.startsWith("SWITCH_");
 
         return ParsedEmail.builder()
             .type(type)
+            // Both legs of a switch carry a marker; the parser gives them one shared group per
+            // email, so the redemption is known to have gone into the other fund, not to a bank.
+            .linkGroup(isSwitch ? "SWITCH" : null)
+            .idcwReinvest("IDCW_REINVEST".equals(tt) || "DIVIDEND_REINVEST".equals(tt))
+            .tds(json.decimal(t, "tds_inr"))
             .fundName(schemeName)
             .folio(json.str(t, "folio_number"))
             .isin(json.str(t, "isin"))
@@ -744,8 +1199,71 @@ public class EmailLLMParserService {
             .units(json.decimal(t, "units"))
             .amount(amount)
             .tradeDate(date)
-            .sourceDescription("AI-extracted " + type + ": " + schemeName + " ₹" + amount)
+            .sourceDescription("AI-extracted " + (isSwitch ? tt.replace('_', ' ').toLowerCase(Locale.ROOT) : type)
+                + ": " + schemeName + " ₹" + amount)
             .build();
+    }
+
+    /** Wording that says a payment did not happen, or was put back. */
+    static final java.util.regex.Pattern NO_MONEY_MOVED = java.util.regex.Pattern.compile(
+        "(?i)\\b(fail(ed|ure)?|declined|unsuccessful|not (been )?(processed|completed)|cancell?ed|rejected|revers(ed|al)"
+            + "|could not be (completed|processed))\\b");
+
+    /** Wording that says a credit gives back an earlier payment. */
+    static final java.util.regex.Pattern REFUND_WORDING = java.util.regex.Pattern.compile(
+        "(?i)(refund|revers|chargeback|charge back|returned|cancell?ation credit|credited back|money back)");
+
+    static final java.util.Set<String> CORPORATE_ACTIONS = java.util.Set.of("SPLIT", "BONUS", "MERGER", "DEMERGER");
+
+    /**
+     * A split, bonus, merger or demerger. No money moves, so there is no amount to verify;
+     * instead the ratio must be in the cited line and the date in the document.
+     */
+    private Extraction toCorporateAction(JsonNode t, String action, LocalDate date, String evidence, String sourceText) {
+        String rawSymbol = json.str(t, "symbol");
+        String symbol = resolveSymbol(rawSymbol);
+        String label = action.charAt(0) + action.substring(1).toLowerCase(Locale.ROOT);
+        if (!SpanVerifier.appearsIn(sourceText, evidence)) {
+            return Extraction.review("The " + label.toLowerCase(Locale.ROOT) + " line quoted could not be found in the document.");
+        }
+        if (date == null || (!SpanVerifier.containsDate(evidence, date) && !SpanVerifier.containsDate(sourceText, date))) {
+            return Extraction.review(label + (rawSymbol != null ? " of " + rawSymbol : "") + ": the record or allotment date is not stated.");
+        }
+        if (symbol == null) {
+            return Extraction.review(label + " announced, but the stock (" + rawSymbol + ") could not be confirmed.");
+        }
+        if ("DEMERGER".equals(action)) {
+            // The cost of the original shares is divided between the two companies in a ratio the
+            // company publishes separately; without it, neither holding's cost can be stated.
+            return Extraction.review("Demerger of " + symbol + (json.str(t, "new_symbol") != null ? " into " + json.str(t, "new_symbol") : "")
+                + " — record it once the company's cost-apportionment ratio is known, so both holdings carry the right cost.");
+        }
+        BigDecimal from = json.decimal(t, "ratio_from");
+        BigDecimal to = json.decimal(t, "ratio_to");
+        Integer credited = json.integer(t, "quantity");
+        boolean ratioStated = from != null && to != null && from.signum() > 0 && to.signum() > 0
+            && SpanVerifier.containsAmount(evidence, from) && SpanVerifier.containsAmount(evidence, to);
+        boolean unitsStated = "BONUS".equals(action) && credited != null && credited > 0
+            && SpanVerifier.containsAmount(evidence, BigDecimal.valueOf(credited));
+        if (!ratioStated && !unitsStated) {
+            return Extraction.review(label + " of " + symbol + ": the ratio could not be read from the cited line.");
+        }
+        String newSymbol = "MERGER".equals(action) ? resolveSymbol(json.str(t, "new_symbol")) : null;
+        if ("MERGER".equals(action) && newSymbol == null) {
+            return Extraction.review("Merger of " + symbol + ": the company whose shares replace it could not be confirmed.");
+        }
+        return Extraction.ok(ParsedEmail.builder()
+            .type(ParsedEmail.Type.CORPORATE_ACTION)
+            .corporateAction(action)
+            .symbol(symbol)
+            .newSymbol(newSymbol)
+            .ratioFrom(ratioStated ? from : null)
+            .ratioTo(ratioStated ? to : null)
+            .units(unitsStated ? BigDecimal.valueOf(credited) : null)
+            .tradeDate(date)
+            .sourceDescription("AI-extracted " + label.toLowerCase(Locale.ROOT) + ": " + symbol
+                + (ratioStated ? " " + from.stripTrailingZeros().toPlainString() + ":" + to.stripTrailingZeros().toPlainString() : ""))
+            .build());
     }
 
     private ParsedEmail toEquityParsedEmail(JsonNode t, String transactionType, BigDecimal amount, LocalDate date) {
@@ -764,21 +1282,27 @@ public class EmailLLMParserService {
                 .build();
         }
 
-        ParsedEmail.Type type = "SELL".equals(transactionType) ? ParsedEmail.Type.TRADE_SELL
-            : "BUY".equals(transactionType) ? ParsedEmail.Type.TRADE_BUY : null;
+        // Rights shares are bought at the issue price; shares tendered in a buyback are sold to
+        // the company. Both move money and units like an ordinary trade.
+        ParsedEmail.Type type = "SELL".equals(transactionType) || "BUYBACK".equals(transactionType) ? ParsedEmail.Type.TRADE_SELL
+            : "BUY".equals(transactionType) || "RIGHTS".equals(transactionType) ? ParsedEmail.Type.TRADE_BUY : null;
         if (type == null || symbol == null || price == null || quantity == null) return null;
+        String tradeNo = json.str(t, "trade_number");
 
         return ParsedEmail.builder()
             .type(type)
             .symbol(symbol)
             .quantity(quantity)
             .price(price)
+            .charges(json.decimal(t, "charges_inr"))
+            .tradeReference(tradeNo != null && !tradeNo.isBlank() ? tradeNo.trim() : null)
             .amount(amount)
             .isin(json.str(t, "isin"))
             .dpId(json.str(t, "dp_id"))
             .clientId(json.str(t, "client_id"))
             .tradeDate(date)
-            .sourceDescription("AI-extracted " + type + ": " + symbol + " ₹" + amount)
+            .sourceDescription("AI-extracted " + ("RIGHTS".equals(transactionType) ? "rights allotment"
+                : "BUYBACK".equals(transactionType) ? "buyback" : type.toString()) + ": " + symbol + " ₹" + amount)
             .build();
     }
 
@@ -802,6 +1326,12 @@ public class EmailLLMParserService {
                                               LocalDate date, String evidence) {
         String merchant = json.str(t, "merchant");
         String paymentMethod = json.str(t, "payment_method");
+        String subType = up(json.str(t, "sub_type"));
+        String utr = json.str(t, "trade_number");
+        if (subType != null) {
+            Extraction special = bankSubType(subType, transactionType, merchant, paymentMethod, amount, date, evidence, utr);
+            if (special != null) return special;
+        }
         // Categorised from this transaction's own line, never the whole email: a statement's full
         // text contains every other line's merchants plus boilerplate footers ("mutual fund
         // investments are subject to market risks"), which used to give all 40 lines of a card
@@ -844,6 +1374,110 @@ public class EmailLLMParserService {
                 .build());
         }
         return Extraction.review("It was unclear whether this was money in or money out.");
+    }
+
+    /**
+     * Bank lines that are not ordinary spending or income. Returns null to fall through to the
+     * ordinary debit/credit handling.
+     */
+    private Extraction bankSubType(String subType, String direction, String merchant, String paymentMethod,
+                                   BigDecimal amount, LocalDate date, String evidence, String reference) {
+        boolean credit = "CREDIT".equals(direction);
+        boolean debit = "DEBIT".equals(direction);
+        switch (subType) {
+            case "REFUND", "REVERSAL" -> {
+                if (!credit) return null;
+                // A refund reduces an earlier purchase instead of counting as income, so the
+                // label must come from the line itself: a model calling a salary credit a
+                // "refund" would otherwise quietly remove it from income.
+                if (!REFUND_WORDING.matcher(evidence).find()) {
+                    return Extraction.review("The extractor called this ₹" + amount.toPlainString() + " credit a "
+                        + subType.toLowerCase(Locale.ROOT) + ", but the line it quoted does not say so — confirm what it is.");
+                }
+                // Linked by the importer to the purchase it reverses, reducing that spend.
+                return Extraction.ok(ParsedEmail.builder()
+                    .type(ParsedEmail.Type.REFUND)
+                    .merchant(merchant != null ? merchant : SpendCategorizer.extractMerchant(evidence))
+                    .paymentMethod(paymentMethod)
+                    .amount(amount)
+                    .tradeDate(date)
+                    .tradeReference(reference)
+                    .sourceDescription("AI-extracted " + subType.toLowerCase(Locale.ROOT) + ": ₹" + amount
+                        + (merchant != null ? " from " + merchant : ""))
+                    .build());
+            }
+            case "FEE" -> {
+                if (!debit) return null;
+                return Extraction.ok(ParsedEmail.builder()
+                    .type(ParsedEmail.Type.EXPENSE)
+                    .category(ExpenseCategory.BANK_CHARGES.getLabel())
+                    .merchant(merchant != null ? merchant : paymentMethod)
+                    .paymentMethod(paymentMethod)
+                    .amount(amount)
+                    .tradeDate(date)
+                    .sourceDescription("AI-extracted bank/card charge: ₹" + amount)
+                    .build());
+            }
+            case "INTEREST" -> {
+                if (!credit) return null;
+                return Extraction.ok(ParsedEmail.builder()
+                    .type(ParsedEmail.Type.INCOME)
+                    .incomeSource("Interest")
+                    .merchant(merchant != null ? merchant : paymentMethod)
+                    .paymentMethod(paymentMethod)
+                    .amount(amount)
+                    .tradeDate(date)
+                    .sourceDescription("AI-extracted savings interest: ₹" + amount)
+                    .build());
+            }
+            case "EMI" -> {
+                if (!debit) return null;
+                return Extraction.ok(ParsedEmail.builder()
+                    .type(ParsedEmail.Type.EXPENSE)
+                    .category(ExpenseCategory.EMI.getLabel())
+                    .merchant(merchant)
+                    .paymentMethod(paymentMethod)
+                    .amount(amount)
+                    .tradeDate(date)
+                    .sourceDescription("AI-extracted EMI: ₹" + amount + (merchant != null ? " to " + merchant : ""))
+                    .build());
+            }
+            case "EMI_CONVERSION" -> {
+                // The purchase was already booked as spend; the EMIs that follow repay it. Booking
+                // the conversion, or each EMI as new spend, would count the purchase again.
+                return Extraction.review("A purchase of ₹" + amount.toPlainString() + " was converted to EMIs"
+                    + (merchant != null ? " (" + merchant + ")" : "") + ". The purchase is already counted as spending; "
+                    + "record the loan under Loans if you want its instalments tracked.");
+            }
+            case "ATM_WITHDRAWAL" -> {
+                // Cash leaves the tracked accounts and is spent untracked: counted as spending,
+                // as before, so month totals don't silently drop the cash.
+                if (!debit) return null;
+                return Extraction.ok(ParsedEmail.builder()
+                    .type(ParsedEmail.Type.EXPENSE)
+                    .category(ExpenseCategory.UNCATEGORIZED.getLabel())
+                    .merchant("ATM cash withdrawal")
+                    .paymentMethod(paymentMethod)
+                    .amount(amount)
+                    .tradeDate(date)
+                    .sourceDescription("AI-extracted cash withdrawal: ₹" + amount)
+                    .build());
+            }
+            case "OWN_TRANSFER" -> {
+                if (!credit && !debit) return null;
+                return Extraction.ok(ParsedEmail.builder()
+                    .type(ParsedEmail.Type.OWN_TRANSFER)
+                    .incoming(credit)
+                    .merchant(merchant)
+                    .paymentMethod(paymentMethod)
+                    .amount(amount)
+                    .tradeDate(date)
+                    .tradeReference(reference)
+                    .sourceDescription("AI-extracted own-account transfer " + (credit ? "in" : "out") + ": ₹" + amount)
+                    .build());
+            }
+            default -> { return null; }
+        }
     }
 
     /**

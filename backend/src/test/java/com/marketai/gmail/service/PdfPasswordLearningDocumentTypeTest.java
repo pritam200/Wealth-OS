@@ -59,7 +59,7 @@ class PdfPasswordLearningDocumentTypeTest {
         gmailClient = mock(GmailClientService.class);
         passwordCipher = mock(PasswordCipher.class);
         emailLlmParserService = mock(EmailLLMParserService.class);
-        when(emailLlmParserService.process(any(), any(), any(), any(), any(), any(), any(), anyInt()))
+        when(emailLlmParserService.process(any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any()))
             .thenReturn(EmailLLMParserService.Result.builder()
                 .outcome(EmailLLMParserService.Outcome.NOT_FINANCIAL).build());
 
@@ -68,7 +68,8 @@ class PdfPasswordLearningDocumentTypeTest {
             mock(FinancialIdentityService.class),
             savedPasswordRepo, tokenRepo, userRepo, gmailClient,
             passwordCipher,
-            emailLlmParserService);
+            emailLlmParserService,
+            unreadableScans(), null);
 
         // An unencrypted PDF opens with PDFBox regardless of the password supplied — good
         // enough to exercise the unlock/save-password/sibling-sweep logic without needing a
@@ -148,5 +149,17 @@ class PdfPasswordLearningDocumentTypeTest {
         service.unlock(USER_ID, 1L, "somepassword", true);
 
         verify(gmailClient).downloadAttachment(any(), eq("msg-2"), anyString());
+    }
+
+    /** No vision model in tests: a blank page stays an unreadable scan. */
+    private static com.marketai.document.ocr.ScanTranscriber unreadableScans() {
+        com.marketai.document.ocr.ScanTranscriber t = mock(com.marketai.document.ocr.ScanTranscriber.class);
+        try {
+            when(t.transcribePdf(any())).thenThrow(new com.marketai.document.ocr.ScanTranscriber.ScanUnreadableException("no image-capable model"));
+            when(t.transcribeImage(any(), any())).thenThrow(new com.marketai.document.ocr.ScanTranscriber.ScanUnreadableException("no image-capable model"));
+        } catch (com.marketai.document.ocr.ScanTranscriber.ScanUnreadableException e) {
+            throw new IllegalStateException(e);
+        }
+        return t;
     }
 }

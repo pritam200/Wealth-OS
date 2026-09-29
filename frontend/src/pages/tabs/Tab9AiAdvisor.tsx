@@ -120,19 +120,12 @@ export function Tab9AiAdvisor() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: list } = await portfolioApi.list();
-      if (!list.length) { setSummary(null); setActions([]); setLoading(false); return; }
-      // pick the portfolio that actually holds positions (some may be empty duplicates)
-      const summaries = (await Promise.all(
-        list.map(p => portfolioApi.getSummary(p.id).then(r => r.data).catch(() => null))
-      )).filter(Boolean) as PortfolioSummary[];
-      const sum = summaries.sort((a, b) => (b.holdings?.length ?? 0) - (a.holdings?.length ?? 0))[0];
-      if (!sum) { setSummary(null); setActions([]); setLoading(false); return; }
+      // Every portfolio, not just the largest — a holding in a second portfolio row still needs advice.
+      const { data: sum } = await portfolioApi.getCombinedSummary();
+      if (!sum.holdings?.length) { setSummary(null); setActions([]); setLoading(false); return; }
       setSummary(sum);
 
-      const totalMfPortfolioValue = (sum.holdings ?? [])
-        .filter(h => h.symbol.endsWith('.MF'))
-        .reduce((s, h) => s + (h.currentValue ?? 0), 0);
+      const totalMfPortfolioValue = sum.mfCurrentValue ?? 0;
       const acts = await Promise.all((sum.holdings ?? []).map(h => decide(h, totalMfPortfolioValue)));
       // priority order for display — most urgent first
       const rank: Record<ActionKind, number> = {

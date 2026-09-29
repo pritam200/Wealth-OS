@@ -39,6 +39,14 @@ public class AiAuditTrail {
     @Column(length = 80)
     private String model;           // e.g. "qwen2.5:7b"
 
+    /** Prompt template and version, e.g. "transaction-extraction-v1". */
+    @Column(name = "prompt_version", length = 60)
+    private String promptVersion;
+
+    /** Answered by the fallback provider because the configured one failed. */
+    @Column(name = "fallback_used")
+    private Boolean fallbackUsed;
+
     /** What the call was about — a Gmail message id, symbol, or folio. */
     @Column(name = "reference_id", length = 120)
     private String referenceId;

@@ -38,12 +38,16 @@ public class PlannedInvestmentMatcher {
     private final PlannedInvestmentRepository planRepository;
     private final InvestmentReconciliationRepository reconciliationRepository;
     private final RecurringInvestmentService recurringInvestmentService;
+    private final com.marketai.portfolio.repository.TransactionRepository transactionRepository;
 
     /** Called from LedgerTransferService.record() right after a transfer is booked. */
     @Transactional
     public void matchTransfer(Long userId, LedgerTransfer transfer) {
         PlannedInvestment.InvestmentType type = mapDestinationType(transfer.getDestinationType());
         if (type == null) return; // CASH_ACCOUNT / EXTERNAL — not an investment, nothing to match
+        if (reconciliationRepository.findBySourceKindAndSourceRef("LEDGER_TRANSFER", String.valueOf(transfer.getId())).isPresent()) {
+            return; // already counted against a plan line
+        }
 
         LocalDate month = transfer.getTransferDate().withDayOfMonth(1);
         List<PlannedInvestment> candidates = planRepository.findByUserIdAndMonthAndStatusIn(
@@ -74,14 +78,17 @@ public class PlannedInvestmentMatcher {
      */
     @Transactional
     public void matchRecurringInvestmentCompletions(Long userId, LocalDate month) {
-        List<PlannedInvestment> candidates = planRepository.findByUserIdAndMonthAndStatusIn(
-            userId, month, List.of(PlannedInvestment.PlanStatus.PLANNED, PlannedInvestment.PlanStatus.PARTIAL));
+        // Every line of the month, not only the open ones: a line fully funded by a transfer
+        // reads COMPLETE, and the instalment that then invests that money is still the evidence
+        // that it was invested rather than left sitting at the broker.
+        List<PlannedInvestment> candidates = planRepository.findByUserIdAndMonthOrderByCreatedAtAsc(userId, month);
         if (candidates.isEmpty()) return;
 
         for (RecurringInvestmentResponse ri : recurringInvestmentService.list(userId)) {
             if (ri.getInstallments() == null) continue;
             for (InstallmentStatus installment : ri.getInstallments()) {
-                if (!"COMPLETED".equals(installment.getStatus()) || installment.getActualAmount() == null) continue;
+                boolean paid = "COMPLETED".equals(installment.getStatus()) || "PARTIAL".equals(installment.getStatus());
+                if (!paid || installment.getActualAmount() == null) continue;
                 if (installment.getDueDate() == null || !installment.getDueDate().withDayOfMonth(1).equals(month)) continue;
 
                 String sourceRef = ri.getId() + ":" + installment.getDueDate();
@@ -89,25 +96,58 @@ public class PlannedInvestmentMatcher {
 
                 PlannedInvestment.InvestmentType type = mapRecurringInvestmentType(ri.getType());
                 if (type == null) continue;
-
-                PlannedInvestment best = null;
-                double bestScore = 0;
-                for (PlannedInvestment candidate : candidates) {
-                    if (candidate.getInvestmentType() != type) continue;
-                    double score = score(remaining(candidate), installment.getActualAmount(),
-                        candidate.getDestinationRef(), ri.getLinkedSymbol() != null ? ri.getLinkedSymbol() : ri.getLabel());
-                    if (score > bestScore) {
-                        bestScore = score;
-                        best = candidate;
-                    }
-                }
-
-                if (best != null && bestScore >= CONFIRM_THRESHOLD) {
-                    recordMatch(best, "RECURRING_INVESTMENT", sourceRef, installment.getActualAmount(), bestScore);
-                    candidates = planRepository.findByUserIdAndMonthAndStatusIn(userId, month,
-                        List.of(PlannedInvestment.PlanStatus.PLANNED, PlannedInvestment.PlanStatus.PARTIAL));
-                }
+                matchInvestment(candidates, type, installment.getActualAmount(),
+                    ri.getLinkedSymbol() != null ? ri.getLinkedSymbol() : ri.getLabel(), "RECURRING_INVESTMENT", sourceRef);
             }
+        }
+    }
+
+    /**
+     * One-off purchases — a lump sum into a fund, shares bought — are the "invested" step for a
+     * plan line funded by a transfer. Holdings a SIP schedule is linked to are left to
+     * {@link #matchRecurringInvestmentCompletions}, which already reads those same purchases as
+     * instalments; matching them here too would count one purchase twice.
+     */
+    @Transactional
+    public void matchPortfolioPurchases(Long userId, LocalDate month) {
+        List<PlannedInvestment> candidates = planRepository.findByUserIdAndMonthOrderByCreatedAtAsc(userId, month);
+        if (candidates.isEmpty()) return;
+        java.util.Set<String> scheduledSymbols = new java.util.HashSet<>();
+        for (RecurringInvestmentResponse ri : recurringInvestmentService.list(userId)) {
+            if (ri.getLinkedSymbol() != null) scheduledSymbols.add(ri.getLinkedSymbol().toUpperCase());
+        }
+        for (com.marketai.portfolio.entity.Transaction t : transactionRepository.findPurchases(userId, month, month.plusMonths(1).minusDays(1))) {
+            var h = t.getHolding();
+            if (h == null || h.getSymbol() == null || scheduledSymbols.contains(h.getSymbol().toUpperCase())) continue;
+            String sourceRef = String.valueOf(t.getId());
+            if (reconciliationRepository.findBySourceKindAndSourceRef("PORTFOLIO_TRANSACTION", sourceRef).isPresent()) continue;
+            PlannedInvestment.InvestmentType type = h.getSymbol().toUpperCase().endsWith(".MF")
+                ? PlannedInvestment.InvestmentType.MUTUAL_FUND : PlannedInvestment.InvestmentType.STOCK;
+            BigDecimal amount = t.getTotalAmount();
+            if (amount == null || amount.signum() <= 0) continue;
+            matchInvestment(candidates, type, amount, h.getName() != null ? h.getName() : h.getSymbol(),
+                "PORTFOLIO_TRANSACTION", sourceRef);
+        }
+    }
+
+    private void matchInvestment(List<PlannedInvestment> candidates, PlannedInvestment.InvestmentType type, BigDecimal amount,
+                                 String destination, String sourceKind, String sourceRef) {
+        PlannedInvestment best = null;
+        double bestScore = 0;
+        for (PlannedInvestment candidate : candidates) {
+            if (candidate.getInvestmentType() != type) continue;
+            BigDecimal invested = reconciliationRepository.matchedAmount(candidate.getId(),
+                InvestmentReconciliationRepository.INVESTING_KINDS);
+            BigDecimal rem = candidate.getPlannedAmount().subtract(invested);
+            double score = score(rem.signum() > 0 ? rem : candidate.getPlannedAmount(), amount,
+                candidate.getDestinationRef(), destination);
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        if (best != null && bestScore >= CONFIRM_THRESHOLD) {
+            recordMatch(best, sourceKind, sourceRef, amount, bestScore);
         }
     }
 

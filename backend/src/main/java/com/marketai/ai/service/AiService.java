@@ -1,6 +1,11 @@
 package com.marketai.ai.service;
 
-import com.marketai.ai.llm.LlmProviderRouter;
+import com.marketai.ai.prompt.PromptLibrary;
+
+import com.marketai.ai.llm.LlmTask;
+
+import com.marketai.ai.llm.LlmService;
+
 import com.marketai.ai.llm.LlmUnavailableException;
 import com.marketai.ai.dto.AiRequest;
 import com.marketai.ai.dto.AiResponse;
@@ -25,7 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The free-form AI analyst behind /api/ai/*. Goes through {@link LlmProviderRouter}, so it
+ * The free-form AI analyst behind /api/ai/*. Goes through {@link LlmService}, so it
  * runs on the local Ollama model by default (no key, no cost, nothing leaves the machine)
  * and on Gemini only when explicitly configured — it used to call GeminiClient directly,
  * which made app.llm.provider=none a lie for this feature.
@@ -38,19 +43,13 @@ import java.util.List;
 @Slf4j
 public class AiService {
 
-    private final LlmProviderRouter llm;
+    private final LlmService llm;
     private final AiHistoryRepository aiHistoryRepository;
     private final MarketDataService marketDataService;
     private final TechnicalIndicatorService technicalService;
     private final PortfolioService portfolioService;
 
-    private static final String SYSTEM_INSTRUCTION =
-            "You are a professional Indian stock market analyst with deep expertise in NSE/BSE markets, " +
-            "Indian economy, sectoral analysis, and technical analysis. " +
-            "Provide concise, data-driven insights tailored for Indian retail investors. " +
-            "Always mention risks alongside opportunities. Use INR for monetary values. " +
-            "Be specific and actionable. Format your response as plain text without markdown.";
-
+    
     @Transactional
     public AiResponse analyseStock(AiRequest request, User user) {
         String symbol = request.getSymbol();
@@ -170,10 +169,10 @@ public class AiService {
      */
     private String ask(String prompt) {
         try {
-            return llm.completeProse(SYSTEM_INSTRUCTION, prompt).getText();
+            return llm.complete(LlmTask.GENERAL_ASSISTANT, PromptLibrary.GENERAL_ANALYST, prompt).getText();
         } catch (LlmUnavailableException e) {
             log.warn("AI request rejected — no model available: {}", e.getMessage());
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, LlmProviderRouter.NONE_AVAILABLE);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, LlmService.NONE_AVAILABLE);
         }
     }
 

@@ -5,7 +5,7 @@ export interface IntegrityIssue {
   holdingId: number;
   symbol: string;
   name: string;
-  type: 'UNVERIFIABLE_NAME' | 'DUPLICATE_FOLIO' | 'DUPLICATE_DISPLAY_NAME' | 'DUPLICATE_SYMBOL';
+  type: 'UNVERIFIABLE_NAME' | 'DUPLICATE_FOLIO' | 'DUPLICATE_DISPLAY_NAME' | 'DUPLICATE_SYMBOL' | 'DUPLICATE_ISIN' | string;
   description: string;
   currentValue: number;
 }
@@ -26,6 +26,8 @@ export interface MergeSummary {
   groupsMerged: number;
   holdingsMerged: number;
   groups: MergedGroup[];
+  /** Groups not merged because the rows share an identical trade. */
+  skipped?: string[];
 }
 
 export const portfolioApi = {
@@ -38,6 +40,10 @@ export const portfolioApi = {
   getSummary: (id: number) =>
     apiClient.get<PortfolioSummary>(`/api/portfolios/${id}/summary`),
 
+  /** Every portfolio the user owns, totalled on the server — use this, not a sum of getSummary calls. */
+  getCombinedSummary: () =>
+    apiClient.get<PortfolioSummary>('/api/portfolios/combined-summary'),
+
   addHolding: (portfolioId: number, data: {
     symbol: string; name: string; quantity: number;
     price: number; transactionDate: string; charges?: number;
@@ -46,8 +52,8 @@ export const portfolioApi = {
   removeHolding: (portfolioId: number, holdingId: number) =>
     apiClient.delete(`/api/portfolios/${portfolioId}/holdings/${holdingId}`),
 
-  sellHolding: (portfolioId: number, holdingId: number, quantity: number, salePrice: number) =>
-    apiClient.post(`/api/portfolios/${portfolioId}/holdings/${holdingId}/sell`, { quantity, salePrice }),
+  sellHolding: (portfolioId: number, holdingId: number, quantity: number, salePrice: number, tradeDate?: string) =>
+    apiClient.post(`/api/portfolios/${portfolioId}/holdings/${holdingId}/sell`, { quantity, salePrice, tradeDate }),
 
   updateHolding: (portfolioId: number, holdingId: number,
     patch: { quantity?: number; averageCost?: number; currentPrice?: number; investedAmount?: number; broker?: string; folio?: string; buyDate?: string; xirr?: number }) =>

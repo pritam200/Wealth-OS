@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Settings as SettingsIcon, ShieldCheck, AlertCircle, Trash2 } from 'lucide-react';
 import { identityApi } from '../api/identity';
+import { llmConfigApi } from '../api/llmConfig';
+import { LlmConfigurationPanel } from '../components/settings/LlmConfigurationPanel';
 import type { FinancialIdentityStatus } from '../api/identity';
 
 const PAN_FORMAT = /^[A-Za-z]{5}[0-9]{4}[A-Za-z]$/;
@@ -130,7 +132,17 @@ function FinancialIdentityCard() {
   );
 }
 
+type SettingsTab = 'account' | 'llm';
+
 export function SettingsPage() {
+  const [tab, setTab] = useState<SettingsTab>('account');
+  // Admin-only: the server refuses the configuration to anyone else, so the tab isn't offered.
+  const [canConfigureLlm, setCanConfigureLlm] = useState(false);
+
+  useEffect(() => {
+    llmConfigApi.access().then(r => setCanConfigureLlm(r.data.canConfigure)).catch(() => setCanConfigureLlm(false));
+  }, []);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -143,7 +155,18 @@ export function SettingsPage() {
         </div>
       </div>
 
-      <FinancialIdentityCard />
+      {canConfigureLlm && (
+        <div role="tablist" className="flex gap-1 border-b border-surface-border">
+          {([['account', 'Account'], ['llm', 'LLM Configuration']] as [SettingsTab, string][]).map(([id, label]) => (
+            <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
+              className={`px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors ${tab === id ? 'border-brand text-brand-light' : 'border-transparent text-gray-500 hover:text-ink'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tab === 'llm' && canConfigureLlm ? <LlmConfigurationPanel /> : <FinancialIdentityCard />}
     </div>
   );
 }

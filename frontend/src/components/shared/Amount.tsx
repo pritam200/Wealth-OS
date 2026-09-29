@@ -16,3 +16,18 @@ export function useMaskedText() {
   const masked = usePrivacyStore(s => s.masked);
   return (value: string | number) => (masked ? MASK : String(value));
 }
+
+// Rupee figures inside free text the backend writes (advisor answers, data-gap notes,
+// reconciliation issue descriptions): "₹1,200.50", "−₹500", "₹-50000".
+const RUPEES_IN_TEXT = /[+−-]?₹\s?[−-]?[\d,]+(?:\.\d+)?/g;
+
+// For sentences that contain amounts, so privacy mode hides the figures but keeps the words.
+export function useMaskedSentence() {
+  const masked = usePrivacyStore(s => s.masked);
+  return (text: string | null | undefined) => (text == null ? '' : masked ? text.replace(RUPEES_IN_TEXT, MASK) : text);
+}
+
+export function MaskedSentence({ text }: { text: string | null | undefined }) {
+  const mask = useMaskedSentence();
+  return <>{mask(text)}</>;
+}

@@ -59,7 +59,9 @@ class RedemptionTaxEstimateTest {
     }
 
     private MfRedemption redeem(long daysHeld, String units, String nav) {
-        service.recordRedemption(USER, holding(daysHeld), new BigDecimal(units), new BigDecimal(nav));
+        Holding h = holding(daysHeld);
+        service.recordRedemption(USER, h, new BigDecimal(units), new BigDecimal(nav),
+            h.getAverageCost().multiply(new BigDecimal(units)), LocalDate.now());
         ArgumentCaptor<MfRedemption> captor = ArgumentCaptor.forClass(MfRedemption.class);
         verify(redemptionRepo).save(captor.capture());
         return captor.getValue();

@@ -23,6 +23,13 @@ public interface IncomeRepository extends JpaRepository<Income, Long> {
     @Query("SELECT i.source, COALESCE(SUM(i.amount), 0) FROM Income i WHERE i.userId = :uid AND i.incomeDate BETWEEN :from AND :to GROUP BY i.source")
     List<Object[]> sumBySource(@Param("uid") Long userId, @Param("from") LocalDate from, @Param("to") LocalDate to);
 
+    /** Tax already deducted at source from recorded income — a credit against the year's tax. */
+    @Query("SELECT COALESCE(SUM(i.tds), 0) FROM Income i WHERE i.userId = :uid AND i.incomeDate BETWEEN :from AND :to "
+        + "AND i.source <> com.marketai.income.entity.IncomeSource.SALARY")
+    java.math.BigDecimal sumTds(@Param("uid") Long userId, @Param("from") LocalDate from, @Param("to") LocalDate to);
+
     /** See {@code ExpenseRepository.existsByUserIdAndSourceEmailId} — same fix, same reason. */
     boolean existsByUserIdAndSourceEmailId(Long userId, String sourceEmailId);
+
+    java.util.Optional<Income> findByIdAndUserId(Long id, Long userId);
 }

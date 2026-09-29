@@ -25,6 +25,16 @@ public class GmailSyncResult {
         private int failedImports;
         private int pdfsPending;
         private String status; // OK / ACTION_REQUIRED
+        /** "✓ Sync Complete" only when every financial event is accounted for; otherwise says what is left. */
+        private String headline;
+        /** Financial events read (or re-read) this run, from every email body and attachment. */
+        private long eventsSeen;
+        /** Of those: imported, already on record, or needing nothing for a stated reason. */
+        private long eventsAccounted;
+        /** Of those: waiting for review or reconciliation, each with its reason. */
+        private long eventsUnresolved;
+        /** Unresolved events on record in total, including those from earlier runs. */
+        private long outstandingUnresolved;
         private List<String> actionItems;
     }
 

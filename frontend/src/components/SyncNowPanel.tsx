@@ -17,6 +17,8 @@ export function SyncNowPanel({ onFinished }: { onFinished?: () => void }) {
       case 'QUEUED':    return <span className="pill-muted"><Clock size={11} /> Queued</span>;
       case 'RUNNING':   return <span className="pill-info"><RefreshCw size={11} className="animate-spin" /> Running</span>;
       case 'SUCCEEDED': return <span className="pill-bull"><CheckCircle2 size={11} /> Done</span>;
+      case 'PARTIAL_SUCCESS': return <span className="pill-neutral"><AlertTriangle size={11} /> Done, some emails failed</span>;
+      case 'RECONCILIATION_REQUIRED': return <span className="pill-neutral"><AlertTriangle size={11} /> Done, needs your attention</span>;
       case 'FAILED':    return <span className="pill-bear"><AlertTriangle size={11} /> Failed</span>;
       default:          return <span className="pill-muted">{job.status}</span>;
     }
@@ -59,7 +61,7 @@ export function SyncNowPanel({ onFinished }: { onFinished?: () => void }) {
         </div>
       )}
 
-      {job?.status === 'SUCCEEDED' && job.resultSummary && (
+      {job && !running && job.status !== 'FAILED' && job.resultSummary && (
         <p className="text-2xs text-gray-500 mt-2 font-mono">{job.resultSummary}</p>
       )}
 

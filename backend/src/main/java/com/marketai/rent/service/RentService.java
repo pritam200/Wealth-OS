@@ -17,7 +17,6 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -38,9 +37,6 @@ public class RentService {
                 .paymentMethod(req.getPaymentMethod())
                 .active(true)
                 .build());
-        // Materialize this month's placeholder immediately so "Upcoming" shows without
-        // waiting for the next listRent() call to notice the new schedule.
-        ensureMonthRow(userId, schedule, firstOfMonth(LocalDate.now()));
         return toScheduleResponse(schedule);
     }
 
@@ -65,46 +61,87 @@ public class RentService {
     }
 
     /**
-     * Ensures the current month has an "Upcoming" placeholder for every active schedule
-     * before returning the ledger — mirrors RecurringInvestmentService's nextDueDate()
-     * idiom, but materialized as a real row (rather than computed on the fly), since a
-     * real payment — manual or Gmail-detected — needs a row to match onto.
+     * The rent ledger plus, for each active schedule, this month's instalment when nothing has
+     * been recorded for it yet. That instalment is shown, not written: a read used to insert a
+     * placeholder row, and two concurrent reads inserted two. A payment — entered by hand or
+     * read from email — attaches to its schedule when it is recorded.
      */
-    @Transactional
+    @Transactional(readOnly = true)
     public List<RentResponse> listRent(Long userId) {
-        LocalDate thisMonth = firstOfMonth(LocalDate.now());
-        for (RentSchedule schedule : scheduleRepository.findByUserIdAndActiveTrue(userId)) {
-            ensureMonthRow(userId, schedule, thisMonth);
-        }
-        return rentRepository.findByUserIdOrderByMonthDesc(userId)
-                .stream().map(this::toResponse).collect(Collectors.toList());
-    }
+        LocalDate today = LocalDate.now();
+        LocalDate thisMonth = firstOfMonth(today);
+        java.util.Map<Long, RentSchedule> schedules = new java.util.HashMap<>();
+        for (RentSchedule s : scheduleRepository.findByUserIdOrderByCreatedAtDesc(userId)) schedules.put(s.getId(), s);
 
-    private void ensureMonthRow(Long userId, RentSchedule schedule, LocalDate month) {
-        if (rentRepository.findByUserIdAndMonthAndScheduleId(userId, month, schedule.getId()).isPresent()) return;
-        rentRepository.save(Rent.builder()
-                .userId(userId)
-                .scheduleId(schedule.getId())
-                .month(month)
-                .amount(schedule.getAmount())
-                .paidTo(schedule.getPaidTo())
-                .cashAccountId(schedule.getCashAccountId())
-                .paymentMethod(schedule.getPaymentMethod())
-                .build());
+        List<Rent> rows = rentRepository.findByUserIdOrderByMonthDesc(userId);
+        List<RentResponse> out = new java.util.ArrayList<>();
+        for (RentSchedule s : schedules.values()) {
+            if (!s.isActive()) continue;
+            boolean recorded = rows.stream().anyMatch(r -> s.getId().equals(r.getScheduleId()) && thisMonth.equals(r.getMonth()));
+            if (recorded) continue;
+            out.add(RentResponse.builder()
+                    .scheduleId(s.getId()).month(thisMonth).amount(s.getAmount()).paidTo(s.getPaidTo())
+                    .cashAccountId(s.getCashAccountId()).paymentMethod(s.getPaymentMethod())
+                    .status(statusOf(null, thisMonth, s, today))
+                    .build());
+        }
+        for (Rent r : rows) {
+            RentResponse resp = toResponse(r);
+            resp.setStatus(statusOf(r.getPaidDate(), r.getMonth(),
+                    r.getScheduleId() != null ? schedules.get(r.getScheduleId()) : null, today));
+            out.add(resp);
+        }
+        out.sort(java.util.Comparator.comparing(RentResponse::getMonth).reversed());
+        return out;
     }
 
     /**
-     * Manual "I paid rent" entry. Fills in the matching month's open placeholder row (from
-     * an active schedule) rather than creating a second row, if one exists; otherwise
-     * records a genuine one-time payment.
+     * PAID once a payment is recorded. Otherwise UPCOMING until the due day, OVERDUE after it
+     * within the month, and MISSED once the month has passed.
+     */
+    static String statusOf(LocalDate paidDate, LocalDate month, RentSchedule schedule, LocalDate today) {
+        if (paidDate != null) return "PAID";
+        LocalDate thisMonth = firstOfMonth(today);
+        if (month.isBefore(thisMonth)) return "MISSED";
+        if (month.isAfter(thisMonth)) return "UPCOMING";
+        int dueDay = schedule != null && schedule.getDueDayOfMonth() != null ? schedule.getDueDayOfMonth() : 1;
+        LocalDate due = month.withDayOfMonth(Math.min(Math.max(dueDay, 1), month.lengthOfMonth()));
+        return today.isAfter(due) ? "OVERDUE" : "UPCOMING";
+    }
+
+    /**
+     * Manual "I paid rent" entry. Attaches to that month's open instalment (a legacy placeholder
+     * row, or the schedule it belongs to) rather than creating a second row. If the same payment
+     * was already read from email it is returned, flagged, instead of being recorded twice.
      */
     @Transactional
     public RentResponse recordPayment(Long userId, RentRequest req) {
         LocalDate paidDate = req.getPaidDate() != null ? req.getPaidDate() : LocalDate.now();
         LocalDate month = req.getMonth() != null ? firstOfMonth(req.getMonth()) : firstOfMonth(paidDate);
+        List<Rent> monthRows = rentRepository.findByUserIdAndMonth(userId, month);
 
-        Rent rent = rentRepository.findByUserIdAndMonthAndPaidDateIsNull(userId, month)
-                .orElseGet(() -> Rent.builder().userId(userId).month(month).build());
+        if (!req.isConfirmSeparate()) {
+            Rent fromEmail = monthRows.stream()
+                    .filter(r -> r.getPaidDate() != null && r.getSourceEmailId() != null)
+                    .filter(r -> r.getAmount() != null && r.getAmount().compareTo(req.getAmount()) == 0)
+                    .filter(r -> req.getScheduleId() == null || r.getScheduleId() == null || req.getScheduleId().equals(r.getScheduleId()))
+                    .filter(r -> payeeCompatible(req.getPaidTo(), r.getPaidTo()))
+                    .findFirst().orElse(null);
+            if (fromEmail != null) {
+                RentResponse existing = toResponse(fromEmail);
+                existing.setAlreadyRecorded(true);
+                return existing;
+            }
+        }
+
+        Rent rent = monthRows.stream()
+                .filter(r -> r.getPaidDate() == null)
+                .filter(r -> req.getScheduleId() == null || req.getScheduleId().equals(r.getScheduleId()))
+                .filter(r -> payeeCompatible(req.getPaidTo(), r.getPaidTo()))
+                .findFirst()
+                .orElseGet(() -> Rent.builder().userId(userId).month(month)
+                        .scheduleId(freeSchedule(userId, month, req.getScheduleId(), req.getAmount(), req.getPaidTo(), monthRows))
+                        .build());
         rent.setAmount(req.getAmount());
         rent.setPaidDate(paidDate);
         if (req.getPaidTo() != null) rent.setPaidTo(req.getPaidTo());
@@ -113,6 +150,21 @@ public class RentService {
         rent.setReferenceId(req.getReferenceId());
         rent.setNote(req.getNote());
         return toResponse(rentRepository.save(rent));
+    }
+
+    /**
+     * The schedule a new payment row belongs to: the one named, or the only active schedule of
+     * this amount/payee — provided that schedule has no row for the month yet (one row per
+     * schedule per month). Null means a one-off payment.
+     */
+    private Long freeSchedule(Long userId, LocalDate month, Long named, BigDecimal amount, String payee, List<Rent> monthRows) {
+        List<RentSchedule> candidates = scheduleRepository.findByUserIdAndActiveTrue(userId).stream()
+                .filter(s -> named != null ? named.equals(s.getId())
+                        : s.getAmount() != null && amount != null && s.getAmount().compareTo(amount) == 0
+                          && payeeCompatible(payee, s.getPaidTo()))
+                .filter(s -> monthRows.stream().noneMatch(r -> s.getId().equals(r.getScheduleId())))
+                .toList();
+        return candidates.size() == 1 ? candidates.get(0).getId() : null;
     }
 
     @Transactional
@@ -153,9 +205,32 @@ public class RentService {
 
         List<Rent> openSameMonth = rentRepository.findByUserIdAndMonthAndAmountAndPaidDateIsNull(userId, month, amount);
         Rent target = openSameMonth.stream()
-                .filter(r -> payee == null || r.getPaidTo() == null || payeesMatch(payee, r.getPaidTo()))
+                .filter(r -> payeeCompatible(payee, r.getPaidTo()))
                 .findFirst()
-                .orElseGet(() -> Rent.builder().userId(userId).month(month).amount(amount).paidTo(payee).build());
+                .orElse(null);
+
+        if (target == null && sourceEmailId != null) {
+            // Already marked paid by hand: the email is the evidence for that payment, not a
+            // second one. Matched on amount and a payment date within a few days, because the
+            // day the user ticks "paid" is rarely the day the bank debited it.
+            Rent enteredByHand = rentRepository.findByUserIdAndAmountAndSourceEmailIdIsNullAndPaidDateBetween(
+                            userId, amount, date.minusDays(HAND_ENTRY_DAYS), date.plusDays(HAND_ENTRY_DAYS)).stream()
+                    .filter(r -> payeeCompatible(payee, r.getPaidTo()))
+                    .findFirst().orElse(null);
+            if (enteredByHand != null) {
+                enteredByHand.setSourceEmailId(sourceEmailId);
+                if (payee != null && enteredByHand.getPaidTo() == null) enteredByHand.setPaidTo(payee);
+                rentRepository.save(enteredByHand);
+                return;
+            }
+        }
+
+        if (target == null) {
+            List<Rent> monthRows = rentRepository.findByUserIdAndMonth(userId, month);
+            target = Rent.builder().userId(userId).month(month).amount(amount).paidTo(payee)
+                    .scheduleId(freeSchedule(userId, month, null, amount, payee, monthRows))
+                    .build();
+        }
 
         target.setPaidDate(date);
         target.setSourceEmailId(sourceEmailId);
@@ -168,13 +243,16 @@ public class RentService {
         return rentRepository.countByUserIdAndSourceEmailIdAndAmountAndPaidDate(userId, sourceEmailId, amount, paidDate);
     }
 
-    private boolean payeesMatch(String a, String b) {
-        return a.equalsIgnoreCase(b)
-                || a.toLowerCase().contains(b.toLowerCase())
-                || b.toLowerCase().contains(a.toLowerCase());
+    /** How far apart a hand-entered payment date and the bank's debit date may be. */
+    private static final int HAND_ENTRY_DAYS = 5;
+
+    /** Either side unnamed, or the same payee once normalised. */
+    private static boolean payeeCompatible(String a, String b) {
+        return a == null || a.isBlank() || b == null || b.isBlank()
+                || com.marketai.common.ledger.PartyNames.sameParty(a, b);
     }
 
-    private LocalDate firstOfMonth(LocalDate date) {
+    private static LocalDate firstOfMonth(LocalDate date) {
         return date.withDayOfMonth(1);
     }
 

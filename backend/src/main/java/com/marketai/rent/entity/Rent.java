@@ -19,12 +19,22 @@ import java.time.LocalDateTime;
 @Table(name = "rents", indexes = {
     @Index(name = "idx_rent_user", columnList = "user_id"),
     @Index(name = "idx_rent_month", columnList = "rent_month")
-})
+    },
+    // One row per schedule per month. One-off payments (schedule_id NULL) are not constrained.
+    uniqueConstraints = @UniqueConstraint(name = "uq_rent_schedule_month",
+        columnNames = {"user_id", "schedule_id", "rent_month"}))
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 public class Rent {
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /** Optimistic lock: a sync and a user edit changing the same record at once can't silently
+     *  overwrite each other — the second write fails and is retried or reported. */
+    @Version
+    @Column(name = "version")
+    @lombok.EqualsAndHashCode.Exclude
+    private Long version;
 
     @Column(name = "user_id", nullable = false)
     private Long userId;

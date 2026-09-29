@@ -9,6 +9,7 @@ import java.time.LocalDate;
 @Data
 @Builder
 public class RentResponse {
+    /** Null for this month's instalment of a schedule that has nothing recorded yet. */
     private Long id;
     private Long scheduleId;
     private LocalDate month;
@@ -20,5 +21,7 @@ public class RentResponse {
     private String referenceId;
     private String note;
     private String sourceEmailId;
-    private String status; // PAID | UPCOMING
+    private String status; // PAID | UPCOMING | OVERDUE | MISSED
+    /** True when nothing was added because the payment was already recorded from email. */
+    private boolean alreadyRecorded;
 }

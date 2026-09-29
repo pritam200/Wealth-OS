@@ -13,6 +13,8 @@ public class AiAuditTrailResponse {
     private String task;
     private String provider;
     private String model;
+    private String promptVersion;
+    private boolean fallbackUsed;
     private String referenceId;
     private String systemInstruction;
     private String prompt;

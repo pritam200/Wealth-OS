@@ -37,9 +37,11 @@ import com.marketai.common.quality.DataQuality;
 public class RecommendationEngine {
 
     private static final String NIFTY_SYMBOL = "^NSEI";
-    private static final BigDecimal STCG_RATE = BigDecimal.valueOf(0.15);   // equity MF, <1yr, flat 15%
-    private static final BigDecimal LTCG_RATE = BigDecimal.valueOf(0.125);  // equity MF, >=1yr, 12.5% over exemption
-    private static final BigDecimal LTCG_EXEMPTION = BigDecimal.valueOf(125000); // per FY, simplified (not tracked across redemptions here)
+    // One rate table for the whole app. This class used to carry its own STCG of 15% — the
+    // pre-July-2024 rate — while tax used 20%, so the same gain was quoted two ways.
+    private static final BigDecimal STCG_RATE = com.marketai.tax.lot.CapitalGainsRates.STCG_RATE;
+    private static final BigDecimal LTCG_RATE = com.marketai.tax.lot.CapitalGainsRates.LTCG_RATE;
+    private static final BigDecimal LTCG_EXEMPTION = com.marketai.tax.lot.CapitalGainsRates.LTCG_EXEMPTION; // per FY; not tracked across redemptions here
 
     private final AnalystService analystService;
     private final PriceHistoryRepository priceHistoryRepository;
@@ -167,7 +169,9 @@ public class RecommendationEngine {
             ? current.subtract(invested).divide(invested, 4, RoundingMode.HALF_UP).doubleValue() * 100 : 0;
         double xirr = req.getXirr() != null ? req.getXirr().doubleValue() : Double.NaN;
         long daysHeld = req.getBuyDate() != null ? ChronoUnit.DAYS.between(req.getBuyDate(), LocalDate.now()) : Long.MAX_VALUE;
-        boolean isLongTerm = daysHeld >= 365;
+        boolean isLongTerm = req.getBuyDate() == null
+            || com.marketai.tax.lot.CapitalGainsRates.isLongTerm(req.getBuyDate(), LocalDate.now());
+        long daysToLtcgFromBuy = com.marketai.tax.lot.CapitalGainsRates.daysToLongTerm(req.getBuyDate(), LocalDate.now());
 
         List<String> positives = new ArrayList<>();
         List<String> risks = new ArrayList<>();
@@ -190,7 +194,7 @@ public class RecommendationEngine {
             // decision instead of a flat "Sell".
             nextAction = "PARTIAL_PROFIT_BOOKING";
             confidence = 70;
-            long daysToLtcg = 365 - daysHeld;
+            long daysToLtcg = daysToLtcgFromBuy;
             nextActionReason = String.format("Up %.1f%% but still short-term (%d days held, %d to go for LTCG) — book part of the gain now and let the rest season into long-term tax treatment.", pnlPercent, daysHeld, daysToLtcg);
             positives.add(String.format("Up %.1f%% — strong short-term gain", pnlPercent));
             risks.add(String.format("Still short-term (%d days held) — STCG applies if redeemed now", daysHeld));
@@ -244,7 +248,7 @@ public class RecommendationEngine {
             else if (diff <= -2) risks.add(String.format("Underperforming Nifty 50's trailing return by %.1f pts", Math.abs(diff)));
         }
 
-        String taxImpact = taxImpactText(current.subtract(invested), daysHeld, isLongTerm);
+        String taxImpact = taxImpactText(current.subtract(invested), daysToLtcgFromBuy, isLongTerm);
 
         String basis = String.format(
             "Rule-based MF assessment: %d days held (%s), XIRR %s, return %.1f%%%s. Not investment advice.",
@@ -268,17 +272,20 @@ public class RecommendationEngine {
             .build();
     }
 
-    private String taxImpactText(BigDecimal gain, long daysHeld, boolean isLongTerm) {
+    private String taxImpactText(BigDecimal gain, long daysToLtcg, boolean isLongTerm) {
         if (gain.compareTo(BigDecimal.ZERO) <= 0) return "No tax impact — position is at a loss.";
         if (isLongTerm) {
             BigDecimal taxable = gain.subtract(LTCG_EXEMPTION).max(BigDecimal.ZERO);
             BigDecimal tax = taxable.multiply(LTCG_RATE).setScale(0, RoundingMode.HALF_UP);
-            return String.format("LTCG: ₹%,.0f tax if redeemed today (12.5%% over ₹1.25L/FY exemption).", tax);
+            return String.format("LTCG: ₹%,.0f tax if redeemed today (%s%% over ₹1.25L/FY exemption).", tax, pct(LTCG_RATE));
         }
         BigDecimal tax = gain.multiply(STCG_RATE).setScale(0, RoundingMode.HALF_UP);
-        long daysToLtcg = Math.max(0, 365 - daysHeld);
-        return String.format("STCG: ₹%,.0f tax (15%%) if redeemed today. LTCG treatment in %d more day%s.",
-            tax, daysToLtcg, daysToLtcg == 1 ? "" : "s");
+        return String.format("STCG: ₹%,.0f tax (%s%%) if redeemed today. LTCG treatment in %d more day%s.",
+            tax, pct(STCG_RATE), daysToLtcg, daysToLtcg == 1 ? "" : "s");
+    }
+
+    private static String pct(BigDecimal rate) {
+        return rate.movePointRight(2).stripTrailingZeros().toPlainString();
     }
 
     /** Real trailing returns for the three benchmark indices — replaces what used to be

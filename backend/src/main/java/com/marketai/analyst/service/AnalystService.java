@@ -2,7 +2,6 @@ package com.marketai.analyst.service;
 
 import com.marketai.ai.llm.LlmCompletion;
 import com.marketai.ai.llm.LlmJsonParser;
-import com.marketai.ai.llm.LlmProviderRouter;
 import com.marketai.ai.llm.LlmUnavailableException;
 import com.marketai.analyst.dto.AnalystAssessment;
 import com.marketai.analyst.dto.AnalystAssessment.*;
@@ -46,7 +45,7 @@ public class AnalystService {
     private final NewsService newsService;
     // Vendor-neutral: Ollama locally by default, Gemini only when configured. Was GeminiClient
     // directly, which made app.llm.provider=none have no effect on this path.
-    private final LlmProviderRouter llm;
+    private final com.marketai.ai.llm.LlmService llm;
     private final LlmJsonParser llmJson;
 
     // Configurable per the "Financial Intelligence Engine" requirement — tune weighting
@@ -317,16 +316,8 @@ public class AnalystService {
             if (pulse.getHeadlines() != null && !pulse.getHeadlines().isEmpty())
                 ctx.append("\nRecent headlines: ").append(String.join(" | ", pulse.getHeadlines()));
 
-            String sys = "You are a sell-side equity analyst reviewing an Indian (NSE/BSE) stock. "
-                + "Use ONLY the data provided — never invent numbers, prices or events. "
-                + "Reply with a JSON object and nothing else: "
-                + "{\"rating\": one of BUY|HOLD|SELL|WATCH — your own independent call, "
-                + "\"keyDriver\": one short sentence on what matters most here, "
-                + "\"mainRisk\": one short sentence on the biggest risk, "
-                + "\"outlook\": 2-3 sentences of balanced outlook ending with 'Not investment advice.'} "
-                + "Use WATCH when the data provided is too thin to take a side.";
-
-            LlmCompletion out = llm.complete(sys, ctx.toString());
+            
+            LlmCompletion out = llm.complete(com.marketai.ai.llm.LlmTask.FINANCIAL_ANALYSIS, com.marketai.ai.prompt.PromptLibrary.STOCK_SECOND_OPINION, ctx.toString());
             var json = llmJson.parse(out.getText()).orElse(null);
             if (json == null) return null;
 

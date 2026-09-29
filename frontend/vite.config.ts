@@ -9,7 +9,8 @@ export default defineConfig({
     allowedHosts: ['.ngrok-free.app'],
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        // Overridable so the UI can be pointed at a second backend (e.g. a scratch database).
+        target: process.env.VITE_API_TARGET ?? 'http://localhost:8080',
         changeOrigin: true,
       },
     },

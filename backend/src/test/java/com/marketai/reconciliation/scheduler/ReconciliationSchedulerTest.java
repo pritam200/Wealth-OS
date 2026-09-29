@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.*;
 
 /**
@@ -21,25 +23,27 @@ import static org.mockito.Mockito.*;
 class ReconciliationSchedulerTest {
 
     @Test
-    void sweepsEveryUserAndSurvivesAPerUserFailure() {
+    void sweepsEveryUserAndRecordsAPerUserFailureWithoutStopping() {
         UserRepository userRepo = mock(UserRepository.class);
-        ReconciliationService reconciliationService = mock(ReconciliationService.class);
+        com.marketai.reconciliation.service.ReconciliationIssueService issueService =
+            mock(com.marketai.reconciliation.service.ReconciliationIssueService.class);
+        com.marketai.common.jobs.ScheduledJobHealthRepository healthRepo =
+            mock(com.marketai.common.jobs.ScheduledJobHealthRepository.class);
+        when(healthRepo.findById(any())).thenReturn(java.util.Optional.empty());
 
         User u1 = new User(); u1.setId(1L);
         User u2 = new User(); u2.setId(2L);
         when(userRepo.findAll()).thenReturn(List.of(u1, u2));
+        when(issueService.refresh(1L)).thenThrow(new RuntimeException("boom"));
+        when(issueService.refresh(2L)).thenReturn(List.of());
 
-        when(reconciliationService.checkAll(1L)).thenThrow(new RuntimeException("boom"));
-        when(reconciliationService.checkAll(2L)).thenReturn(ReconciliationReportDto.builder()
-            .issueCount(1)
-            .issues(List.of(ReconciliationIssue.builder()
-                .domain("LEDGER").type("LEDGER_UNCREDITED_PROCEEDS").severity("HIGH")
-                .description("test finding").build()))
-            .build());
+        new ReconciliationScheduler(userRepo, issueService, new com.marketai.common.jobs.JobHealthRecorder(healthRepo))
+            .scheduledReconciliationSweep();
 
-        new ReconciliationScheduler(userRepo, reconciliationService).scheduledReconciliationSweep();
-
-        verify(reconciliationService).checkAll(1L);
-        verify(reconciliationService).checkAll(2L);
+        verify(issueService).refresh(1L);
+        verify(issueService).refresh(2L);
+        // The failure is kept where the Reconciliation Center can show it, not only logged.
+        verify(healthRepo).save(argThat(h -> "PARTIAL".equals(h.getLastStatus())
+            && h.getLastError().contains("user 1") && h.getLastError().contains("boom")));
     }
 }

@@ -11,13 +11,12 @@ import java.time.LocalDateTime;
     @Index(name = "idx_income_user", columnList = "user_id"),
     @Index(name = "idx_income_date", columnList = "income_date")
     },
-    // NULL source_email_id (a manual entry) is not constrained by this — Postgres treats every
-    // NULL as distinct in a unique index, so only two rows citing the SAME email can collide.
-    // Safe to add only after the live cross-day-fallback duplicates were cleaned up (see
-    // docs/DUPLICATE_DATA_CLEANUP_2026-09-23.md) — the underlying dedup bug is fixed in
-    // ParsedEmailImporter.isDuplicateIncome.
-    uniqueConstraints = @UniqueConstraint(name = "uq_income_user_source_email",
-        columnNames = {"user_id", "source_email_id"}))
+    // One row per extracted line: an email (a bank statement) legitimately produces many rows, so
+    // the key is the email plus the line's event fingerprint. It used to be the email alone, which
+    // made every line after the first fail to insert. NULLs are distinct in a Postgres unique
+    // index, so manual entries (no email) are never constrained by it.
+    uniqueConstraints = @UniqueConstraint(name = "uq_income_user_source_line",
+        columnNames = {"user_id", "source_email_id", "source_fingerprint"}))
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 public class Income {
 
@@ -50,8 +49,16 @@ public class Income {
     @Column(name = "source_email_id", length = 100)
     private String sourceEmailId;
 
+    /** Event fingerprint of the email line this row was booked from (null for manual entries). */
+    @Column(name = "source_fingerprint", length = 64)
+    private String sourceFingerprint;
+
     @Column(length = 500)
     private String note;
+
+    /** Tax deducted at source from this income, when stated. {@code amount} is the gross figure. */
+    @Column(precision = 18, scale = 2)
+    private BigDecimal tds;
 
     @Column(nullable = false, updatable = false)
     @Builder.Default

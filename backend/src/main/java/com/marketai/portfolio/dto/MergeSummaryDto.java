@@ -11,6 +11,9 @@ public class MergeSummaryDto {
     private int groupsMerged;
     private int holdingsMerged;
     private List<MergedGroup> groups;
+    /** Groups left alone because the rows share an identical trade — merging would count that
+     *  trade twice. Each needs the duplicate trade removed by hand first. */
+    private List<String> skipped;
 
     @Data
     @Builder

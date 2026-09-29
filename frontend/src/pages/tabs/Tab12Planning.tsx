@@ -35,7 +35,20 @@ export function Tab12Planning() {
 }
 
 /* ── Scheduled Investments (SIP / PPF / NPS) ── */
-const INSTALLMENT_DOT: Record<string, string> = { COMPLETED: 'bg-bull', MISSED: 'bg-bear', UPCOMING: 'bg-gray-500' };
+const INSTALLMENT_DOT: Record<string, string> = {
+  COMPLETED: 'bg-bull', PARTIAL: 'bg-neutral', FAILED: 'bg-bear', MISSED: 'bg-bear',
+  PAUSED: 'bg-gray-700', UPCOMING: 'bg-gray-500',
+};
+
+/** "3 completed, 1 partial, 1 failed" — only the states that occurred. */
+function installmentCounts(i: RecurringInvestment): string {
+  const parts: string[] = [`${i.completedCount} completed`];
+  if (i.partialCount) parts.push(`${i.partialCount} partial`);
+  if (i.failedCount) parts.push(`${i.failedCount} failed`);
+  if (i.missedCount) parts.push(`${i.missedCount} missed`);
+  if (i.pausedCount) parts.push(`${i.pausedCount} paused`);
+  return parts.join(', ');
+}
 
 function ScheduledInvestmentsSection() {
   const maskText = useMaskedText();
@@ -118,10 +131,10 @@ function ScheduledInvestmentsSection() {
               </div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {i.installments.slice(-8).map((inst, idx) => (
-                  <span key={idx} title={`${inst.dueDate} — ${inst.status}`} className={`w-2 h-2 rounded-full ${INSTALLMENT_DOT[inst.status]}`} />
+                  <span key={idx} title={`${inst.dueDate} — ${inst.status}${inst.expectedAmount != null ? ` · due ${maskText(fmtINR(inst.expectedAmount))}` : ''}${inst.actualAmount != null ? ` · bought ${maskText(fmtINR(inst.actualAmount))}` : ''}${inst.note ? ` · ${inst.note}` : ''}`} className={`w-2 h-2 rounded-full ${INSTALLMENT_DOT[inst.status]}`} />
                 ))}
                 {i.type === 'SIP' && i.linkedSymbol && (
-                  <span className="text-2xs text-gray-600 ml-1">{i.completedCount} completed{i.missedCount > 0 ? `, ${i.missedCount} missed` : ''}</span>
+                  <span className="text-2xs text-gray-600 ml-1">{installmentCounts(i)}</span>
                 )}
                 {(i.type !== 'SIP' || !i.linkedSymbol) && i.installments[0] && (
                   <span className="text-2xs text-gray-600 ml-1">next due {i.installments[0].dueDate}</span>
@@ -451,6 +464,12 @@ function TaxSummary() {
             <span className="text-xs text-gray-400">Estimated tax on investment income</span>
             <span className="font-mono text-ink text-sm font-bold">{maskText(`${fmtINR(tax.estimatedTaxLow)} – ${fmtINR(tax.estimatedTaxHigh)}`)}</span>
           </div>
+          {(tax.tdsDeducted ?? 0) > 0 && (
+            <div className="flex items-center justify-between rounded px-2.5 -mt-2 mb-3">
+              <span className="text-2xs text-gray-500">TDS already deducted (recorded)</span>
+              <span className="font-mono text-2xs text-gray-400">{maskText(fmtINR(tax.tdsDeducted ?? 0))}</span>
+            </div>
+          )}
           <ul className="space-y-1">
             {tax.notes.map((n, i) => (
               <li key={i} className="text-2xs text-gray-500 flex gap-1.5"><span className="text-gray-700">•</span>{n}</li>

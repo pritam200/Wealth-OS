@@ -34,7 +34,11 @@ class TaxServiceExportTest {
     @BeforeEach
     void setUp() {
         redemptionRepo = mock(MfRedemptionRepository.class);
-        service = new TaxService(mock(IncomeRepository.class), redemptionRepo);
+        com.marketai.portfolio.service.PortfolioService portfolio = mock(com.marketai.portfolio.service.PortfolioService.class);
+        org.mockito.Mockito.when(portfolio.realisedEquity(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(new com.marketai.portfolio.service.PortfolioService.RealisedEquity(
+                BigDecimal.ZERO, BigDecimal.ZERO, List.of(), BigDecimal.ZERO));
+        service = new TaxService(mock(IncomeRepository.class), redemptionRepo, portfolio);
     }
 
     private MfRedemption redemption(String symbol, LocalDate saleDate, long holdingDays,

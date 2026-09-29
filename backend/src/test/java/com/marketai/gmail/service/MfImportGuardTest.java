@@ -61,6 +61,7 @@ class MfImportGuardTest {
         p.setId(1L);
         when(portfolioService.getUserPortfolios(USER)).thenReturn(java.util.List.of(p));
         when(portfolioService.isDuplicateTrade(any(), any(), any(), any(), any())).thenReturn(false);
+        when(portfolioService.resolveFundSymbol(any(), any(), any())).thenAnswer(i -> i.getArgument(1));
 
         importer = new ParsedEmailImporter(
             trackingService,
@@ -306,7 +307,7 @@ class MfImportGuardTest {
         verify(portfolioService).sellHolding(eq(1L), eq(42L), eq(USER),
             argThat(q -> q.compareTo(new BigDecimal("500")) == 0),
             argThat(p -> p.compareTo(new BigDecimal("42.50")) == 0),
-            any());
+            any(), argThat(prov -> "redeem-1".equals(prov.getSourceEmailId())), any());
     }
 
     @Test
@@ -319,7 +320,7 @@ class MfImportGuardTest {
         // Neither side: no invented purchase, and no sale against a position we cannot identify
         // (there would be no cost basis to compute a gain from).
         verify(portfolioService, never()).addHolding(any(), any(), any());
-        verify(portfolioService, never()).sellHolding(any(), any(), any(), any(), any(), any());
+        verify(portfolioService, never()).sellHolding(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -328,6 +329,6 @@ class MfImportGuardTest {
             mf(new BigDecimal("100"), new BigDecimal("50"), new BigDecimal("5000")), "sip-1", null);
 
         verify(portfolioService).addHolding(any(), any(), any());
-        verify(portfolioService, never()).sellHolding(any(), any(), any(), any(), any(), any());
+        verify(portfolioService, never()).sellHolding(any(), any(), any(), any(), any(), any(), any());
     }
 }

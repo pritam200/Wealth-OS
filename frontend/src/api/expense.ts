@@ -9,6 +9,7 @@ export interface ExpenseRequest {
   paymentMethod?: string;
   cashAccountId?: number;
   note?: string;
+  confirmSeparate?: boolean;
 }
 
 export interface ExpenseResponse {
@@ -21,6 +22,7 @@ export interface ExpenseResponse {
   paymentMethod: string | null;
   cashAccountId: number | null;
   sourceEmailId: string | null;
+  alreadyRecorded?: boolean;
   note: string | null;
   createdAt: string;
 }

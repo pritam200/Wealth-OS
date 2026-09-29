@@ -49,6 +49,9 @@ public class PdfImportService {
     private static final List<String> PENDING_STATUSES = Arrays.asList("NEEDS_PASSWORD", "PASSWORD_FAILED");
     private static final List<String> RETRYABLE_STATUSES = Arrays.asList("NEEDS_PASSWORD", "PASSWORD_FAILED", "FAILED");
 
+    /** Below this much text a PDF has no usable text layer (a scan). */
+    static final int MIN_TEXT_CHARS = 40;
+
     // Brokers, exchanges, and RTAs in India that all use PAN (uppercase) as the standard
     // statement password. When a PAN password is saved for any one of these, it's reused
     // across all of them — the user only needs to enter their PAN once.
@@ -72,6 +75,8 @@ public class PdfImportService {
     private final GmailClientService gmailClient;
     private final PasswordCipher passwordCipher;
     private final EmailLLMParserService emailLlmParserService;
+    private final com.marketai.document.ocr.ScanTranscriber scanTranscriber;
+    private final com.marketai.gmail.ledger.EmailManifestService manifestService;
 
     public List<PendingPdf> list(Long userId) {
         List<PendingPdf> items = pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, PENDING_STATUSES);
@@ -88,22 +93,29 @@ public class PdfImportService {
             try {
                 tryAutoUnlock(userId, pdf);
             } catch (Exception e) {
-                log.debug("Retry auto-unlock failed for pending {}: {}", pdf.getId(), e.getMessage());
+                log.warn("Retry auto-unlock failed for pending {}: {}", pdf.getId(), e.getMessage());
             }
         }
     }
 
     public int bulkAutoUnlock(Long userId) {
-        List<PendingPdf> locked = pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, RETRYABLE_STATUSES);
+        List<PendingPdf> locked = new ArrayList<>(pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, RETRYABLE_STATUSES));
+        // Scans set aside because no vision model was configured are read once one is. Scans the
+        // model itself couldn't read are not re-sent on every sync.
+        if (scanTranscriber.available()) {
+            for (PendingPdf pdf : pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, List.of("NEEDS_OCR"))) {
+                if (pdf.getResultSummary() != null && pdf.getResultSummary().contains("image-capable model")) locked.add(pdf);
+            }
+        }
         int unlocked = 0;
         for (PendingPdf pdf : locked) {
-            if (pdf.getProviderKey() == null) continue;
+            if (pdf.getProviderKey() == null && !"NEEDS_OCR".equals(pdf.getStatus())) continue;
             try {
                 tryAutoUnlock(userId, pdf);
                 PendingPdf refreshed = pendingPdfRepo.findById(pdf.getId()).orElse(pdf);
                 if ("IMPORTED".equals(refreshed.getStatus())) unlocked++;
             } catch (Exception e) {
-                log.debug("Bulk auto-unlock failed for pending {}: {}", pdf.getId(), e.getMessage());
+                log.warn("Bulk auto-unlock failed for pending {}: {}", pdf.getId(), e.getMessage());
             }
         }
         if (unlocked > 0) log.info("Bulk auto-unlock: unlocked {} of {} locked statements for user {}", unlocked, locked.size(), userId);
@@ -158,7 +170,7 @@ public class PdfImportService {
                     Message message = gmailClient.getMessage(gmail, pdf.getGmailMessageId());
                     String body = gmailClient.getBodyText(message);
                     EmailLLMParserService.Classification cls =
-                        emailLlmParserService.classify(pdf.getSender(), pdf.getSubject(), body);
+                        emailLlmParserService.classify(userId, pdf.getGmailMessageId(), pdf.getSender(), pdf.getSubject(), body);
                     String fresh = cls.passwordHintType() != null ? cls.passwordHintType().name() : null;
                     if (fresh != null && !fresh.equals(pdf.getPasswordHint())) {
                         pdf.setPasswordHint(fresh);
@@ -197,11 +209,22 @@ public class PdfImportService {
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Not found"));
         pdf.setStatus("DISMISSED");
         pendingPdfRepo.save(pdf);
+        refreshManifest(userId, pdf.getGmailMessageId());
     }
 
     @Transactional
     public void tryAutoUnlock(Long userId, PendingPdf pdf) {
-        if (pdf.getProviderKey() == null) return;
+        // 0. Many statements and contract notes are not encrypted at all. They used to sit in
+        // PASSWORD_FAILED whenever no saved password or hint existed, because opening without
+        // a password was never tried.
+        if (tryWithoutPassword(userId, pdf)) return;
+        if (pdf.getProviderKey() == null) {
+            pdf.setStatus("PASSWORD_FAILED");
+            pdf.setResultSummary("This PDF is password-protected and its sender couldn't be identified, "
+                + "so no saved password applies — enter the password to unlock it.");
+            pendingPdfRepo.save(pdf);
+            return;
+        }
 
         // 1. Try exact-match: saved password for this specific sender domain AND document
         // type — a password learned from a card statement must not be assumed to work on a
@@ -339,6 +362,53 @@ public class PdfImportService {
             pendingPdfRepo.save(pdf);
         } catch (Exception e) {
             log.warn("Auto-unlock attempt failed for pending {}: {}", pdf.getId(), e.getMessage());
+            // Kept on the statement, so the failure is visible where the statement is listed
+            // rather than only in the server log. It stays retryable.
+            try {
+                pdf.setResultSummary(truncate("Automatic unlock failed: " + e.getMessage() + " — it will be retried."));
+                pendingPdfRepo.save(pdf);
+            } catch (Exception saveFailure) {
+                log.warn("Could not record the unlock failure on pending {}: {}", pdf.getId(), saveFailure.getMessage());
+            }
+        }
+    }
+
+    /** Whether a scanned document can be read now (an image-capable model is configured). */
+    public boolean canReadScans() {
+        return scanTranscriber.available();
+    }
+
+    /**
+     * Opens the PDF with no password. True when that settled the document (read, imported, a
+     * duplicate, or a definite read failure); false when it is encrypted and needs a password.
+     */
+    private boolean tryWithoutPassword(Long userId, PendingPdf pdf) {
+        GmailToken token = tokenRepo.findByUserId(userId).orElse(null);
+        User user = userRepo.findById(userId).orElse(null);
+        if (token == null || user == null) return false;
+        byte[] bytes;
+        Gmail gmail;
+        try {
+            gmail = gmailClient.buildGmailService(token.getAccessToken(), token.getRefreshToken());
+            bytes = gmailClient.downloadAttachment(gmail, pdf.getGmailMessageId(), pdf.getAttachmentId());
+        } catch (Exception e) {
+            log.warn("Could not download pending PDF {} to check for encryption: {}", pdf.getId(), e.getMessage());
+            return false;
+        }
+        if (!com.marketai.document.ocr.ScanTranscriber.isImageFile(pdf.getFilename()) && isEncrypted(bytes)) return false;
+        attemptUnlock(userId, pdf, user, gmail, "", true);
+        return true;
+    }
+
+    /** True for a PDF that needs a password to open (an owner-password-only PDF does not). */
+    static boolean isEncrypted(byte[] bytes) {
+        try (PDDocument ignored = Loader.loadPDF(bytes, "")) {
+            return false;
+        } catch (org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException e) {
+            return true;
+        } catch (Exception e) {
+            // Unreadable either way; let the normal path record why.
+            return false;
         }
     }
 
@@ -486,7 +556,25 @@ public class PdfImportService {
         }
     }
 
+    /** Every read of an attachment also brings its email's import manifest up to date. */
     private PdfUnlockResult attemptUnlock(Long userId, PendingPdf pdf, User user, Gmail gmail, String password, boolean isAutoAttempt) {
+        try {
+            return readAttachment(userId, pdf, user, gmail, password, isAutoAttempt);
+        } finally {
+            refreshManifest(userId, pdf.getGmailMessageId());
+        }
+    }
+
+    private void refreshManifest(Long userId, String gmailMessageId) {
+        if (manifestService == null || gmailMessageId == null) return;
+        try {
+            manifestService.get(userId, gmailMessageId);
+        } catch (Exception e) {
+            log.warn("Could not refresh the import manifest for message {}: {}", gmailMessageId, e.getMessage());
+        }
+    }
+
+    private PdfUnlockResult readAttachment(Long userId, PendingPdf pdf, User user, Gmail gmail, String password, boolean isAutoAttempt) {
         List<String> steps = new ArrayList<>();
         steps.add(step("email_detected", "OK", "Email: " + truncate(pdf.getSubject(), 80)));
         steps.add(step("attachment_detected", "OK", "File: " + pdf.getFilename()));
@@ -496,14 +584,40 @@ public class PdfImportService {
 
         // Step: download + decrypt
         String text;
+        boolean scanned = false;
+        String scanFailure = null;
         try {
             byte[] bytes = gmailClient.downloadAttachment(gmail, pdf.getGmailMessageId(), pdf.getAttachmentId());
             steps.add(step("pdf_downloaded", "OK", bytes.length + " bytes"));
 
-            try (PDDocument doc = Loader.loadPDF(bytes, password)) {
-                text = new PDFTextStripper().getText(doc);
+            if (com.marketai.document.ocr.ScanTranscriber.isImageFile(pdf.getFilename())) {
+                // A photographed or scanned page sent as an image: read by the vision model.
+                try {
+                    text = scanTranscriber.transcribeImage(bytes, pdf.getFilename());
+                    scanned = true;
+                } catch (com.marketai.document.ocr.ScanTranscriber.ScanUnreadableException e) {
+                    text = "";
+                    scanFailure = e.getMessage();
+                }
+                steps.add(step("image_read", scanFailure == null ? "OK" : "FAIL",
+                    scanFailure == null ? text.length() + " chars transcribed" : scanFailure));
+            } else {
+                try (PDDocument doc = Loader.loadPDF(bytes, password)) {
+                    text = new PDFTextStripper().getText(doc);
+                    // No text layer: a scanned statement. Its pages are transcribed by the vision
+                    // model, and the transcription is read like any other statement text.
+                    if (text.strip().length() < MIN_TEXT_CHARS) {
+                        try {
+                            text = scanTranscriber.transcribePdf(doc);
+                            scanned = true;
+                            steps.add(step("scan_transcribed", "OK", text.length() + " chars transcribed from the scanned pages"));
+                        } catch (com.marketai.document.ocr.ScanTranscriber.ScanUnreadableException e) {
+                            scanFailure = e.getMessage();
+                        }
+                    }
+                }
+                steps.add(step("pdf_unlocked", "OK", text.length() + " chars extracted"));
             }
-            steps.add(step("pdf_unlocked", "OK", text.length() + " chars extracted"));
 
             // Content identity, computed from the DECRYPTED text, not the encrypted bytes.
             // Hashing the ciphertext meant the same statement encrypted twice by the provider —
@@ -513,7 +627,10 @@ public class PdfImportService {
             // message id, attachment id), which also misses that case, and Gmail can return a
             // different attachment id for the same physical file across fetches — so this is the
             // only identifier that actually survives all three.
-            String contentHash = sha256(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            // A transcription can differ by a character between two readings of the same scan, so
+            // a scan is identified by its bytes instead.
+            String contentHash = scanned || scanFailure != null ? sha256(bytes)
+                : sha256(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             pdf.setContentHash(contentHash);
 
             PendingPdf alreadyImported = pendingPdfRepo
@@ -555,26 +672,43 @@ public class PdfImportService {
             return new PdfUnlockResult(false, "Could not read this PDF: " + e.getMessage());
         }
 
-        // Save more text for debugging — 4000 chars covers the trade section in most contract notes
-        pdf.setTextSnippet(truncate(text, 4000));
+        // The decrypted text is not stored or logged: a statement carries PAN, account numbers
+        // and address. The debug view re-reads the document on demand instead.
+        pdf.setTextSnippet(null);
         pdf.setUnlockedAt(LocalDateTime.now());
+
+        // A scanned statement has no text layer. Sending it to the extractor finds nothing, and
+        // as FAILED it was downloaded and re-sent on every sync, forever.
+        if (text.strip().length() < MIN_TEXT_CHARS) {
+            steps.add(step("text_extracted", "FAIL", "No text layer — scanned image"));
+            pdf.setPipelineSteps(toJson(steps));
+            pdf.setStatus("NEEDS_OCR");
+            pdf.setResultSummary(truncate("This document is a scanned image and could not be read"
+                + (scanFailure != null ? " (" + scanFailure + ")" : "")
+                + ". Add its transactions by hand, or import a text version of the statement."));
+            pendingPdfRepo.save(pdf);
+            return new PdfUnlockResult(true, "Unlocked, but this document is a scanned image that could not be read"
+                + (scanFailure != null ? ": " + scanFailure : "."));
+        }
 
         // Step: extract + import — the single LLM-based path now handles everything the 18
         // regex parsers, the direct ContractNoteHelper fallback and the AI extractor fallback
         // used to split across three cascaded attempts: extraction, span verification,
         // instrument resolution, confidence gating, persistence, and review-queue routing.
-        log.info("PDF EXTRACT START — file: {}, sender: {}, subject: {}, textLen: {}, first200: [{}]",
-            pdf.getFilename(), pdf.getSender(), pdf.getSubject(), text.length(),
-            text.substring(0, Math.min(200, text.length())).replace("\n", " | "));
+        log.info("PDF extract start — pending {}, {} chars", pdf.getId(), text.length());
 
         EmailLLMParserService.Result result = emailLlmParserService.process(
             userId, user, pdf.getSender(), pdf.getSubject(), text, pdf.getGmailMessageId(), null,
-            EmailLLMParserService.attachmentItemIndexBase(pdf.getFilename()));
+            EmailLLMParserService.attachmentItemIndexBase(pdf.getFilename()),
+            new EmailLLMParserService.SourceDoc(pdf.getAttachmentId(), pdf.getFilename(), pdf.getContentHash(),
+                scanned ? com.marketai.common.ledger.Provenance.OCR_LLM : com.marketai.common.ledger.Provenance.PDF_LLM));
 
-        pdf.setTradesExtracted(result.getImported() + result.getQueuedForReview() + result.getRejected());
+        pdf.setTradesExtracted(result.getExtracted());
+        pdf.setCounts(EmailLLMParserService.countsOf(result));
         pdf.setTradesImported(result.getImported());
+        int accounted = result.getImported() + result.getDuplicates() + result.getResolved();
 
-        if (result.getImported() == 0 && result.getQueuedForReview() == 0) {
+        if (accounted == 0 && result.getQueuedForReview() == 0) {
             steps.add(step("holdings_updated", "SKIP", "No transactions found"));
             pdf.setPipelineSteps(toJson(steps));
             pdf.setStatus("FAILED");
@@ -583,8 +717,9 @@ public class PdfImportService {
             return new PdfUnlockResult(true, "Unlocked, but no transactions could be identified in this statement.");
         }
 
-        if (result.getImported() > 0) {
-            steps.add(step("trades_extracted", "OK", result.getImported() + " transaction(s) extracted and imported"));
+        if (accounted > 0) {
+            steps.add(step("trades_extracted", "OK", result.getImported() + " transaction(s) extracted and imported"
+                + (result.getDuplicates() > 0 ? ", " + result.getDuplicates() + " already recorded" : "")));
             steps.add(step("holdings_updated", "OK", result.getImported() + " transaction(s) imported"
                 + (result.getQueuedForReview() > 0 ? ", " + result.getQueuedForReview() + " queued for review" : "")));
             steps.add(step("dashboard_updated", "OK", "Portfolio recalculated"));
@@ -596,8 +731,9 @@ public class PdfImportService {
         pdf.setPipelineSteps(toJson(steps));
         // A statement only partly read (the extractor failed on some of its pages) stays FAILED so
         // it is retried; the lines already booked are recognised on retry and not booked twice.
-        pdf.setStatus(result.getImported() > 0 && !result.isIncomplete() ? "IMPORTED" : "FAILED");
+        pdf.setStatus(accounted > 0 && !result.isIncomplete() ? "IMPORTED" : "FAILED");
         String summary = result.getImported() + " item(s) imported"
+            + (result.getDuplicates() > 0 ? ", " + result.getDuplicates() + " already recorded" : "")
             + (result.getQueuedForReview() > 0 ? ", " + result.getQueuedForReview() + " queued for review" : "")
             + (result.getRejected() > 0 ? ", " + result.getRejected() + " rejected" : "")
             + ": " + String.join("; ", result.getSummaries());

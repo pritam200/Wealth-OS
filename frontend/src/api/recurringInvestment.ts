@@ -15,7 +15,7 @@ export interface RecurringInvestmentRequest {
 
 export interface RecurringInvestmentUpdateRequest {
   amount?: number;
-  status?: 'ACTIVE' | 'PAUSED' | 'COMPLETED';
+  status?: 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'CANCELLED';
   sourceAccountId?: number;
   linkedSymbol?: string;
   label?: string;
@@ -23,8 +23,12 @@ export interface RecurringInvestmentUpdateRequest {
 
 export interface InstallmentStatus {
   dueDate: string;
-  status: 'COMPLETED' | 'MISSED' | 'UPCOMING';
+  /** PARTIAL = bought less than scheduled; FAILED = debit recorded as failed; PAUSED = schedule paused then. */
+  status: 'COMPLETED' | 'PARTIAL' | 'FAILED' | 'MISSED' | 'PAUSED' | 'UPCOMING';
+  /** The amount the schedule asked for on that date. */
+  expectedAmount?: number | null;
   actualAmount: number | null;
+  note?: string | null;
 }
 
 export interface AmountChange {
@@ -47,6 +51,9 @@ export interface RecurringInvestmentResponse {
   installments: InstallmentStatus[];
   completedCount: number;
   missedCount: number;
+  partialCount?: number;
+  failedCount?: number;
+  pausedCount?: number;
   amountHistory: AmountChange[];
 }
 

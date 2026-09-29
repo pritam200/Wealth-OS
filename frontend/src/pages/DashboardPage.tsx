@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Amount, MaskedSentence } from '../components/shared/Amount';
 import { TrendingUp, PieChart, ArrowRight, Wallet, Landmark, ShieldCheck, Target, Receipt, CreditCard, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 import { portfolioApi } from '../api/portfolio';
 import type { IntegrityReport } from '../api/portfolio';
@@ -19,6 +20,7 @@ const ISSUE_LABELS: Record<string, string> = {
   DUPLICATE_FOLIO: 'Duplicate folio',
   DUPLICATE_DISPLAY_NAME: 'Duplicate fund',
   DUPLICATE_SYMBOL: 'Duplicate position',
+  DUPLICATE_ISIN: 'Same ISIN, two names',
 };
 
 /* Surfaces holdings that fail the automated data-integrity checks (mis-parsed statement
@@ -34,13 +36,14 @@ function IntegrityBanner({ report, onMerged }: { report: IntegrityReport; onMerg
     new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
   if (!report.issueCount) return null;
 
-  const duplicateSymbolCount = report.issues.filter(i => i.type === 'DUPLICATE_SYMBOL').length;
+  const duplicateSymbolCount = report.issues.filter(i => i.type === 'DUPLICATE_SYMBOL' || i.type === 'DUPLICATE_ISIN').length;
 
   const mergeDuplicates = async () => {
     setMerging(true); setMergeResult(null);
     try {
       const { data } = await portfolioApi.mergeDuplicateSymbols();
-      setMergeResult(`Merged ${data.holdingsMerged} duplicate holding${data.holdingsMerged !== 1 ? 's' : ''} across ${data.groupsMerged} position${data.groupsMerged !== 1 ? 's' : ''}.`);
+      const skipped = data.skipped?.length ? ` Not merged: ${data.skipped.join('; ')}.` : '';
+      setMergeResult(`Merged ${data.holdingsMerged} duplicate holding${data.holdingsMerged !== 1 ? 's' : ''} across ${data.groupsMerged} position${data.groupsMerged !== 1 ? 's' : ''}.${skipped}`);
       onMerged();
     } catch {
       setMergeResult('Merge failed — please try again.');
@@ -65,7 +68,7 @@ function IntegrityBanner({ report, onMerged }: { report: IntegrityReport; onMerg
           </div>
           {mergeResult && <p className="text-2xs text-bull mb-1.5">{mergeResult}</p>}
           <p className="text-2xs text-gray-500 mb-2">
-            "Duplicate position" issues are the exact same stock/fund counted twice across portfolios — safe to auto-merge above (combines quantity and average cost, keeps full transaction history). Every other issue below needs your own review — remove it from the Stocks / Mutual Funds holdings table using the ✕ button.
+            "Duplicate position" and "Same ISIN" issues are the same stock/fund counted twice — safe to auto-merge above (combines quantity and average cost, keeps full transaction history). Every other issue below needs your own review — remove it from the Stocks / Mutual Funds holdings table using the ✕ button.
           </p>
           <div className="space-y-1">
             {report.issues.map(issue => (
@@ -74,7 +77,7 @@ function IntegrityBanner({ report, onMerged }: { report: IntegrityReport; onMerg
                   <span className="text-bear font-medium">{ISSUE_LABELS[issue.type] ?? issue.type}</span>
                   {' — '}{issue.name || issue.symbol}
                 </span>
-                <span className="font-mono text-gray-400 shrink-0 ml-2">{fmt(issue.currentValue)}</span>
+                <span className="font-mono text-gray-400 shrink-0 ml-2"><Amount value={fmt(issue.currentValue)} /></span>
               </div>
             ))}
           </div>
@@ -87,7 +90,7 @@ function IntegrityBanner({ report, onMerged }: { report: IntegrityReport; onMerg
 /* FD/RD/net-worth issues from the generalized reconciliation layer — same "flag it, never
    silently show a wrong number" pattern as IntegrityBanner above, for the domains that
    previously had no equivalent check at all. Manual review only; no auto-fix action here. */
-function ReconciliationBanner({ issues }: { issues: ReconciliationIssue[] }) {
+function ReconciliationBanner({ issues, onOpen }: { issues: ReconciliationIssue[]; onOpen?: () => void }) {
   if (!issues.length) return null;
   const highSeverity = issues.filter(i => i.severity === 'HIGH').length;
   return (
@@ -106,10 +109,13 @@ function ReconciliationBanner({ issues }: { issues: ReconciliationIssue[] }) {
                 <span className={issue.severity === 'HIGH' ? 'text-bear font-medium' : 'text-neutral font-medium'}>
                   {issue.domain}
                 </span>
-                {' — '}{issue.description}
+                {' — '}<MaskedSentence text={issue.description} />
               </div>
             ))}
           </div>
+          {onOpen && (
+            <button onClick={onOpen} className="text-2xs text-neutral underline mt-2">Open the Reconciliation Center</button>
+          )}
         </div>
       </div>
     </div>
@@ -140,7 +146,10 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
   const [wealth, setWealth] = useState<PortfolioContext | null>(null);
   const [holdingCount, setHoldingCount] = useState(0);
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
-  const [otherIssues, setOtherIssues] = useState<ReconciliationIssue[]>([]);
+  const [allIssues, setAllIssues] = useState<ReconciliationIssue[]>([]);
+  const [integrityFailed, setIntegrityFailed] = useState(false);
+  const [reconFailed, setReconFailed] = useState(false);
+  const otherIssues = integrityFailed ? allIssues : allIssues.filter(i => i.domain !== 'PORTFOLIO');
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   // Shared with the Topbar's eye toggle — one privacy switch controls every screen,
@@ -159,12 +168,14 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
       setSummary(trackingSummary);
       setWealth(wealthSummary);
       setFailed(false);
-      portfolioApi.integrityCheck().then(r => setIntegrityReport(r.data)).catch(() => {});
-      // Portfolio-domain issues already surface via the banner above (with its own merge
-      // action) — only show FD/RD/net-worth issues here, so nothing is flagged twice.
+      // A failed check is reported as such — never as "no issues".
+      portfolioApi.integrityCheck().then(r => { setIntegrityReport(r.data); setIntegrityFailed(false); })
+        .catch(() => setIntegrityFailed(true));
+      // Portfolio-domain issues surface via the integrity banner above (with its own merge
+      // action) when it loaded; if it didn't, they are shown here instead of being dropped.
       reconciliationApi.getReport()
-        .then(r => setOtherIssues(r.data.issues.filter(i => i.domain !== 'PORTFOLIO')))
-        .catch(() => {});
+        .then(r => { setReconFailed(false); setAllIssues(r.data.issues); })
+        .catch(() => setReconFailed(true));
       if (portfolios.length) {
         const summaries = (await Promise.all(
           portfolios.map(p => portfolioApi.getSummary(p.id).then(r => r.data).catch(() => null))
@@ -192,7 +203,9 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
   return (
     <div className="space-y-6">
       {integrityReport && <IntegrityBanner report={integrityReport} onMerged={load} />}
-      <ReconciliationBanner issues={otherIssues} />
+      {reconFailed
+        ? <LoadFailure what="the data-integrity checks" onRetry={load} />
+        : <ReconciliationBanner issues={otherIssues} onOpen={onNavigate ? () => onNavigate(22) : undefined} />}
       {/* ── Hero ── */}
       <div className="card-elevated flex flex-wrap items-center justify-between gap-6">
         <div>

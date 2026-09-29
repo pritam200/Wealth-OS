@@ -21,15 +21,37 @@ public class IncomeService {
     private final IncomeRepository repo;
 
     public IncomeResponse add(Long userId, IncomeRequest req) {
+        LocalDate date = req.getIncomeDate() != null ? req.getIncomeDate() : LocalDate.now();
+        if (!req.isConfirmSeparate()) {
+            Income recorded = findRecordedFromEmail(userId, req.getAmount(), date, req.getDescription());
+            if (recorded != null) {
+                // Same reasoning as ExpenseService.addExpense: the credit already came in by email.
+                IncomeResponse existing = toDto(recorded);
+                existing.setAlreadyRecorded(true);
+                return existing;
+            }
+        }
         Income i = Income.builder()
             .userId(userId)
             .description(req.getDescription())
             .amount(req.getAmount())
             .source(IncomeSource.fromLabel(req.getSource()))
-            .incomeDate(req.getIncomeDate() != null ? req.getIncomeDate() : LocalDate.now())
+            .incomeDate(date)
             .note(req.getNote())
             .build();
         return toDto(repo.save(i));
+    }
+
+    /** An email-imported credit of the same amount on the same day from the same payer. */
+    private Income findRecordedFromEmail(Long userId, java.math.BigDecimal amount, LocalDate date, String description) {
+        if (amount == null) return null;
+        for (Income i : repo.findByUserIdAndIncomeDateBetweenOrderByIncomeDateDesc(userId, date, date)) {
+            if (i.getSourceEmailId() == null) continue;
+            if (i.getAmount() == null || i.getAmount().compareTo(amount) != 0) continue;
+            if (com.marketai.common.ledger.PartyNames.anySame(new String[]{description},
+                    new String[]{i.getDescription(), i.getPayer()})) return i;
+        }
+        return null;
     }
 
     public List<IncomeResponse> list(Long userId, int year, int month) {
@@ -72,7 +94,7 @@ public class IncomeService {
         if (total == null) total = BigDecimal.ZERO;
         List<Object[]> rows = repo.sumBySource(userId, from, to);
         Map<String, BigDecimal> bySource = new LinkedHashMap<>();
-        for (Object[] r : rows) bySource.put((String) r[0], (BigDecimal) r[1]);
+        for (Object[] r : rows) bySource.merge(IncomeSource.labelOf(r[0]), (BigDecimal) r[1], BigDecimal::add);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("total", total);
         result.put("bySource", bySource);

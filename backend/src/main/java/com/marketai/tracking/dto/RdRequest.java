@@ -12,4 +12,8 @@ public class RdRequest {
     @NotNull @DecimalMin("0.01") @DecimalMax("30") private BigDecimal rate;
     private LocalDate startDate;
     @Min(1) @Max(360) private int tenureMonths = 12;
+
+    /** Set by the importer only; never read from a request body. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private com.marketai.common.ledger.Provenance provenance;
 }

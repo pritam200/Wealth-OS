@@ -22,7 +22,8 @@ export function RentCard() {
   const [rows, setRows] = useState<RentResponse[]>([]);
   const [accounts, setAccounts] = useState<CashAccount[]>([]);
   const [openSchedule, setOpenSchedule] = useState(false);
-  const [payingId, setPayingId] = useState<number | null>(null);
+  const [payingKey, setPayingKey] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const scheduleBlank = { amount: '', dueDayOfMonth: '1', paidTo: '', cashAccountId: '' };
@@ -55,12 +56,16 @@ export function RentCard() {
   const markPaid = async (row: RentResponse) => {
     setSaving(true);
     try {
-      await rentApi.recordPayment({
+      const { data } = await rentApi.recordPayment({
         month: row.month, amount: row.amount, paidDate: pf.paidDate,
+        scheduleId: row.scheduleId ?? undefined,
         paidTo: row.paidTo || undefined, cashAccountId: row.cashAccountId || undefined,
         referenceId: pf.referenceId || undefined, note: pf.note || undefined,
       });
-      setPayingId(null); setPf(payBlank);
+      setNotice(data.alreadyRecorded
+        ? `This payment was already recorded from your email${data.paidDate ? ` (paid ${data.paidDate})` : ''}, so nothing was added.`
+        : null);
+      setPayingKey(null); setPf(payBlank);
       await load();
     } catch {} finally { setSaving(false); }
   };
@@ -68,6 +73,9 @@ export function RentCard() {
   const del = async (id: number) => {
     try { await rentApi.delete(id); await load(); } catch {}
   };
+
+  const rowKey = (r: RentResponse) => r.id != null ? `r${r.id}` : `s${r.scheduleId}-${r.month}`;
+  const STATUS_LABEL: Record<string, string> = { UPCOMING: '○ Upcoming', OVERDUE: '! Overdue', MISSED: '✕ Missed' };
 
   const monthLabel = (month: string) =>
     new Date(month).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
@@ -115,8 +123,9 @@ export function RentCard() {
         ? <p className="text-gray-600 text-xs text-center py-4">No rent schedule set up yet.</p>
         : (
           <div className="space-y-0 divide-y divide-surface-border/30">
+            {notice && <p className="text-2xs text-gray-400 py-1.5">{notice}</p>}
             {rows.map(r => (
-              <div key={r.id}>
+              <div key={rowKey(r)}>
                 <div className="flex items-center justify-between py-1.5">
                   <div className="min-w-0 flex-1">
                     <div className="text-ink text-xs font-medium truncate">{monthLabel(r.month)} Rent</div>
@@ -126,13 +135,15 @@ export function RentCard() {
                     <span className="text-ink text-xs font-mono font-semibold">{maskText(fmtINR(r.amount))}</span>
                     {r.status === 'PAID'
                       ? <span className="text-2xs font-medium text-bull px-1.5 py-0.5 rounded bg-bull/10 flex items-center gap-0.5"><Check size={10} /> Paid</span>
-                      : <button onClick={() => setPayingId(payingId === r.id ? null : r.id)} className="text-2xs font-medium text-gray-400 px-1.5 py-0.5 rounded border border-surface-border hover:text-ink">○ Upcoming</button>}
-                    {!r.sourceEmailId && (
-                      <button aria-label="Delete" onClick={() => del(r.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                      : <button onClick={() => setPayingKey(payingKey === rowKey(r) ? null : rowKey(r))}
+                          className={`text-2xs font-medium px-1.5 py-0.5 rounded border border-surface-border hover:text-ink ${r.status === 'UPCOMING' ? 'text-gray-400' : 'text-bear'}`}>
+                          {STATUS_LABEL[r.status] ?? r.status}</button>}
+                    {r.id != null && !r.sourceEmailId && (
+                      <button aria-label="Delete" onClick={() => del(r.id as number)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                     )}
                   </div>
                 </div>
-                {payingId === r.id && (
+                {payingKey === rowKey(r) && (
                   <div className="bg-surface-hover rounded-lg p-2 mb-2 space-y-1.5 border border-surface-border">
                     <div className="grid grid-cols-2 gap-2">
                       <input type="date" value={pf.paidDate} onChange={e => setPf(x => ({ ...x, paidDate: e.target.value }))} className="input-field text-xs" />

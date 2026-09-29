@@ -8,7 +8,18 @@ import java.time.LocalDate;
 public class ParsedEmail {
     public enum Type {
         TRADE_BUY, TRADE_SELL, FD_OPEN, RD_OPEN, MF_SIP, MF_REDEEM, DIVIDEND,
-        INCOME, EXPENSE, CARD_BILL, CARD_PAYMENT, UNKNOWN
+        INCOME, EXPENSE, CARD_BILL, CARD_PAYMENT,
+        /** Split, bonus, merger or demerger — see {@link #corporateAction}. */
+        CORPORATE_ACTION,
+        /** Interest paid out on a deposit (a payout FD), with any TDS deducted from it. */
+        DEPOSIT_INTEREST,
+        /** A deposit matured or was closed early; {@link #amount} is what was paid out. */
+        DEPOSIT_CLOSE,
+        /** Money back on an earlier purchase, or a failed debit reversed. */
+        REFUND,
+        /** A transfer between the user's own accounts, or a cash withdrawal. */
+        OWN_TRANSFER,
+        UNKNOWN
     }
 
     private Type type;
@@ -75,4 +86,38 @@ public class ParsedEmail {
     // never the exact-reference/fingerprint gates, which identify the same transaction outright.
     @Builder.Default
     private boolean userConfirmed = false;
+
+    // Corporate actions: SPLIT | BONUS | MERGER | DEMERGER. A ratio "from:to" — a 1:5 split
+    // turns 1 share into 5; a 1:1 bonus gives 1 new share per 1 held; a merger gives "to" shares
+    // of newSymbol for every "from" held.
+    private String corporateAction;
+    private BigDecimal ratioFrom;
+    private BigDecimal ratioTo;
+    private String newSymbol;
+
+    /** Brokerage, STT, GST, stamp duty and exchange charges on a trade, in total. */
+    private BigDecimal charges;
+    /** The broker's trade or order number, the bank's UTR — the issuer's own reference. */
+    private String tradeReference;
+    /** Shared by the legs of one event (a fund switch's redemption and purchase). */
+    private String linkGroup;
+    /** Tax deducted at source from interest or a dividend. */
+    private BigDecimal tds;
+    /** An IDCW distribution reinvested in the fund: bought units, and taxable dividend income. */
+    @Builder.Default
+    private boolean idcwReinvest = false;
+    /** DEPOSIT_INTEREST / DEPOSIT_CLOSE: "FD" or "RD". */
+    private String instrumentKind;
+    /** OWN_TRANSFER: true for money arriving, false for money leaving. */
+    private Boolean incoming;
+
+    // Source-document details, carried to the import log for "View source".
+    private String sourceAttachmentId;
+    private String sourceDocumentHash;
+    private String extractionMethod;
+    private Double extractionConfidence;
+    /** Provider, model and prompt version that read it ("gemini:gemini-2.5-flash/transaction-extraction-v1"). */
+    private String extractionVersion;
+    /** When the read that produced this began — lines booked before it came from an earlier read. */
+    private java.time.LocalDateTime readStartedAt;
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { AiProvenanceButton } from '../shared/AiProvenanceButton';
 import { Landmark, Plus, Edit2, Trash2, Calendar, Coins } from 'lucide-react';
 import { trackingApi } from '../../api/tracking';
 import type { RdRequest, RdResponse } from '../../api/tracking';
@@ -11,6 +12,7 @@ const fmtINR = (n: number) =>
 export function RDSection({ onRefresh }: { onRefresh: () => void }) {
   const maskText = useMaskedText();
   const [items, setItems] = useState<RdResponse[]>([]);
+  const [totals, setTotals] = useState({ monthly: 0, corpus: 0 });
   const [open, setOpen]   = useState(false);
   const [saving, setSaving] = useState(false);
   const blank = { bank: '', monthlyAmount: '', rate: '', startDate: '', tenureMonths: '12' };
@@ -18,7 +20,12 @@ export function RDSection({ onRefresh }: { onRefresh: () => void }) {
   const [editId, setEditId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
-    try { const { data } = await trackingApi.listRds(); setItems(data); } catch {}
+    // Rows and the server's totals (live deposits only) from one call — no browser-side sum.
+    try {
+      const { data } = await trackingApi.getSummary();
+      setItems(data.rds);
+      setTotals({ monthly: data.totalRdMonthly ?? 0, corpus: data.totalRdCorpus ?? 0 });
+    } catch {}
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -104,8 +111,8 @@ export function RDSection({ onRefresh }: { onRefresh: () => void }) {
 
       {items.length > 0 && (
         <div className="grid grid-cols-2 gap-2 mb-3">
-          <StatTile label="Monthly" value={fmtINR(items.reduce((s, x) => s + x.monthlyAmount, 0)) + '/mo'} Icon={Calendar} tone="brand" />
-          <StatTile label="Total Corpus" value={fmtINR(items.reduce((s, x) => s + x.projectedCorpus, 0))} Icon={Coins} tone="bull" />
+          <StatTile label="Monthly" value={fmtINR(totals.monthly) + '/mo'} Icon={Calendar} tone="brand" />
+          <StatTile label="Total Corpus" value={fmtINR(totals.corpus)} Icon={Coins} tone="bull" />
         </div>
       )}
 
@@ -140,7 +147,8 @@ export function RDSection({ onRefresh }: { onRefresh: () => void }) {
                   <button onClick={() => setClosingId(rd.id === closingId ? null : rd.id)}
                     className="btn-icon text-gray-500 hover:text-bull p-0.5 text-2xs" title="Record RD closure in your tracker (no real bank action)">✓</button>
                 )}
-                <button aria-label="Delete" onClick={() => del(rd.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                <AiProvenanceButton record={{ kind: 'rd', id: rd.id }} />
+                  <button aria-label="Delete" onClick={() => del(rd.id)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
               </div>
             </div>
             <div className="h-1 bg-surface-muted rounded-full overflow-hidden">

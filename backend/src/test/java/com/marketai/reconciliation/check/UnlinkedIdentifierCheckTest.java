@@ -44,7 +44,7 @@ class UnlinkedIdentifierCheckTest {
         PortfolioRepository portfolioRepo = mock(PortfolioRepository.class);
         HoldingRepository holdingRepo = mock(HoldingRepository.class);
         when(portfolioRepo.findByUserId(USER)).thenReturn(List.of(p));
-        when(holdingRepo.findByPortfolioId(p.getId())).thenReturn(holdings);
+        when(holdingRepo.findOpenByPortfolioId(p.getId())).thenReturn(holdings);
         return new UnlinkedIdentifierCheck(portfolioRepo, holdingRepo).run(USER);
     }
 

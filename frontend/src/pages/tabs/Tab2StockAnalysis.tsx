@@ -224,29 +224,14 @@ function MyPortfolioSection() {
         setLoading(false);
         return;
       }
-      // Merge every portfolio, matching Tab7RiskMatrix. This used to pick only the portfolio
-      // with the most rows, so holdings living in any other portfolio — a user can accumulate
-      // several, because each Gmail-import path resolves "the user's portfolio" independently —
-      // were silently dropped, and this screen reported a smaller invested/current total than
-      // Holdings & Signals did for the same account.
-      const summaries = (await Promise.all(
-        portfolios.map(pp => portfolioApi.getSummary(pp.id).then(r => ({ p: pp, s: r.data })).catch(() => null))
-      )).filter(Boolean) as { p: Portfolio; s: PortfolioSummary }[];
-      if (!summaries.length) { setPortfolio(portfolios[0]); setSummary(null); setFailed(true); setLoading(false); return; }
-      const allHoldings = summaries.flatMap(x => x.s.holdings ?? []);
-      const totalInv = summaries.reduce((acc, x) => acc + (x.s.totalInvested ?? 0), 0);
-      const totalCur = summaries.reduce((acc, x) => acc + (x.s.currentValue ?? 0), 0);
-      // The portfolio identity still has to be a single one — it is what "add holding" posts to.
-      const primary = [...summaries].sort((a, b) => (b.s.holdings?.length ?? 0) - (a.s.holdings?.length ?? 0))[0];
-      setPortfolio(primary.p);
-      setSummary({
-        ...primary.s,
-        holdings: allHoldings,
-        totalInvested: totalInv,
-        currentValue: totalCur,
-        totalPnl: totalCur - totalInv,
-        totalPnlPercent: totalInv > 0 ? ((totalCur - totalInv) / totalInv) * 100 : 0,
-      });
+      // Every portfolio, totalled on the server. The portfolio identity still has to be a
+      // single one — it is what "add holding" posts to — so the one with the most rows is used.
+      const { data: combined } = await portfolioApi.getCombinedSummary();
+      const counts = new Map<number, number>();
+      (combined.holdings ?? []).forEach(h => counts.set(h.portfolioId, (counts.get(h.portfolioId) ?? 0) + 1));
+      const primary = [...portfolios].sort((a, b) => (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0))[0];
+      setPortfolio(primary);
+      setSummary(combined);
       setFailed(false);
     } catch {
       // A network failure used to render the "no holdings yet" empty state, which reads as a
@@ -262,8 +247,8 @@ function MyPortfolioSection() {
 
   // Stock Analysis shows equities only — mutual funds live in the MF tab
   const holdings = (summary?.holdings ?? []).filter(h => !(h.symbol ?? '').endsWith('.MF'));
-  const totalInvested = holdings.reduce((s, h) => s + (h.investedValue ?? 0), 0);
-  const currentValue = holdings.reduce((s, h) => s + (h.currentValue ?? 0), 0);
+  const totalInvested = summary?.stocksInvested ?? 0;
+  const currentValue = summary?.stocksCurrentValue ?? 0;
   const pnlPct = totalInvested > 0 ? ((currentValue - totalInvested) / totalInvested * 100) : 0;
 
   return (

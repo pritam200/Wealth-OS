@@ -41,6 +41,13 @@ public class Holding {
     @EqualsAndHashCode.Include
     @ToString.Include    private Long id;
 
+    /** Optimistic lock: a sync and a user edit changing the same record at once can't silently
+     *  overwrite each other — the second write fails and is retried or reported. */
+    @Version
+    @Column(name = "version")
+    @lombok.EqualsAndHashCode.Exclude
+    private Long version;
+
     @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "portfolio_id", nullable = false)
@@ -55,11 +62,20 @@ public class Holding {
     @Column(nullable = false, precision = 18, scale = 4)
     private BigDecimal quantity;
 
-    @Column(nullable = false, precision = 18, scale = 2)
+    @Column(nullable = false, precision = 18, scale = 4)
     private BigDecimal averageCost;
 
-    @Column(precision = 18, scale = 2)
+    /** Market price or NAV. Scale 4 — MF NAVs are published to four decimals, and rounding them
+     *  to two moves a large folio's value by rupees. */
+    @Column(precision = 18, scale = 4)
     private BigDecimal currentPrice;
+
+    /** The trading day {@link #currentPrice} is from — the quote date, or the NAV date. Null
+     *  when the price has never been set, or was set before this was tracked; such a price
+     *  reads as STALE ("date unknown") until the next refresh dates it. It is deliberately not
+     *  backfilled from updated_at, which is later than the price and would pass it as current. */
+    @Column(name = "price_as_of")
+    private java.time.LocalDate priceAsOf;
 
     @Column(length = 40)
     private String broker;   // UPStox | MStock | Kotak | Zerodha | HDFC | SBI …
@@ -110,9 +126,56 @@ public class Holding {
         return averageCost.multiply(quantity);
     }
 
+    /** A stock quote this many calendar days old is stale — covers a weekend plus a holiday. */
+    public static final int STOCK_STALE_DAYS = 4;
+    /** NAVs publish a day late, so a fund gets one more day than a stock. */
+    public static final int MF_STALE_DAYS = 5;
+
+    /** How {@link #getCurrentValue()} was arrived at. */
+    public enum ValuationBasis {
+        /** A price no older than the staleness window. */
+        MARKET,
+        /** A price exists but is older than the window, or its date is unknown. */
+        STALE,
+        /** No usable price (missing, or zero) — valued at what was paid, and flagged as such. */
+        COST
+    }
+
+    /** Sets the price together with the day it is from; a zero or negative price is ignored. */
+    public void applyPrice(BigDecimal price, java.time.LocalDate asOf) {
+        if (price == null || price.signum() <= 0) return;
+        this.currentPrice = price;
+        this.priceAsOf = asOf;
+    }
+
+    @Transient
+    public boolean hasUsablePrice() {
+        return currentPrice != null && currentPrice.signum() > 0;
+    }
+
+    @Transient
+    public ValuationBasis getValuationBasis() {
+        return valuationBasis(java.time.LocalDate.now());
+    }
+
+    public ValuationBasis valuationBasis(java.time.LocalDate today) {
+        if (!hasUsablePrice()) return ValuationBasis.COST;
+        if (priceAsOf == null) return ValuationBasis.STALE;
+        boolean mf = symbol != null && symbol.toUpperCase().endsWith(".MF");
+        int window = mf ? MF_STALE_DAYS : STOCK_STALE_DAYS;
+        return priceAsOf.isBefore(today.minusDays(window)) ? ValuationBasis.STALE : ValuationBasis.MARKET;
+    }
+
+    /**
+     * Quantity × price. With no usable price the position is carried at cost rather than as
+     * zero — dropping it would understate net worth by the whole position — but
+     * {@link #getValuationBasis()} then reads COST, and every total built from it says so.
+     * A zero price is treated as missing: no listed instrument trades at zero, so a zero is a
+     * failed quote, not a value.
+     */
     @Transient
     public BigDecimal getCurrentValue() {
-        return currentPrice == null ? getInvestedValue() : currentPrice.multiply(quantity);
+        return hasUsablePrice() ? currentPrice.multiply(quantity) : getInvestedValue();
     }
 
     @Transient

@@ -68,6 +68,7 @@ export interface TrackingSummary {
   fds: FdResponse[]; rds: RdResponse[];
   loans: LoanResponse[]; otherAssets: OtherAssetResponse[]; epfAccounts: EpfResponse[];
   totalFdPrincipal: number; totalFdMaturityValue: number; totalFdCurrentValue: number;
+  totalFdInterest?: number; totalRdMonthly?: number;
   totalRdCorpus: number; totalRdCurrentValue: number; totalOtherAssets: number;
   totalEpf: number; totalLoanOutstanding: number; totalMonthlyEmi: number;
 }

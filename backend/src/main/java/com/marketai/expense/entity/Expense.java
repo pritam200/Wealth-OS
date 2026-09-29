@@ -11,13 +11,12 @@ import java.time.LocalDateTime;
     @Index(name = "idx_expense_user", columnList = "user_id"),
     @Index(name = "idx_expense_date", columnList = "expense_date")
     },
-    // NULL source_email_id (a manual entry) is not constrained by this — Postgres treats every
-    // NULL as distinct in a unique index, so only two rows citing the SAME email can collide.
-    // Safe to add only after the live cross-day-fallback duplicates were cleaned up (see
-    // docs/DUPLICATE_DATA_CLEANUP_2026-09-23.md) — the underlying dedup bug is fixed in
-    // ParsedEmailImporter.isDuplicateExpense.
-    uniqueConstraints = @UniqueConstraint(name = "uq_expense_user_source_email",
-        columnNames = {"user_id", "source_email_id"}))
+    // One row per extracted line: an email (a bank statement) legitimately produces many rows, so
+    // the key is the email plus the line's event fingerprint. It used to be the email alone, which
+    // made every line after the first fail to insert. NULLs are distinct in a Postgres unique
+    // index, so manual entries (no email) are never constrained by it.
+    uniqueConstraints = @UniqueConstraint(name = "uq_expense_user_source_line",
+        columnNames = {"user_id", "source_email_id", "source_fingerprint"}))
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 public class Expense {
 
@@ -54,6 +53,10 @@ public class Expense {
     @Column(name = "source_email_id", length = 100)
     private String sourceEmailId;
 
+    /** Event fingerprint of the email line this row was booked from (null for manual entries). */
+    @Column(name = "source_fingerprint", length = 64)
+    private String sourceFingerprint;
+
     @Column(length = 500)
     private String note;
 
@@ -68,6 +71,14 @@ public class Expense {
      */
     @Column(name = "plan_category_override", length = 60)
     private String planCategoryOverride;
+
+    /**
+     * Set on a refund: the purchase it reverses. A refund is stored as a negative amount in the
+     * purchase's category, so the month's spend and the category total both fall by what came
+     * back, and the original purchase is never edited.
+     */
+    @Column(name = "refund_of_expense_id")
+    private Long refundOfExpenseId;
 
     @Column(nullable = false, updatable = false)
     @Builder.Default

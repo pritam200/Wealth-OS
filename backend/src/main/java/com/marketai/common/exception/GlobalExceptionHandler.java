@@ -131,6 +131,15 @@ public class GlobalExceptionHandler {
         return buildError(status, ex.getReason() != null ? ex.getReason() : status.getReasonPhrase(), request);
     }
 
+    /** The record changed underneath this request (a sync and an edit at the same moment). */
+    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleConcurrentEdit(
+            org.springframework.orm.ObjectOptimisticLockingFailureException ex, WebRequest request) {
+        log.info("Concurrent update refused: {}", ex.getMessage());
+        return buildError(HttpStatus.CONFLICT,
+            "This record was changed at the same moment by another update (usually a sync). Reload and try again.", request);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGeneral(Exception ex, WebRequest request) {
         if (ex.getClass().getName().contains("ClientAbort")) {

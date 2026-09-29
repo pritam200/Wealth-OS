@@ -97,6 +97,53 @@ public class CardReconciliationService {
         return results;
     }
 
+    /** What is owed on all of a user's cards right now, for net worth. */
+    public record CardDues(BigDecimal total, int cards, int fromEnteredFigure) {}
+
+    /**
+     * The amount still owed on each card: the latest statement's total due, less confirmed
+     * payments made on or after that statement's date (earlier payments are already inside the
+     * statement's balance). A card with no statement on file falls back to the due amount
+     * entered on it. Spending since the last statement is not included — it has not been billed.
+     *
+     * <p>Each statement's total due already carries the previous balance forward, so only the
+     * latest one per card is used. Summing every cycle, as {@link #reconcile} rows would, counts
+     * the same debt once per month it was carried.
+     */
+    public CardDues outstandingDues(Long userId) {
+        BigDecimal total = BigDecimal.ZERO;
+        int cards = 0, entered = 0;
+        for (var card : cardRepository.findByUserIdOrderByCreatedAtDesc(userId)) {
+            Optional<CardStatement> latest = statementRepository.findByCardIdOrderByDueDateDesc(card.getId()).stream()
+                .filter(st -> st.getTotalDue() != null)
+                .max(Comparator.comparing(CardReconciliationService::cycleKey, Comparator.nullsFirst(Comparator.naturalOrder())));
+            BigDecimal owed;
+            if (latest.isPresent()) {
+                LocalDate from = cycleKey(latest.get());
+                // A payment made on the statement date is normally already in its total due, so
+                // only later ones reduce it. With no statement date the due date is the cut-off,
+                // and payments from that day on count.
+                boolean statementDated = latest.get().getStatementDate() != null;
+                BigDecimal paid = paymentRepository.findByCardIdOrderByPaymentDateDesc(card.getId()).stream()
+                    .filter(p -> p.getStatus() == CardPaymentStatus.CONFIRMED && p.getAmount() != null)
+                    .filter(p -> from == null || (p.getPaymentDate() != null
+                        && (statementDated ? p.getPaymentDate().isAfter(from) : !p.getPaymentDate().isBefore(from))))
+                    .map(CardPayment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+                owed = latest.get().getTotalDue().subtract(paid).max(BigDecimal.ZERO);
+            } else if (card.getCurrentDue() != null && card.getCurrentDue().signum() > 0) {
+                owed = card.getCurrentDue();
+                entered++;
+            } else {
+                continue;
+            }
+            if (owed.signum() > 0) {
+                total = total.add(owed);
+                cards++;
+            }
+        }
+        return new CardDues(total.setScale(2, RoundingMode.HALF_UP), cards, entered);
+    }
+
     private static LocalDate cycleKey(CardStatement s) {
         return s.getStatementDate() != null ? s.getStatementDate() : s.getDueDate();
     }

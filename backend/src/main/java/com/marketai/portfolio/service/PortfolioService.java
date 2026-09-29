@@ -76,6 +76,196 @@ public class PortfolioService {
             holding.get().getId(), date, quantity, price);
     }
 
+    /**
+     * Same check, using the broker's trade number when the source states one. Two fills of the
+     * same size at the same price on one day are two trades if their trade numbers differ —
+     * the date/quantity/price check alone merged them into one. A recorded trade with no
+     * number (older imports, hand entries) still counts as the same trade.
+     */
+    public boolean isDuplicateTrade(Long portfolioId, String symbol, LocalDate date, BigDecimal quantity,
+                                    BigDecimal price, String tradeReference) {
+        if (tradeReference == null || tradeReference.isBlank()) {
+            return isDuplicateTrade(portfolioId, symbol, date, quantity, price);
+        }
+        if (portfolioId == null || symbol == null || date == null || quantity == null || price == null) return false;
+        Optional<Holding> holding = holdingRepository.findByPortfolioIdAndSymbol(portfolioId, symbol.toUpperCase());
+        if (holding.isEmpty()) return false;
+        String ref = tradeReference.trim();
+        for (Transaction t : transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(holding.get().getId())) {
+            String theirs = t.getProvenance() != null ? t.getProvenance().getSourceReference() : null;
+            if (theirs != null && theirs.equalsIgnoreCase(ref)) return true;
+            boolean sameFigures = date.equals(t.getTransactionDate()) && t.getQuantity() != null
+                && t.getQuantity().compareTo(quantity) == 0 && t.getPrice() != null && t.getPrice().compareTo(price) == 0;
+            if (sameFigures && theirs == null) return true;
+        }
+        return false;
+    }
+
+    /** What a corporate-action booking did — or why it could not be booked. */
+    public record CorporateActionResult(boolean booked, boolean duplicate, String detail) {
+        static CorporateActionResult ok(String d) { return new CorporateActionResult(true, false, d); }
+        static CorporateActionResult dup(String d) { return new CorporateActionResult(false, true, d); }
+    }
+
+    /**
+     * A split: every share held on the record date becomes {@code to/from} shares. Lots keep
+     * their purchase dates and total cost; the price per share divides. Booked once per holding
+     * per date.
+     *
+     * @throws IllegalArgumentException when the stock is not held or the ratio is unusable
+     */
+    @Transactional
+    public CorporateActionResult recordSplit(Long portfolioId, String symbol, BigDecimal from, BigDecimal to,
+                                             LocalDate recordDate, com.marketai.common.ledger.Provenance provenance) {
+        Holding h = requireHeld(portfolioId, symbol, "split");
+        requireRatio(from, to, "split");
+        if (hasAction(h, Transaction.TransactionType.SPLIT, recordDate)) {
+            return CorporateActionResult.dup("The " + from.stripTrailingZeros().toPlainString() + ":"
+                + to.stripTrailingZeros().toPlainString() + " split of " + h.getSymbol() + " on " + recordDate + " is already recorded.");
+        }
+        transactionRepository.save(Transaction.builder().holding(h).type(Transaction.TransactionType.SPLIT)
+            .quantity(BigDecimal.ZERO).price(BigDecimal.ZERO).ratioFrom(from).ratioTo(to)
+            .transactionDate(recordDate).notes("Split " + from.stripTrailingZeros().toPlainString() + ":" + to.stripTrailingZeros().toPlainString())
+            .provenance(provenance).build());
+        recomputeFromLedger(h);
+        return CorporateActionResult.ok("Split " + from.stripTrailingZeros().toPlainString() + ":"
+            + to.stripTrailingZeros().toPlainString() + " recorded for " + h.getSymbol());
+    }
+
+    /**
+     * Bonus shares: {@code to} new shares for every {@code from} held on the record date, or
+     * the number stated as credited. They cost nil and are acquired on the allotment date,
+     * which is how they are taxed. Fractional entitlements are paid in cash, not shares, so the
+     * computed number is rounded down.
+     */
+    @Transactional
+    public CorporateActionResult recordBonus(Long portfolioId, String symbol, BigDecimal from, BigDecimal to,
+                                             BigDecimal statedUnits, LocalDate allotmentDate,
+                                             com.marketai.common.ledger.Provenance provenance) {
+        Holding h = requireHeld(portfolioId, symbol, "bonus issue");
+        if (hasAction(h, Transaction.TransactionType.BONUS, allotmentDate)) {
+            return CorporateActionResult.dup("The bonus issue of " + h.getSymbol() + " on " + allotmentDate + " is already recorded.");
+        }
+        BigDecimal units = statedUnits;
+        if (units == null || units.signum() <= 0) {
+            requireRatio(from, to, "bonus issue");
+            BigDecimal held = unitsHeldOn(h, allotmentDate);
+            units = held.multiply(to).divide(from, 0, RoundingMode.FLOOR);
+        }
+        if (units.signum() <= 0) {
+            throw new IllegalArgumentException("No bonus shares of " + h.getSymbol() + " are due on " + allotmentDate
+                + " — nothing was held on that date according to the recorded trades.");
+        }
+        transactionRepository.save(Transaction.builder().holding(h).type(Transaction.TransactionType.BONUS)
+            .quantity(units).price(BigDecimal.ZERO).ratioFrom(from).ratioTo(to)
+            .transactionDate(allotmentDate).notes("Bonus shares").provenance(provenance).build());
+        recomputeFromLedger(h);
+        return CorporateActionResult.ok(units.stripTrailingZeros().toPlainString() + " bonus share(s) of " + h.getSymbol() + " recorded");
+    }
+
+    /**
+     * An amalgamation: shares of the merged company are exchanged for shares of the surviving
+     * one at a ratio, tax-neutrally — the new shares keep the old purchase dates and cost. Booked
+     * as a split by the exchange ratio plus a change of symbol. When the surviving company is
+     * already held, the two positions' lots would have to be combined, which is left to the user
+     * rather than done by rewriting trades.
+     */
+    @Transactional
+    public CorporateActionResult recordMerger(Long portfolioId, String symbol, String newSymbol, BigDecimal from,
+                                              BigDecimal to, LocalDate effectiveDate,
+                                              com.marketai.common.ledger.Provenance provenance) {
+        Holding h = requireHeld(portfolioId, symbol, "merger");
+        requireRatio(from, to, "merger");
+        if (newSymbol == null || newSymbol.isBlank()) {
+            throw new IllegalArgumentException("The merger of " + h.getSymbol() + " does not name the company whose shares replace it.");
+        }
+        String target = newSymbol.toUpperCase();
+        if (holdingRepository.findByPortfolioIdAndSymbol(portfolioId, target).isPresent()) {
+            throw new IllegalArgumentException(h.getSymbol() + " was merged into " + target + ", which you already hold. "
+                + "Combine the two positions by hand so each purchase keeps its own date and cost.");
+        }
+        if (hasAction(h, Transaction.TransactionType.SPLIT, effectiveDate)) {
+            return CorporateActionResult.dup("The merger of " + h.getSymbol() + " on " + effectiveDate + " is already recorded.");
+        }
+        String old = h.getSymbol();
+        transactionRepository.save(Transaction.builder().holding(h).type(Transaction.TransactionType.SPLIT)
+            .quantity(BigDecimal.ZERO).price(BigDecimal.ZERO).ratioFrom(from).ratioTo(to)
+            .transactionDate(effectiveDate).notes("Merged from " + old + " into " + target)
+            .provenance(provenance).build());
+        h.setSymbol(target);
+        h.setName(target.replace(".NS", "").replace(".BO", ""));
+        h.setIsin(null);                 // the old company's ISIN no longer identifies this position
+        h.setCurrentPrice(null);         // the old company's price is not the new one's
+        h.setPriceAsOf(null);
+        h.setUpdatedAt(LocalDateTime.now());
+        holdingRepository.save(h);
+        recomputeFromLedger(h);
+        return CorporateActionResult.ok(old + " merged into " + target + " at " + from.stripTrailingZeros().toPlainString()
+            + ":" + to.stripTrailingZeros().toPlainString());
+    }
+
+    private Holding requireHeld(Long portfolioId, String symbol, String what) {
+        if (symbol == null) throw new IllegalArgumentException("The " + what + " does not name a stock.");
+        return holdingRepository.findByPortfolioIdAndSymbol(portfolioId, symbol.toUpperCase())
+            .orElseThrow(() -> new IllegalArgumentException("A " + what + " of " + symbol
+                + " was found, but " + symbol + " is not held — import its purchases first."));
+    }
+
+    private static void requireRatio(BigDecimal from, BigDecimal to, String what) {
+        if (from == null || to == null || from.signum() <= 0 || to.signum() <= 0) {
+            throw new IllegalArgumentException("The " + what + " ratio could not be read.");
+        }
+    }
+
+    private boolean hasAction(Holding h, Transaction.TransactionType type, LocalDate date) {
+        return transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId()).stream()
+            .anyMatch(t -> t.getType() == type && date != null && date.equals(t.getTransactionDate()));
+    }
+
+    /** Units held at the end of {@code date} by the recorded trades. */
+    private BigDecimal unitsHeldOn(Holding h, LocalDate date) {
+        BigDecimal qty = BigDecimal.ZERO;
+        for (Transaction t : transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId())) {
+            if (t.getTransactionDate() == null || t.getTransactionDate().isAfter(date)) continue;
+            if (t.getType() == Transaction.TransactionType.SPLIT) {
+                BigDecimal m = t.splitMultiplier();
+                if (m != null) qty = qty.multiply(m);
+            } else if (t.addsUnits()) {
+                qty = qty.add(t.getQuantity());
+            } else {
+                qty = qty.subtract(t.getQuantity()).max(BigDecimal.ZERO);
+            }
+        }
+        return qty;
+    }
+
+    /**
+     * The symbol a fund transaction belongs under, given the name-derived symbol and the ISIN
+     * (if the source stated one):
+     * <ul>
+     *   <li>a holding already carrying this ISIN — its symbol, whatever it is called;</li>
+     *   <li>otherwise the name-derived symbol, unless a holding under it carries a
+     *       <i>different</i> ISIN — then it is another plan or option of a similarly named
+     *       fund, and this one gets its own symbol, suffixed with its ISIN.</li>
+     * </ul>
+     * Without an ISIN the name-derived symbol is used as before.
+     */
+    @Transactional(readOnly = true)
+    public String resolveFundSymbol(Long portfolioId, String nameSymbol, String isin) {
+        if (isin == null || isin.isBlank()) return nameSymbol;
+        String id = isin.trim().toUpperCase();
+        List<Holding> byIsin = holdingRepository.findByPortfolioIdAndIsinIgnoreCase(portfolioId, id);
+        if (!byIsin.isEmpty()) return byIsin.get(0).getSymbol();
+        Optional<Holding> byName = holdingRepository.findByPortfolioIdAndSymbol(portfolioId, nameSymbol.toUpperCase());
+        if (byName.isPresent() && byName.get().getIsin() != null && !byName.get().getIsin().isBlank()
+                && !byName.get().getIsin().trim().equalsIgnoreCase(id)) {
+            String base = nameSymbol.toUpperCase().endsWith(".MF")
+                ? nameSymbol.substring(0, nameSymbol.length() - 3) : nameSymbol;
+            return base + "-" + id + ".MF";
+        }
+        return nameSymbol;
+    }
+
     @Transactional
     public Holding addHolding(Long portfolioId, Long userId, AddHoldingRequest req) {
         Portfolio portfolio = portfolioRepository.findByIdAndUserId(portfolioId, userId)
@@ -83,6 +273,19 @@ public class PortfolioService {
 
         Optional<Holding> existing = holdingRepository
                 .findByPortfolioIdAndSymbol(portfolioId, req.getSymbol().toUpperCase());
+        // A fund's symbol is derived from its name, and two statements spell a name differently.
+        // The ISIN is the identity: the same ISIN is the same holding whatever it is called.
+        if (existing.isPresent() && req.getIsin() != null && !req.getIsin().isBlank()
+                && existing.get().getIsin() != null && !existing.get().getIsin().isBlank()
+                && !existing.get().getIsin().trim().equalsIgnoreCase(req.getIsin().trim())) {
+            // Same symbol, different security — never pool two funds' units.
+            throw new IllegalArgumentException("A holding named " + req.getSymbol() + " already exists for ISIN "
+                + existing.get().getIsin() + ", but this purchase is for ISIN " + req.getIsin() + ".");
+        }
+        if (existing.isEmpty() && req.getIsin() != null && !req.getIsin().isBlank()) {
+            existing = holdingRepository.findByPortfolioIdAndIsinIgnoreCase(portfolioId, req.getIsin().trim())
+                    .stream().findFirst();
+        }
 
         Holding holding;
         if (existing.isPresent()) {
@@ -145,6 +348,7 @@ public class PortfolioService {
                 .charges(req.getCharges())
                 .transactionDate(req.getTransactionDate())
                 .notes(req.getNotes())
+                .provenance(req.getProvenance() != null ? req.getProvenance() : com.marketai.common.ledger.Provenance.manual())
                 .build();
         transactionRepository.save(txn);
 
@@ -165,7 +369,7 @@ public class PortfolioService {
         List<Portfolio> portfolios = portfolioRepository.findByUserId(userId);
         int attempted = 0, updated = 0;
         for (Portfolio portfolio : portfolios) {
-            List<Holding> holdings = holdingRepository.findByPortfolioId(portfolio.getId());
+            List<Holding> holdings = holdingRepository.findOpenByPortfolioId(portfolio.getId());
             for (Holding h : holdings) {
                 String sym = h.getSymbol();
                 if (sym == null) continue;
@@ -187,7 +391,7 @@ public class PortfolioService {
                     QuoteDto quote = marketDataService.getQuote(sym);
                     if (quote != null && quote.getCurrentPrice() != null
                             && quote.getCurrentPrice().signum() > 0) {
-                        h.setCurrentPrice(quote.getCurrentPrice());
+                        h.applyPrice(quote.getCurrentPrice(), quoteDate(quote));
                         h.setUpdatedAt(LocalDateTime.now());
                         holdingRepository.save(h);
                         updated++;
@@ -201,6 +405,11 @@ public class PortfolioService {
             log.warn("Price refresh for user {}: none of {} symbol(s) returned a usable quote", userId, attempted);
         }
         return new RefreshOutcome(attempted, updated);
+    }
+
+    /** The day a quote is for; a quote without a timestamp is taken as today's. */
+    private static LocalDate quoteDate(QuoteDto quote) {
+        return quote.getLastUpdated() != null ? quote.getLastUpdated().toLocalDate() : LocalDate.now();
     }
 
     /** @param attempted priceable (non-MF) holdings tried; @param updated those that got a price */
@@ -224,28 +433,27 @@ public class PortfolioService {
         return userRepository.findAll().stream().map(User::getId).toList();
     }
 
+    /**
+     * Re-derives every holding's units and average cost from its ledger. Derived figures only:
+     * no transaction is touched, and a holding already matching its ledger is not rewritten.
+     * Holdings with no ledger rows at all are left as they are — their figures are the only
+     * record there is.
+     *
+     * @return how many holdings changed
+     */
     @Transactional
     public int rebuildHoldingsFromTransactions(Long userId) {
-        List<Portfolio> portfolios = portfolioRepository.findByUserId(userId);
         int fixed = 0;
-        for (Portfolio portfolio : portfolios) {
-            List<Holding> holdings = holdingRepository.findByPortfolioId(portfolio.getId());
-            // Loaded once per holding and passed down: this used to query the transactions to test
-            // for emptiness and recomputeFromLedger immediately re-ran the identical query, so the
-            // nightly sweep did twice the round trips it needed for every holding of every user.
-            for (Holding h : holdings) {
-                List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId());
+        for (Portfolio portfolio : portfolioRepository.findByUserId(userId)) {
+            // Loaded once per holding and passed down, so the replay does not re-query them.
+            for (Holding h : holdingRepository.findByPortfolioId(portfolio.getId())) {
+                List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId());
                 if (txns.isEmpty()) continue;
-                BigDecimal beforeQty = h.getQuantity();
-                BigDecimal beforeAvgCost = h.getAverageCost();
-                Holding after = recomputeFromLedger(h, txns);
-                if (after == null) {
-                    fixed++;
-                    log.info("Removed fully sold holding: {}", h.getSymbol());
-                } else if (after.getQuantity().compareTo(beforeQty) != 0 || after.getAverageCost().compareTo(beforeAvgCost) != 0) {
-                    fixed++;
-                    log.info("Rebuilt holding {}: qty={}, avgCost={}", after.getSymbol(), after.getQuantity(), after.getAverageCost());
-                }
+                LedgerPosition pos = replayPosition(txns);
+                if (sameFigure(h.getQuantity(), pos.quantity()) && sameFigure(h.getAverageCost(), pos.averageCost())) continue;
+                recomputeFromLedger(h, txns);
+                fixed++;
+                log.info("Rebuilt holding {} from its ledger: qty={}, avgCost={}", h.getSymbol(), pos.quantity(), pos.averageCost());
             }
         }
         return fixed;
@@ -259,48 +467,38 @@ public class PortfolioService {
      * produce a real answer (e.g. a holding with no transaction history at all, from an old
      * bulk import) — a manual/unverified number is still better than blank.
      */
-    private BigDecimal computeRealXirr(Holding h) {
-        return computeRealXirr(h, transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId()));
-    }
-
-    /** Same computation against transactions the caller has already loaded — see
-     *  {@link TransactionRepository#findByHoldingIdInOrderByTransactionDateAsc}. */
     private BigDecimal computeRealXirr(Holding h, List<Transaction> txns) {
-        if (txns == null || txns.isEmpty()) return h.getXirr();
-
-        List<com.marketai.portfolio.util.XirrCalculator.CashFlow> flows = new ArrayList<>();
-        for (Transaction t : txns) {
-            if (t.getTransactionDate() == null || t.getPrice() == null || t.getQuantity() == null) continue;
-            BigDecimal flowAmount = t.getPrice().multiply(t.getQuantity());
-            if (t.getType() == Transaction.TransactionType.BUY) flowAmount = flowAmount.negate();
-            flows.add(new com.marketai.portfolio.util.XirrCalculator.CashFlow(t.getTransactionDate(), flowAmount));
-        }
-        BigDecimal currentValue = h.getCurrentValue();
-        if (currentValue != null && currentValue.compareTo(BigDecimal.ZERO) > 0) {
-            flows.add(new com.marketai.portfolio.util.XirrCalculator.CashFlow(LocalDate.now(), currentValue));
-        }
-
-        Double xirrPct = com.marketai.portfolio.util.XirrCalculator.computeXirrPercent(flows);
-        return xirrPct != null ? BigDecimal.valueOf(xirrPct).setScale(2, RoundingMode.HALF_UP) : h.getXirr();
+        return com.marketai.portfolio.util.XirrCalculator.holdingXirr(h, txns);
     }
 
     /**
      * The single place quantity/averageCost is ever derived — always by replaying the full
      * BUY/SELL transaction ledger for this holding, never by hand-rolling weighted-average
      * math inline (that pattern used to be duplicated across addHolding/sellHolding/merge,
-     * and could silently drift from what the ledger actually implies). Deletes the holding
-     * and returns null if the ledger nets to zero or negative quantity (fully sold).
+     * and could silently drift from what the ledger actually implies). Returns null if the ledger nets to zero or negative quantity (fully sold), leaving the
+     * holding closed at zero units with its history intact.
      */
     private Holding recomputeFromLedger(Holding h) {
-        return recomputeFromLedger(h, transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId()));
+        return recomputeFromLedger(h, transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId()));
     }
 
-    /** Same replay against transactions the caller already holds, to avoid re-querying them. */
-    private Holding recomputeFromLedger(Holding h, List<Transaction> txns) {
+    /** What the ledger says a position is: units held and their weighted-average cost. */
+    public record LedgerPosition(BigDecimal quantity, BigDecimal averageCost) {}
+
+    /** The replay itself, with no side effects — the data audit compares stored holdings to it. */
+    public static LedgerPosition replayPosition(List<Transaction> txns) {
         BigDecimal netQty = BigDecimal.ZERO;
         BigDecimal totalCost = BigDecimal.ZERO;
         for (Transaction t : txns) {
-            if (t.getType() == Transaction.TransactionType.BUY) {
+            if (t.getType() == Transaction.TransactionType.SPLIT) {
+                // More shares, the same total cost.
+                BigDecimal m = t.splitMultiplier();
+                if (m != null) netQty = netQty.multiply(m);
+                continue;
+            }
+            if (t.getQuantity() == null || t.getPrice() == null) continue;
+            if (t.addsUnits()) {
+                // A bonus adds shares at nil cost, diluting the average.
                 totalCost = totalCost.add(t.getPrice().multiply(t.getQuantity()));
                 netQty = netQty.add(t.getQuantity());
             } else {
@@ -314,15 +512,61 @@ public class PortfolioService {
                 if (totalCost.compareTo(BigDecimal.ZERO) < 0) totalCost = BigDecimal.ZERO;
             }
         }
-        if (netQty.compareTo(BigDecimal.ZERO) <= 0) {
-            holdingRepository.delete(h);
+        if (netQty.compareTo(BigDecimal.ZERO) <= 0) return new LedgerPosition(BigDecimal.ZERO, BigDecimal.ZERO);
+        return new LedgerPosition(netQty, totalCost.divide(netQty, 4, RoundingMode.HALF_UP));
+    }
+
+    /** Same replay against transactions the caller already holds, to avoid re-querying them. */
+    private Holding recomputeFromLedger(Holding h, List<Transaction> txns) {
+        LedgerPosition pos = replayPosition(txns);
+        if (pos.quantity().signum() <= 0) {
+            // Fully sold: the position is closed, not erased. Deleting the holding used to
+            // cascade to its whole BUY/SELL history, taking the realized-gain and tax record
+            // with it. A closed holding stays at zero units and is left out of open-position
+            // reads (HoldingRepository.findOpenByPortfolioId); a later buy reopens it.
+            h.setQuantity(BigDecimal.ZERO);
+            h.setAverageCost(BigDecimal.ZERO);
+            h.setUpdatedAt(LocalDateTime.now());
+            holdingRepository.save(h);
             return null;
         }
-        BigDecimal newAvgCost = totalCost.divide(netQty, 2, RoundingMode.HALF_UP);
-        h.setQuantity(netQty);
-        h.setAverageCost(newAvgCost);
+        h.setQuantity(pos.quantity());
+        h.setAverageCost(pos.averageCost());
         h.setUpdatedAt(LocalDateTime.now());
         return holdingRepository.save(h);
+    }
+
+    /**
+     * The first sale, in date order, that sells more units than were held at that point, or null.
+     * A stable sort keeps same-day rows in ledger order, so a same-day buy recorded first covers
+     * the sale.
+     */
+    static String firstOversell(List<Transaction> txns) {
+        BigDecimal held = BigDecimal.ZERO;
+        for (Transaction t : txns) {
+            if (t.getType() == Transaction.TransactionType.SPLIT) {
+                BigDecimal m = t.splitMultiplier();
+                if (m != null) held = held.multiply(m);
+                continue;
+            }
+            if (t.getQuantity() == null) continue;
+            if (t.addsUnits()) {
+                held = held.add(t.getQuantity());
+            } else if (t.getType() == Transaction.TransactionType.SELL) {
+                if (t.getQuantity().subtract(held).compareTo(new BigDecimal("0.0001")) > 0) {
+                    return "on " + t.getTransactionDate() + " only " + held.stripTrailingZeros().toPlainString()
+                        + " units were held, but " + t.getQuantity().stripTrailingZeros().toPlainString() + " would be sold.";
+                }
+                held = held.subtract(t.getQuantity());
+            }
+        }
+        return null;
+    }
+
+    public static boolean sameFigure(BigDecimal a, BigDecimal b) {
+        BigDecimal x = a == null ? BigDecimal.ZERO : a;
+        BigDecimal y = b == null ? BigDecimal.ZERO : b;
+        return x.subtract(y).abs().compareTo(new BigDecimal("0.0001")) <= 0;
     }
 
     @Transactional(readOnly = true)
@@ -330,8 +574,26 @@ public class PortfolioService {
         Portfolio portfolio = portfolioRepository.findByIdAndUserId(portfolioId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Portfolio", "id", portfolioId));
 
-        List<Holding> holdings = holdingRepository.findByPortfolioId(portfolioId);
+        List<Holding> holdings = holdingRepository.findOpenByPortfolioId(portfolioId);
+        return summarise(portfolioId, portfolio.getName(), holdings);
+    }
 
+    /**
+     * One summary over every portfolio the user owns. A user can hold several portfolio rows
+     * (each import path used to resolve "the portfolio" on its own), and the screens used to
+     * fetch each summary and add them up in the browser — a second, client-side calculation of
+     * the same totals. This does the aggregation once, here, with the same arithmetic.
+     */
+    @Transactional(readOnly = true)
+    public PortfolioSummaryDto getCombinedSummary(Long userId) {
+        List<Portfolio> portfolios = portfolioRepository.findByUserIdOrderByIdAsc(userId);
+        List<Holding> holdings = new ArrayList<>();
+        for (Portfolio p : portfolios) holdings.addAll(holdingRepository.findOpenByPortfolioId(p.getId()));
+        Portfolio first = portfolios.isEmpty() ? null : portfolios.get(0);
+        return summarise(first != null ? first.getId() : null, first != null ? first.getName() : null, holdings);
+    }
+
+    private PortfolioSummaryDto summarise(Long portfolioId, String portfolioName, List<Holding> holdings) {
         // Fetch live prices. Mutual funds have no Yahoo feed (always 404) and carry a
         // manually-set NAV, so skip them. Never overwrite a good price with a failed/zero quote.
         for (Holding h : holdings) {
@@ -345,7 +607,7 @@ public class PortfolioService {
                 QuoteDto quote = marketDataService.getQuote(sym);
                 if (quote != null && quote.getCurrentPrice() != null
                         && quote.getCurrentPrice().signum() > 0) {
-                    h.setCurrentPrice(quote.getCurrentPrice());
+                    h.applyPrice(quote.getCurrentPrice(), quoteDate(quote));
                 }
             } catch (Exception e) {
                 log.debug("No live price for {} — keeping stored price", sym);
@@ -371,7 +633,7 @@ public class PortfolioService {
         Map<Long, List<Transaction>> txnsByHolding = holdings.isEmpty()
                 ? Map.of()
                 : transactionRepository
-                    .findByHoldingIdInOrderByTransactionDateAsc(holdings.stream().map(Holding::getId).toList())
+                    .findByHoldingIdInOrderByTransactionDateAscIdAsc(holdings.stream().map(Holding::getId).toList())
                     .stream()
                     .collect(Collectors.groupingBy(t -> t.getHolding().getId()));
 
@@ -383,7 +645,7 @@ public class PortfolioService {
                             : BigDecimal.ZERO;
                     return PortfolioSummaryDto.HoldingDto.builder()
                             .id(h.getId())
-                            .portfolioId(portfolioId)
+                            .portfolioId(h.getPortfolio() != null ? h.getPortfolio().getId() : portfolioId)
                             .symbol(h.getSymbol())
                             .name(h.getName())
                             .quantity(h.getQuantity())
@@ -401,6 +663,8 @@ public class PortfolioService {
                             .clientId(h.getClientId())
                             .buyDate(h.getBuyDate())
                             .xirr(computeRealXirr(h, txnsByHolding.getOrDefault(h.getId(), List.of())))
+                            .priceAsOf(h.getPriceAsOf())
+                            .valuationBasis(h.getValuationBasis().name())
                             .build();
                 })
                 .collect(Collectors.toList());
@@ -427,15 +691,35 @@ public class PortfolioService {
 
         return PortfolioSummaryDto.builder()
                 .portfolioId(portfolioId)
-                .name(portfolio.getName())
+                .name(portfolioName)
                 .totalInvested(totalInvested)
                 .currentValue(currentValue)
                 .totalPnl(totalPnl)
                 .totalPnlPercent(totalPnlPct)
+                .stocksInvested(sumWhere(holdings, false, Holding::getInvestedValue))
+                .stocksCurrentValue(sumWhere(holdings, false, Holding::getCurrentValue))
+                .mfInvested(sumWhere(holdings, true, Holding::getInvestedValue))
+                .mfCurrentValue(sumWhere(holdings, true, Holding::getCurrentValue))
+                .holdingsAtCost((int) holdings.stream().filter(h -> h.getValuationBasis() == Holding.ValuationBasis.COST).count())
+                .valueAtCost(valueWithBasis(holdings, Holding.ValuationBasis.COST))
+                .holdingsStale((int) holdings.stream().filter(h -> h.getValuationBasis() == Holding.ValuationBasis.STALE).count())
+                .valueStale(valueWithBasis(holdings, Holding.ValuationBasis.STALE))
                 .holdings(holdingDtos)
                 .allocation(allocation)
                 .lastUpdated(LocalDateTime.now())
                 .build();
+    }
+
+    private static BigDecimal sumWhere(List<Holding> holdings, boolean mf,
+                                       java.util.function.Function<Holding, BigDecimal> value) {
+        return holdings.stream()
+                .filter(h -> (h.getSymbol() != null && h.getSymbol().toUpperCase().endsWith(".MF")) == mf)
+                .map(value).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private static BigDecimal valueWithBasis(List<Holding> holdings, Holding.ValuationBasis basis) {
+        return holdings.stream().filter(h -> h.getValuationBasis() == basis)
+                .map(Holding::getCurrentValue).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /** Clean, chart-friendly label: the holding's display name, or a de-suffixed symbol as a last resort. */
@@ -454,7 +738,7 @@ public class PortfolioService {
     public com.marketai.portfolio.dto.IntegrityReportDto checkIntegrity(Long userId) {
         List<Holding> all = new ArrayList<>();
         for (Portfolio p : portfolioRepository.findByUserId(userId)) {
-            all.addAll(holdingRepository.findByPortfolioId(p.getId()));
+            all.addAll(holdingRepository.findOpenByPortfolioId(p.getId()));
         }
 
         List<com.marketai.portfolio.dto.IntegrityReportDto.Issue> issues = new ArrayList<>();
@@ -538,6 +822,23 @@ public class PortfolioService {
                     .holdingId(h.getId()).symbol(h.getSymbol()).name(h.getName())
                     .type("DUPLICATE_SYMBOL")
                     .description(e.getKey() + " is held across " + group.size() + " separate holding rows (likely different portfolios) — the same position is being counted more than once. Safe to auto-merge.")
+                    .currentValue(h.getCurrentValue())
+                    .build());
+            }
+        }
+
+        // 4b. The same ISIN under different symbols. An ISIN names one security (and, for a
+        // fund, one plan and option), so two symbols sharing one are the same position imported
+        // under two names — typically a fund whose name was spelled differently by two
+        // statements. Merged by mergeDuplicateSymbols along with the exact-symbol case.
+        for (List<Holding> group : identityGroups(all)) {
+            long symbols = group.stream().map(h -> h.getSymbol().toUpperCase()).distinct().count();
+            if (symbols <= 1) continue;
+            for (Holding h : group) {
+                issues.add(com.marketai.portfolio.dto.IntegrityReportDto.Issue.builder()
+                    .holdingId(h.getId()).symbol(h.getSymbol()).name(h.getName())
+                    .type("DUPLICATE_ISIN")
+                    .description("ISIN " + h.getIsin() + " is held under " + symbols + " different names — the same security counted more than once. Safe to auto-merge.")
                     .currentValue(h.getCurrentValue())
                     .build());
             }
@@ -715,13 +1016,15 @@ public class PortfolioService {
 
         if (keep.getBroker() == null && remove.getBroker() != null) keep.setBroker(remove.getBroker());
         if (keep.getFolio() == null && remove.getFolio() != null) keep.setFolio(remove.getFolio());
+        if (keep.getIsin() == null && remove.getIsin() != null) keep.setIsin(remove.getIsin());
+        if (keep.getAmfiSchemeCode() == null && remove.getAmfiSchemeCode() != null) keep.setAmfiSchemeCode(remove.getAmfiSchemeCode());
         if (remove.getBuyDate() != null && (keep.getBuyDate() == null || remove.getBuyDate().isBefore(keep.getBuyDate()))) {
             keep.setBuyDate(remove.getBuyDate());
         }
         keep.setUpdatedAt(LocalDateTime.now());
         keep = holdingRepository.save(keep);
 
-        for (Transaction t : transactionRepository.findByHoldingIdOrderByTransactionDateAsc(remove.getId())) {
+        for (Transaction t : transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(remove.getId())) {
             t.setHolding(keep);
             transactionRepository.save(t);
         }
@@ -739,8 +1042,8 @@ public class PortfolioService {
      * Finds every symbol held across more than one portfolio for this user and merges each
      * group down to one holding via {@link #mergeHoldings}. Within a group, the holding with
      * the most transaction history (a tie-break proxy for "the original, most-established
-     * record") is kept; ties broken by lowest id. Only ever combines EXACT symbol matches —
-     * never touches the heuristic-based issues (UNVERIFIABLE_NAME/DUPLICATE_FOLIO/
+     * record") is kept; ties broken by lowest id. Only ever combines exact symbol matches or
+     * rows carrying the same ISIN — never touches the heuristic-based issues (UNVERIFIABLE_NAME/DUPLICATE_FOLIO/
      * DUPLICATE_DISPLAY_NAME), which still require a user's own informed removal via the UI.
      */
     @Transactional
@@ -750,21 +1053,23 @@ public class PortfolioService {
             all.addAll(holdingRepository.findByPortfolioId(p.getId()));
         }
 
-        java.util.Map<String, List<Holding>> bySymbol = new java.util.LinkedHashMap<>();
-        for (Holding h : all) {
-            if (h.getSymbol() == null) continue;
-            bySymbol.computeIfAbsent(h.getSymbol().toUpperCase(), k -> new ArrayList<>()).add(h);
-        }
-
         List<com.marketai.portfolio.dto.MergeSummaryDto.MergedGroup> merged = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
         int totalMerged = 0;
 
-        for (java.util.Map.Entry<String, List<Holding>> e : bySymbol.entrySet()) {
-            List<Holding> group = e.getValue();
+        // Same symbol, or same ISIN under a different symbol — one security either way.
+        for (List<Holding> group : identityGroups(all)) {
             if (group.size() <= 1) continue;
+            // Two rows for one security are often the same purchases imported twice (a CAS and
+            // the confirmation emails). Pooling their ledgers would then double the units, so a
+            // group whose rows share an identical trade is reported, not merged.
+            if (sharesATrade(group)) {
+                skipped.add(group.get(0).getSymbol() + ": the rows contain the same trade twice — remove the duplicate trade, then merge");
+                continue;
+            }
 
             Holding keep = group.stream()
-                .max(Comparator.comparingInt((Holding h) -> transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId()).size())
+                .max(Comparator.comparingInt((Holding h) -> transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId()).size())
                     .thenComparing(Comparator.comparing(Holding::getId).reversed()))
                 .orElse(group.get(0));
 
@@ -776,7 +1081,7 @@ public class PortfolioService {
                 totalMerged++;
             }
             merged.add(com.marketai.portfolio.dto.MergeSummaryDto.MergedGroup.builder()
-                .symbol(e.getKey()).keptHoldingId(keep.getId()).removedHoldingIds(mergedIds)
+                .symbol(keep.getSymbol().toUpperCase()).keptHoldingId(keep.getId()).removedHoldingIds(mergedIds)
                 .build());
         }
 
@@ -786,8 +1091,51 @@ public class PortfolioService {
         return com.marketai.portfolio.dto.MergeSummaryDto.builder()
             .groupsMerged(merged.size())
             .holdingsMerged(totalMerged)
+            .skipped(skipped)
             .groups(merged)
             .build();
+    }
+
+    private boolean sharesATrade(List<Holding> group) {
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (Holding h : group) {
+            java.util.Set<String> own = new java.util.HashSet<>();
+            for (Transaction t : transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId())) {
+                String key = t.getType() + "|" + t.getTransactionDate() + "|"
+                    + (t.getQuantity() == null ? "" : t.getQuantity().stripTrailingZeros().toPlainString()) + "|"
+                    + (t.getPrice() == null ? "" : t.getPrice().stripTrailingZeros().toPlainString());
+                own.add(key);
+            }
+            for (String k : own) if (!seen.add(k)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Holdings that are one security: they share a symbol, or share an ISIN (transitively —
+     * A and B by symbol, B and C by ISIN, is one group). Holdings with no symbol are left out.
+     */
+    static List<List<Holding>> identityGroups(List<Holding> holdings) {
+        List<Holding> hs = holdings.stream().filter(h -> h.getSymbol() != null).toList();
+        int[] parent = new int[hs.size()];
+        for (int i = 0; i < parent.length; i++) parent[i] = i;
+        java.util.function.IntUnaryOperator find = new java.util.function.IntUnaryOperator() {
+            public int applyAsInt(int i) { while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; }
+        };
+        java.util.Map<String, Integer> firstByKey = new java.util.HashMap<>();
+        for (int i = 0; i < hs.size(); i++) {
+            Holding h = hs.get(i);
+            List<String> keys = new ArrayList<>();
+            keys.add("S:" + h.getSymbol().toUpperCase());
+            if (h.getIsin() != null && !h.getIsin().isBlank()) keys.add("I:" + h.getIsin().trim().toUpperCase());
+            for (String k : keys) {
+                Integer j = firstByKey.putIfAbsent(k, i);
+                if (j != null) parent[find.applyAsInt(i)] = find.applyAsInt(j);
+            }
+        }
+        java.util.Map<Integer, List<Holding>> groups = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < hs.size(); i++) groups.computeIfAbsent(find.applyAsInt(i), k -> new ArrayList<>()).add(hs.get(i));
+        return new ArrayList<>(groups.values());
     }
 
     /**
@@ -899,7 +1247,8 @@ public class PortfolioService {
             h = recomputeFromLedger(h); // finalQty > 0, so this never deletes/returns null
         }
 
-        if (currentPrice != null && currentPrice.compareTo(BigDecimal.ZERO) >= 0) h.setCurrentPrice(currentPrice);
+        // A hand-entered price is as of today. Zero is not a price — it is ignored, not stored.
+        if (currentPrice != null && currentPrice.signum() > 0) h.applyPrice(currentPrice, LocalDate.now());
         if (broker != null) h.setBroker(broker.trim().isEmpty() ? null : broker.trim());
         if (folio != null) h.setFolio(folio.trim().isEmpty() ? null : folio.trim());
         if (buyDate != null) h.setBuyDate(buyDate);
@@ -925,67 +1274,146 @@ public class PortfolioService {
             .build());
     }
 
+    /**
+     * Records a sale on the date it happened and replays the ledger.
+     *
+     * <p>A realized gain is not income: it is the difference between proceeds and cost on a
+     * disposal that the SELL row itself records. Booking it as an Income row used to store a
+     * capital <em>loss</em> as a positive "Capital Gain" (the sign was dropped), which the tax
+     * estimate then taxed. Tax reads disposals from the ledger instead ({@link #realizedEquityGains}).
+     *
+     * @param tradeDate the day of the sale; null means today (a sale entered by hand as it happens)
+     * @throws IllegalArgumentException when more units are sold than are held — a missing
+     *         purchase, not something to paper over by clamping
+     */
     @Transactional
     public void sellHolding(Long portfolioId, Long holdingId, Long userId,
-                            java.math.BigDecimal qtySold, java.math.BigDecimal salePrice,
-                            com.marketai.income.repository.IncomeRepository incomeRepo) {
+                            BigDecimal qtySold, BigDecimal salePrice, LocalDate tradeDate) {
+        sellHolding(portfolioId, holdingId, userId, qtySold, salePrice, tradeDate,
+            com.marketai.common.ledger.Provenance.manual());
+    }
+
+    /** @param provenance where the sale was read from (the importer), or manual */
+    @Transactional
+    public void sellHolding(Long portfolioId, Long holdingId, Long userId,
+                            BigDecimal qtySold, BigDecimal salePrice, LocalDate tradeDate,
+                            com.marketai.common.ledger.Provenance provenance) {
+        sellHolding(portfolioId, holdingId, userId, qtySold, salePrice, tradeDate, provenance, BigDecimal.ZERO);
+    }
+
+    /** @param charges brokerage and other charges on the sale (excluding STT), as stated */
+    @Transactional
+    public void sellHolding(Long portfolioId, Long holdingId, Long userId,
+                            BigDecimal qtySold, BigDecimal salePrice, LocalDate tradeDate,
+                            com.marketai.common.ledger.Provenance provenance, BigDecimal charges) {
         portfolioRepository.findByIdAndUserId(portfolioId, userId)
             .orElseThrow(() -> new ResourceNotFoundException("Portfolio", "id", portfolioId));
         Holding h = holdingRepository.findByIdAndPortfolioId(holdingId, portfolioId)
             .orElseThrow(() -> new ResourceNotFoundException("Holding", "id", holdingId));
 
-        if (qtySold.compareTo(h.getQuantity()) > 0) {
-            log.warn("Sell qty {} exceeds holding qty {} for {} — clamping to available", qtySold, h.getQuantity(), h.getSymbol());
-            qtySold = h.getQuantity();
+        if (qtySold == null || qtySold.signum() <= 0) {
+            throw new IllegalArgumentException("Sell quantity must be greater than zero.");
         }
-        // Realized P&L is booked against the average cost as it stood before this sale —
-        // capture it now, before the ledger recompute below revises the holding's balance.
-        java.math.BigDecimal saleValue = salePrice.multiply(qtySold);
-        java.math.BigDecimal costBasis = h.getAverageCost().multiply(qtySold);
-        java.math.BigDecimal pnl = saleValue.subtract(costBasis).setScale(2, RoundingMode.HALF_UP);
+        if (salePrice == null || salePrice.signum() <= 0) {
+            throw new IllegalArgumentException("Sale price must be greater than zero.");
+        }
+        BigDecimal held = h.getQuantity() == null ? BigDecimal.ZERO : h.getQuantity();
+        if (qtySold.compareTo(held) > 0) {
+            throw new IllegalArgumentException("Cannot sell " + qtySold.stripTrailingZeros().toPlainString()
+                + " units of " + h.getSymbol() + ": only " + held.stripTrailingZeros().toPlainString()
+                + " are held. A purchase is probably missing from the history.");
+        }
+        LocalDate date = tradeDate != null ? tradeDate : LocalDate.now();
+        if (date.isAfter(LocalDate.now())) {
+            throw new IllegalArgumentException("Sale date " + date + " is in the future.");
+        }
+        // Units held today are not enough: a sale dated in the past needs the units held on its
+        // date, and every later sale must still be covered once it is in the ledger.
+        List<Transaction> ledger = transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId());
+        if (!ledger.isEmpty()) {
+            List<Transaction> withSale = new ArrayList<>(ledger);
+            withSale.add(Transaction.builder().type(Transaction.TransactionType.SELL).quantity(qtySold)
+                .price(salePrice).transactionDate(date).build());
+            withSale.sort(Comparator.comparing(Transaction::getTransactionDate, Comparator.nullsFirst(Comparator.naturalOrder())));
+            String shortfall = firstOversell(withSale);
+            if (shortfall != null) {
+                throw new IllegalArgumentException("Cannot record this sale of " + h.getSymbol() + ": " + shortfall
+                    + " A purchase is probably missing from the history, or the date is wrong.");
+            }
+        }
+        // Cost of the units sold, captured before the replay below revises the average cost
+        // (and zeroes it when this sale closes the position).
+        BigDecimal costBasis = h.getAverageCost().multiply(qtySold).setScale(2, RoundingMode.HALF_UP);
 
-        Transaction sellTxn = Transaction.builder()
+        transactionRepository.save(Transaction.builder()
             .holding(h)
             .type(Transaction.TransactionType.SELL)
             .quantity(qtySold)
             .price(salePrice)
-            .charges(BigDecimal.ZERO)
-            .transactionDate(LocalDate.now())
-            .notes("Auto-recorded from sell")
-            .build();
-        transactionRepository.save(sellTxn);
+            .charges(charges != null && charges.signum() > 0 ? charges : BigDecimal.ZERO)
+            .transactionDate(date)
+            .notes("Sale")
+            .provenance(provenance)
+            .build());
 
-        // Replays the full ledger (including this sale) — deletes the holding itself if this
-        // sale exhausted the position, exactly like every other holding-quantity mutation.
         recomputeFromLedger(h);
 
-        // For mutual funds, MfRedemption (STCG/LTCG split, reinvestment tracking) is the one
-        // realized-gain record — a generic Income "Capital Gain" row on top of it used to
-        // double-book the same rupees under two independent records. Only fall back to the
-        // generic Income row if the MF redemption record couldn't be created, so the gain is
-        // never silently lost.
-        boolean mfRedemptionRecorded = false;
+        // Mutual funds carry their STCG/LTCG record in MfRedemption. No try/catch fallback: if
+        // it can't be written, the whole sale rolls back rather than half-recording.
         if (h.getSymbol() != null && h.getSymbol().endsWith(".MF")) {
-            try {
-                redemptionService.recordRedemption(userId, h, qtySold, salePrice);
-                mfRedemptionRecorded = true;
-            } catch (Exception e) {
-                log.warn("Could not record MF redemption for holding {}: {}", holdingId, e.getMessage());
+            redemptionService.recordRedemption(userId, h, qtySold, salePrice, costBasis, date);
+        }
+    }
+
+    /**
+     * Realized gain (negative for a loss) on equity sales dated within [from, to], matched
+     * first-in-first-out against purchase lots. Mutual funds are excluded — their disposals are
+     * in MfRedemption.
+     */
+    @Transactional(readOnly = true)
+    public BigDecimal realizedEquityGains(Long userId, LocalDate from, LocalDate to) {
+        RealisedEquity r = realisedEquity(userId, from, to);
+        return r.shortTerm().add(r.longTerm());
+    }
+
+    /** One equity sale's match against one purchase lot, with the holding it belongs to. */
+    public record EquityDisposal(String symbol, String name, String isin,
+                                 com.marketai.tax.lot.FifoLedger.Disposal disposal) {}
+
+    /**
+     * @param unmatchedUnits units sold (at any date) with no recorded purchase to match — their
+     *                       gain is left out rather than guessed, and the caller must say so
+     */
+    public record RealisedEquity(BigDecimal shortTerm, BigDecimal longTerm, List<EquityDisposal> disposals,
+                                 BigDecimal unmatchedUnits) {}
+
+    /**
+     * Realised gains on direct equity, matched first-in-first-out against purchase lots — the
+     * statutory rule — so each rupee of gain is short- or long-term by the lot it came from.
+     * The average-cost replay this replaced gave the right position cost but could not split
+     * a sale across lots of different ages.
+     */
+    @Transactional(readOnly = true)
+    public RealisedEquity realisedEquity(Long userId, LocalDate from, LocalDate to) {
+        BigDecimal st = BigDecimal.ZERO, lt = BigDecimal.ZERO, unmatched = BigDecimal.ZERO;
+        List<EquityDisposal> out = new ArrayList<>();
+        for (Portfolio p : portfolioRepository.findByUserId(userId)) {
+            for (Holding h : holdingRepository.findByPortfolioId(p.getId())) {
+                if (h.getSymbol() == null || h.getSymbol().endsWith(".MF")) continue;
+                List<com.marketai.tax.lot.FifoLedger.Trade> trades = transactionRepository
+                    .findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId()).stream()
+                    .map(com.marketai.tax.lot.FifoLedger.Trade::of)
+                    .toList();
+                com.marketai.tax.lot.FifoLedger.Result r = com.marketai.tax.lot.FifoLedger.replay(trades);
+                st = st.add(r.shortTermGain(from, to));
+                lt = lt.add(r.longTermGain(from, to));
+                for (var d : r.disposals()) {
+                    if (d.soldOn().isBefore(from) || d.soldOn().isAfter(to)) continue;
+                    out.add(new EquityDisposal(h.getSymbol(), h.getName(), h.getIsin(), d));
+                }
+                unmatched = unmatched.add(r.unmatchedUnits());
             }
         }
-
-        if (!mfRedemptionRecorded) {
-            String desc = (pnl.compareTo(java.math.BigDecimal.ZERO) >= 0 ? "Capital Gain" : "Capital Loss")
-                + " — " + h.getSymbol().replace(".NS", "");
-            com.marketai.income.entity.Income inc = com.marketai.income.entity.Income.builder()
-                .userId(userId)
-                .description(desc)
-                .amount(pnl.abs())
-                .source(com.marketai.income.entity.IncomeSource.CAPITAL_GAIN)
-                .incomeDate(java.time.LocalDate.now())
-                .note("Sold " + qtySold.stripTrailingZeros().toPlainString() + " units @ ₹" + salePrice + ". PnL: ₹" + pnl)
-                .build();
-            incomeRepo.save(inc);
-        }
+        return new RealisedEquity(st.setScale(2, RoundingMode.HALF_UP), lt.setScale(2, RoundingMode.HALF_UP), out, unmatched);
     }
 }

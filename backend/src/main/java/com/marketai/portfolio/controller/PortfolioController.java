@@ -30,7 +30,6 @@ import java.util.Map;
 public class PortfolioController {
 
     private final PortfolioService portfolioService;
-    private final com.marketai.income.repository.IncomeRepository incomeRepo;
     private final TransactionRepository transactionRepo;
     private final HoldingRepository holdingRepo;
 
@@ -58,6 +57,12 @@ public class PortfolioController {
             @PathVariable Long id,
             @AuthenticationPrincipal User user) {
         return ResponseEntity.ok(portfolioService.getPortfolioSummary(id, user.getId()));
+    }
+
+    @GetMapping("/combined-summary")
+    @Operation(summary = "One summary across every portfolio the user owns")
+    public ResponseEntity<PortfolioSummaryDto> getCombinedSummary(@AuthenticationPrincipal User user) {
+        return ResponseEntity.ok(portfolioService.getCombinedSummary(user.getId()));
     }
 
     @PostMapping("/{id}/holdings")
@@ -161,7 +166,9 @@ public class PortfolioController {
             @RequestBody Map<String, Object> body) {
         BigDecimal qty   = new BigDecimal(body.get("quantity").toString());
         BigDecimal price = new BigDecimal(body.get("salePrice").toString());
-        portfolioService.sellHolding(portfolioId, holdingId, user.getId(), qty, price, incomeRepo);
+        java.time.LocalDate date = body.get("tradeDate") != null && !body.get("tradeDate").toString().isBlank()
+            ? java.time.LocalDate.parse(body.get("tradeDate").toString()) : null;
+        portfolioService.sellHolding(portfolioId, holdingId, user.getId(), qty, price, date);
         return ResponseEntity.noContent().build();
     }
 

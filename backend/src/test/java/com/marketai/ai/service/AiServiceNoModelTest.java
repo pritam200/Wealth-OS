@@ -1,7 +1,7 @@
 package com.marketai.ai.service;
 
 import com.marketai.ai.dto.AiRequest;
-import com.marketai.ai.llm.LlmProviderRouter;
+import com.marketai.ai.llm.LlmService;
 import com.marketai.ai.llm.LlmUnavailableException;
 import com.marketai.ai.repository.AiHistoryRepository;
 import com.marketai.auth.entity.User;
@@ -16,6 +16,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -27,20 +28,20 @@ import static org.mockito.Mockito.*;
  */
 class AiServiceNoModelTest {
 
-    private LlmProviderRouter llm;
+    private LlmService llm;
     private AiHistoryRepository historyRepository;
     private AiService service;
     private User user;
 
     @BeforeEach
     void setUp() {
-        llm = mock(LlmProviderRouter.class);
+        llm = mock(LlmService.class);
         historyRepository = mock(AiHistoryRepository.class);
         service = new AiService(llm, historyRepository,
             mock(MarketDataService.class), mock(TechnicalIndicatorService.class), mock(PortfolioService.class));
         user = User.builder().id(1L).email("someone@example.com").build();
 
-        when(llm.completeProse(anyString(), anyString()))
+        when(llm.complete(any(), any(), anyString()))
             .thenThrow(new LlmUnavailableException("No LLM provider is available"));
     }
 

@@ -42,9 +42,13 @@ public class SyncJobWorker {
     /** Jobs this JVM is currently running, so the poller doesn't re-dispatch them. */
     private final Set<Long> inFlight = ConcurrentHashMap.newKeySet();
 
-    public SyncJobWorker(SyncJobService jobService, SyncJobRunner runner) {
+    private final com.marketai.sync.service.SyncLockService syncLockService;
+
+    public SyncJobWorker(SyncJobService jobService, SyncJobRunner runner,
+                         com.marketai.sync.service.SyncLockService syncLockService) {
         this.jobService = jobService;
         this.runner = runner;
+        this.syncLockService = syncLockService;
     }
 
     @PostConstruct
@@ -57,9 +61,10 @@ public class SyncJobWorker {
                 t.setDaemon(true);   // never block JVM shutdown on ingestion work
                 return t;
             });
-        // Anything left RUNNING belongs to a previous process that died — reclaim it now so a
-        // crash mid-sync doesn't wedge that user's queue permanently.
-        int requeued = jobService.requeueStale(Duration.ZERO);
+        // Anything left RUNNING whose sync lock has gone stale belongs to a process that died —
+        // reclaim it now so a crash mid-sync doesn't wedge that user's queue permanently. Jobs
+        // another live instance is running keep their lock fresh and are left alone.
+        int requeued = jobService.requeueStale(Duration.ZERO, syncLockService::isHeld);
         if (requeued > 0) log.info("Requeued {} job(s) orphaned by a previous run", requeued);
         log.info("Sync worker {} started with concurrency {}", workerId, concurrency);
     }
@@ -78,6 +83,8 @@ public class SyncJobWorker {
 
             List<SyncJob> queued = jobService.nextQueued(capacity);
             for (SyncJob job : queued) {
+                // One sync per user at a time: a second would only find the mailbox locked.
+                if (job.getUser() != null && jobService.hasRunningJob(job.getUser().getId())) continue;
                 if (!inFlight.add(job.getId())) continue;          // already running here
                 if (!jobService.claim(job.getId(), workerId)) {     // lost the race
                     inFlight.remove(job.getId());
@@ -105,7 +112,7 @@ public class SyncJobWorker {
     @Scheduled(fixedDelay = 600_000, initialDelay = 600_000)
     public void reclaimStale() {
         try {
-            jobService.requeueStale(Duration.ofMinutes(staleAfterMinutes));
+            jobService.requeueStale(Duration.ofMinutes(staleAfterMinutes), syncLockService::isHeld);
         } catch (Exception e) {
             log.warn("Stale-job reclaim failed: {}", e.getMessage());
         }

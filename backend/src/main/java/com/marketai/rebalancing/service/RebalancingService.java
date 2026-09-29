@@ -284,7 +284,7 @@ public class RebalancingService {
             .suggestedSellUnits(unitsToSell).suggestedSellValue(sellValue)
             .reason(reason).selectionReason(selectionReason);
 
-        List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAsc(h.getId());
+        List<Transaction> txns = transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId());
         List<TaxLot> openLots = openLotsFifo(txns);
         if (openLots.isEmpty()) {
             builder.taxImpactGap("No purchase-transaction history recorded for this holding, so the "
@@ -333,33 +333,7 @@ public class RebalancingService {
      * itself assumes. This never re-derives cost basis math; it only reconstructs which lots exist.
      */
     private List<TaxLot> openLotsFifo(List<Transaction> txns) {
-        List<TaxLot> lots = new ArrayList<>();
-        List<BigDecimal> remaining = new ArrayList<>();
-        for (Transaction t : txns) {
-            if (t.getQuantity() == null || t.getPrice() == null || t.getTransactionDate() == null) continue;
-            if (t.getType() == Transaction.TransactionType.BUY) {
-                lots.add(new TaxLot("TXN-" + t.getId(), t.getTransactionDate(), t.getQuantity(), t.getPrice(), null));
-                remaining.add(t.getQuantity());
-            } else {
-                BigDecimal toSell = t.getQuantity();
-                for (int i = 0; i < lots.size() && toSell.signum() > 0; i++) {
-                    BigDecimal avail = remaining.get(i);
-                    if (avail.signum() <= 0) continue;
-                    BigDecimal consume = avail.min(toSell);
-                    remaining.set(i, avail.subtract(consume));
-                    toSell = toSell.subtract(consume);
-                }
-            }
-        }
-        List<TaxLot> open = new ArrayList<>();
-        for (int i = 0; i < lots.size(); i++) {
-            BigDecimal rem = remaining.get(i);
-            if (rem.signum() > 0) {
-                TaxLot l = lots.get(i);
-                open.add(new TaxLot(l.lotId(), l.acquiredOn(), rem, l.costPerUnit(), null));
-            }
-        }
-        return open;
+        return com.marketai.tax.lot.FifoLedger.replay(txns.stream().map(com.marketai.tax.lot.FifoLedger.Trade::of).toList()).openLots();
     }
 
     private Optional<Stock> safeFindStock(String symbol) {

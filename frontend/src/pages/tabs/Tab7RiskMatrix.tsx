@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronUp, Calendar, Eye, EyeOff,
 } from 'lucide-react';
 import { StatTile } from '../../components/shared/StatTile';
-import { Amount, useMaskedText } from '../../components/shared/Amount';
+import { Amount, MaskedSentence, useMaskedText } from '../../components/shared/Amount';
 import { usePrivacyStore } from '../../store/privacyStore';
 import { HoldingTrendBadge } from '../../components/wealth/HoldingTrendBadge';
 import { MfTrendBadge } from '../../components/wealth/MfTrendBadge';
@@ -34,6 +34,10 @@ export function PortfolioSection({ onValues, showSignal = false, only }: { onVal
   const [sellId, setSellId] = useState<number | null>(null);
   const [sellQty, setSellQty] = useState('');
   const [sellPrice, setSellPrice] = useState('');
+  const [sellDate, setSellDate] = useState(() => new Date().toLocaleDateString('en-CA'));
+  const [sellError, setSellError] = useState<string | null>(null);
+  // A refusal belongs to the sale it was for: opening, switching or closing a sell row starts clean.
+  useEffect(() => { setSellError(null); setSellDate(new Date().toLocaleDateString('en-CA')); }, [sellId]);
   const [rebuilding, setRebuilding] = useState(false);
 
   const load = async () => {
@@ -41,38 +45,25 @@ export function PortfolioSection({ onValues, showSignal = false, only }: { onVal
     try {
       const { data: list } = await portfolioApi.list();
       if (!list.length) { setSummary(null); onValues(0, 0, 0); setLoading(false); return; }
-      // A user can end up with several portfolio rows (each Gmail-import path resolves
-      // "the user's portfolio" independently). Holdings must never be silently dropped
-      // just because they live in a portfolio other than the one with the most rows —
-      // merge every portfolio's holdings into one aggregated view instead of picking one.
-      const summaries = (await Promise.all(
-        list.map(p => portfolioApi.getSummary(p.id).then(r => r.data).catch(() => null))
-      )).filter(Boolean) as PortfolioSummary[];
-      const allHoldings = summaries.flatMap(s => s.holdings ?? []);
-      const totalInv = summaries.reduce((s, p) => s + (p.totalInvested ?? 0), 0);
-      const totalCur = summaries.reduce((s, p) => s + (p.currentValue ?? 0), 0);
-      const mfCur = allHoldings.filter(h => (h.symbol ?? '').endsWith('.MF')).reduce((s, h) => s + (h.currentValue ?? 0), 0);
-      const merged: PortfolioSummary | null = summaries.length ? {
-        ...summaries[0],
-        holdings: allHoldings,
-        totalInvested: totalInv,
-        currentValue: totalCur,
-        totalPnl: totalCur - totalInv,
-        totalPnlPercent: totalInv > 0 ? ((totalCur - totalInv) / totalInv) * 100 : 0,
-      } : null;
+      // Every portfolio row the user owns, totalled on the server — the browser never re-adds
+      // holdings, so this screen's totals are the same numbers every other screen shows.
+      const { data: merged } = await portfolioApi.getCombinedSummary();
       setSummary(merged);
-      onValues(totalInv, totalCur, mfCur);
+      onValues(merged.totalInvested ?? 0, merged.currentValue ?? 0, merged.mfCurrentValue ?? 0);
     } catch { onValues(0, 0, 0); }
     setLoading(false);
   };
 
   const doSell = async (holdingId: number, holdingPortfolioId: number) => {
     if (!sellQty || !sellPrice) return;
+    setSellError(null);
     try {
-      await portfolioApi.sellHolding(holdingPortfolioId, holdingId, Number(sellQty), Number(sellPrice));
+      await portfolioApi.sellHolding(holdingPortfolioId, holdingId, Number(sellQty), Number(sellPrice), sellDate || undefined);
       setSellId(null); setSellQty(''); setSellPrice('');
       await load();
-    } catch {}
+    } catch (e: any) {
+      setSellError(e?.response?.data?.message ?? 'Could not record the sale.');
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -81,7 +72,7 @@ export function PortfolioSection({ onValues, showSignal = false, only }: { onVal
   const cur = summary?.currentValue ?? 0;
   const stocks = holdings.filter(h => !h.symbol?.endsWith('.MF'));
   const mfs    = holdings.filter(h => h.symbol?.endsWith('.MF'));
-  const sell = { sellId, setSellId, sellQty, setSellQty, sellPrice, setSellPrice, doSell };
+  const sell = { sellId, setSellId, sellQty, setSellQty, sellPrice, setSellPrice, sellDate, setSellDate, sellError, doSell };
 
   return (
     <div className="space-y-4">
@@ -106,8 +97,8 @@ export function PortfolioSection({ onValues, showSignal = false, only }: { onVal
           ? <p className="text-gray-600 text-xs text-center py-6">No holdings yet — use Bulk Import or connect Gmail to auto-import trades.</p>
           : (
             <>
-              {only !== 'mf' && <HoldingsGroup title="Stocks" Icon={Briefcase} holdings={stocks} sell={sell} reload={load} showSignal={showSignal} />}
-              {only !== 'stocks' && <HoldingsGroup title="Mutual Funds" Icon={PieChart} holdings={mfs} sell={sell} reload={load} showSignal={showSignal} />}
+              {only !== 'mf' && <HoldingsGroup title="Stocks" Icon={Briefcase} holdings={stocks} inv={summary?.stocksInvested ?? 0} cur={summary?.stocksCurrentValue ?? 0} sell={sell} reload={load} showSignal={showSignal} />}
+              {only !== 'stocks' && <HoldingsGroup title="Mutual Funds" Icon={PieChart} holdings={mfs} inv={summary?.mfInvested ?? 0} cur={summary?.mfCurrentValue ?? 0} sell={sell} reload={load} showSignal={showSignal} />}
             </>
           )}
       {only !== 'stocks' && <RedeemedInvestments />}
@@ -126,6 +117,20 @@ export function MfHoldingsSignals() {
   return <PortfolioSection onValues={() => {}} showSignal only="mf" />;
 }
 
+/** The day a price is from, and a warning when it is out of date. */
+function PriceDate({ h }: { h: HoldingDto }) {
+  if (!h.priceAsOf) {
+    return h.valuationBasis === 'STALE'
+      ? <div className="text-2xs text-neutral" title="Price date unknown — refresh prices">date unknown</div>
+      : null;
+  }
+  const d = new Date(h.priceAsOf + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  return <div className={`text-2xs ${h.valuationBasis === 'STALE' ? 'text-neutral' : 'text-gray-600'}`}
+              title={h.valuationBasis === 'STALE' ? 'Out-of-date price — refresh prices' : 'Price date'}>
+    {h.valuationBasis === 'STALE' ? `stale · ${d}` : d}
+  </div>;
+}
+
 /* ─────────────────────────────────────────────────────────────
    NET WORTH SUMMARY
 ───────────────────────────────────────────────────────────── */
@@ -133,14 +138,17 @@ type SellState = {
   sellId: number | null; setSellId: (n: number | null) => void;
   sellQty: string; setSellQty: (s: string) => void;
   sellPrice: string; setSellPrice: (s: string) => void;
+  sellDate: string; setSellDate: (s: string) => void;
+  sellError: string | null;
   doSell: (id: number, portfolioId: number) => void;
 };
 
 // portfolioId is deliberately NOT a prop: every per-row action (edit/sell/remove) now uses
 // that holding's own `portfolioId`, so a single passed-down id can't misroute an action when
 // holdings are aggregated across several portfolios.
-function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false }:
-  { title: string; Icon: any; holdings: HoldingDto[]; sell: SellState; reload: () => void; showSignal?: boolean }) {
+// `inv` / `cur` are the server's totals for this group — not re-added from the rows here.
+function HoldingsGroup({ title, Icon, holdings, inv, cur, sell, reload, showSignal = false }:
+  { title: string; Icon: any; holdings: HoldingDto[]; inv: number; cur: number; sell: SellState; reload: () => void; showSignal?: boolean }) {
   const masked = usePrivacyStore(s => s.masked);
   const mask = (v: string | number) => (masked ? '••••••' : v);
   const [open, setOpen] = useState(true);
@@ -198,8 +206,6 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(h);
   });
-  const inv = holdings.reduce((s, h) => s + (h.investedValue ?? 0), 0);
-  const cur = holdings.reduce((s, h) => s + (h.currentValue ?? 0), 0);
   const pnl = cur - inv, pnlPct = inv > 0 ? pnl / inv * 100 : 0;
   const cols = showSignal ? 8 : 7; // symbol, qty, avg, current, value, return, [signal], actions
 
@@ -253,10 +259,14 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
                   </td>
                   <td className="text-right num text-gray-300 text-xs">{mask(h.quantity)}</td>
                   <td className="text-right num text-gray-400 text-xs">{mask(fmtINR(h.averageCost))}</td>
-                  <td className="text-right num text-ink text-xs">{h.currentPrice ? mask(fmtINR(h.currentPrice)) : <span className="text-gray-700" title={isMf ? 'No live NAV — tap Edit to set it' : 'No live price'}>—</span>}</td>
+                  <td className="text-right num text-ink text-xs">
+                    {h.valuationBasis !== 'COST' && h.currentPrice
+                      ? <>{mask(fmtINR(h.currentPrice))}<PriceDate h={h} /></>
+                      : <span className="text-gray-700" title={isMf ? 'No NAV yet — valued at cost. Tap Edit to set it' : 'No price yet — valued at cost'}>—</span>}
+                  </td>
                   <td className="text-right num text-ink text-xs">{mask(fmtINR(h.currentValue))}</td>
-                  <td className="text-right num font-semibold text-xs">{isMf && !h.currentPrice
-                    ? <span className="text-gray-600" title="At cost — set the latest NAV via Edit to see returns">at cost</span>
+                  <td className="text-right num font-semibold text-xs">{h.valuationBasis === 'COST' || !h.currentPrice
+                    ? <span className="text-gray-600" title="No price — valued at what was paid, so the return is unknown, not zero">at cost</span>
                     : <span className={h.pnlPercent >= 0 ? 'text-bull' : 'text-bear'}>{masked ? '••••••' : `${h.pnlPercent >= 0 ? '+' : ''}${h.pnlPercent?.toFixed(2)}%`}</span>}</td>
                   {showSignal && (
                     <td className="text-center">{isMf
@@ -320,6 +330,8 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
                         <input type="number" value={sell.sellQty} onChange={e => sell.setSellQty(e.target.value)} placeholder={isMf ? 'Units' : 'Qty'} className="input-field text-xs w-20 py-1" />
                         <span className="text-2xs text-gray-500">@ ₹</span>
                         <input type="number" value={sell.sellPrice} onChange={e => sell.setSellPrice(e.target.value)} placeholder="Price" className="input-field text-xs w-24 py-1" />
+                        <span className="text-2xs text-gray-500">on</span>
+                        <input type="date" value={sell.sellDate} max={new Date().toLocaleDateString('en-CA')} onChange={e => sell.setSellDate(e.target.value)} className="input-field text-xs w-32 py-1" />
                         {sell.sellQty && sell.sellPrice && (
                           <span className={`text-2xs font-mono ${(Number(sell.sellPrice) - h.averageCost) >= 0 ? 'text-bull' : 'text-bear'}`}>
                             PnL: {mask(fmtINR((Number(sell.sellPrice) - h.averageCost) * Number(sell.sellQty)))}
@@ -327,6 +339,7 @@ function HoldingsGroup({ title, Icon, holdings, sell, reload, showSignal = false
                         )}
                         <button onClick={() => sell.doSell(h.id, h.portfolioId)} className="btn-primary text-xs py-1 px-3 ml-auto">Record</button>
                         <button onClick={() => sell.setSellId(null)} className="btn-ghost text-xs py-1">Cancel</button>
+                        {sell.sellError && <span className="text-2xs text-bear w-full">{sell.sellError}</span>}
                         <span className="text-2xs text-gray-600 w-full">Updates your tracker only — no real order is placed.</span>
                       </div>
                     </td>
@@ -352,8 +365,12 @@ export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | nu
   const toggleMasked = usePrivacyStore(s => s.toggle);
   if (!wealth || wealth.totalAssets === 0) return null;
   const { stocksValue: stockOnly, mfValue: mfCurrent, fdValue: fdVal, rdValue: rdVal,
-    otherAssetsValue: otherVal, epfValue: epfVal, loansOutstanding: loans,
+    otherAssetsValue: otherVal, epfValue: epfVal, loansOutstanding: loanOnly,
     totalAssets: total, netWorth: net } = wealth;
+  const cashVal = wealth.cashValue ?? 0;
+  const cardDues = wealth.cardDues ?? 0;
+  // What net worth subtracts: loans and what is owed on credit cards.
+  const loans = wealth.totalLiabilities ?? loanOnly;
   const pieData  = [
     stockOnly > 0     ? { name: 'Stocks',        value: stockOnly,     fill: '#3B82F6' } : null,
     mfCurrent > 0     ? { name: 'Mutual Funds',  value: mfCurrent,     fill: '#8B5CF6' } : null,
@@ -361,6 +378,7 @@ export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | nu
     rdVal > 0         ? { name: 'RD',            value: rdVal,         fill: '#F59E0B' } : null,
     epfVal > 0        ? { name: 'EPF',           value: epfVal,        fill: '#0EA5E9' } : null,
     otherVal > 0      ? { name: 'Other',         value: otherVal,      fill: '#64748B' } : null,
+    cashVal > 0       ? { name: 'Cash',          value: cashVal,       fill: '#22C55E' } : null,
   ].filter(Boolean) as { name: string; value: number; fill: string }[];
   if (total === 0) return null;
   return (
@@ -383,7 +401,8 @@ export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | nu
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 mb-4">
         <StatTile label="Total Assets" value={fmtINR(total)} Icon={Coins} tone="brand" />
-        <StatTile label="Loans" value={fmtINR(loans)} Icon={CreditCard} tone="bear" />
+        <StatTile label={cardDues > 0 ? 'Loans + card dues' : 'Loans'} value={fmtINR(loans)} Icon={CreditCard} tone="bear"
+          sub={cardDues > 0 ? `cards ${masked ? '••••' : fmtINR(cardDues)}` : undefined} />
         <div className="kpi-tile">
           <div className="icon-badge-bull"><TrendingUp size={15} /></div>
           <div className="min-w-0">
@@ -394,6 +413,12 @@ export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | nu
         <StatTile label="FD + RD + EPF + Other" value={fmtINR(fdVal + rdVal + epfVal + otherVal)} Icon={Landmark} tone="neutral" />
         <StatTile label="Monthly EMI" value={fmtINR(emi) + '/mo'} Icon={Calendar} tone="bear" />
       </div>
+      {wealth.dataQuality === 'PARTIAL' && wealth.dataGaps?.length > 0 && (
+        <div className="mb-3 rounded-lg border border-neutral/30 bg-neutral/5 p-2.5 space-y-1">
+          <div className="text-2xs font-semibold text-neutral">These figures are incomplete</div>
+          {wealth.dataGaps.map((g, i) => <p key={i} className="text-2xs text-gray-400"><MaskedSentence text={g} /></p>)}
+        </div>
+      )}
       {pieData.length > 1 && (
         <div className="flex items-center gap-6">
           <ResponsiveContainer width="35%" height={110}>
@@ -427,8 +452,9 @@ function RiskScoreCard({ wealth }: { wealth: PortfolioContext | null }) {
   const maskText = useMaskedText();
   if (!wealth) return null;
 
-  const { fdValue: fdVal, rdValue: rdVal, loansOutstanding: loanVal, otherAssetsValue: otherVal,
+  const { fdValue: fdVal, rdValue: rdVal, otherAssetsValue: otherVal,
     epfValue: epfVal, totalAssets, equityCurrent: stocksCurrent } = wealth;
+  const loanVal = wealth.totalLiabilities ?? wealth.loansOutstanding;
 
   const equityPct  = wealth.equityPercent ?? 0;
   // Debt/Other split shown here separates EPF into its own slice, so it's computed from the

@@ -18,15 +18,12 @@ public class DepositMaturityScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(DepositMaturityScheduler.class);
     private final TrackingService trackingService;
+    private final com.marketai.common.jobs.JobHealthRecorder jobHealth;
 
     // Once a day.
     @Scheduled(fixedDelay = 86_400_000, initialDelay = 30_000)
     public void scheduledMaturityCheck() {
         log.info("Running FD/RD maturity check...");
-        try {
-            trackingService.markMaturedDeposits();
-        } catch (Exception e) {
-            log.error("FD/RD maturity check error: {}", e.getMessage());
-        }
+        jobHealth.record("deposit-maturity", run -> trackingService.markMaturedDeposits());
     }
 }

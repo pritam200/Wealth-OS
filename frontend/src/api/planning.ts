@@ -72,6 +72,8 @@ export interface TaxResponse {
   capitalGains: number; dividendIncome: number; interestIncome: number; salaryIncome: number;
   totalTaxableInvestmentIncome: number;
   estimatedTaxLow: number; estimatedTaxHigh: number;
+  /** TDS recorded on dividends/interest this year — already paid. */
+  tdsDeducted?: number;
   notes: string[];
 }
 export const taxApi = {

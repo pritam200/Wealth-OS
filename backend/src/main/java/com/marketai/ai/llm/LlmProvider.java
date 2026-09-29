@@ -1,37 +1,50 @@
 package com.marketai.ai.llm;
 
+import java.util.List;
+import java.util.Optional;
+
 /**
- * Abstraction over whatever model actually answers a prompt, so the reasoning layers
- * (email classification, ambiguity resolution, advisory narrative) never bind to a vendor.
+ * The one abstraction over whatever model answers a prompt. Nothing outside {@code ai.llm}
+ * knows which provider is in use: callers ask {@link LlmService} for a task, and routing,
+ * fallback, retries and logging happen there.
  *
- * Contract, deliberately narrow: given a system instruction and a user prompt, return the
- * model's raw text. Providers do not parse, validate, or interpret — callers own that, which
- * is what keeps the deterministic-safety boundary enforceable (the LLM supplies semantics;
- * backend code does every calculation and DB write).
+ * <p>Contract, deliberately narrow: send the request as given and return the model's raw text.
+ * Providers do not parse, validate or interpret — callers own that, which is what keeps the
+ * deterministic-safety boundary enforceable (the model supplies semantics; backend code does
+ * every calculation and every write, identically whichever provider answered).
+ *
+ * <p>Stateless: the settings arrive with each call, so a connection test can try values that
+ * have not been saved.
  */
 public interface LlmProvider {
 
-    /**
-     * @return raw model output, never null. Throws {@link LlmUnavailableException} when the
-     *         model can't be reached — callers must treat that as "no answer" and fall back to
-     *         deterministic behaviour rather than guessing.
-     */
-    LlmCompletion complete(String systemInstruction, String userPrompt);
+    LlmProviderId id();
 
     /**
-     * Same contract, but for answers meant to be read by a human (advisory narrative, the
-     * market copilot) rather than parsed. Providers that constrain decoding to JSON for
-     * {@link #complete} must NOT do so here — a JSON-constrained model returns
-     * {"answer": "..."} instead of prose. Defaults to {@link #complete} for providers where
-     * there is no difference.
+     * @return raw model output, never null or blank
+     * @throws LlmUnavailableException with a {@link LlmErrorCategory} when the call fails or the
+     *         output is unusable — never a substitute answer
      */
-    default LlmCompletion completeProse(String systemInstruction, String userPrompt) {
-        return complete(systemInstruction, userPrompt);
+    LlmCompletion generate(ProviderSettings settings, LlmRequest request);
+
+    /** Models the provider offers, with their capabilities. */
+    List<ModelInfo> listModels(ProviderSettings settings);
+
+    /** One model's entry; empty when the provider does not offer it. */
+    default Optional<ModelInfo> findModel(ProviderSettings settings, String model) {
+        if (model == null) return Optional.empty();
+        return listModels(settings).stream().filter(m -> sameModel(m.name(), model)).findFirst();
     }
 
-    /** Identifier recorded in the audit trail, e.g. "ollama:qwen2.5:7b". */
-    String describe();
+    /** "llama3" and "llama3:latest" are the same Ollama model; "models/gemini-x" is "gemini-x". */
+    static boolean sameModel(String a, String b) {
+        return normalise(a).equals(normalise(b));
+    }
 
-    /** Whether this provider is currently usable — checked before routing work to it. */
-    boolean isAvailable();
+    private static String normalise(String m) {
+        String s = m.trim().toLowerCase(java.util.Locale.ROOT);
+        if (s.startsWith("models/")) s = s.substring(7);
+        if (s.endsWith(":latest")) s = s.substring(0, s.length() - 7);
+        return s;
+    }
 }

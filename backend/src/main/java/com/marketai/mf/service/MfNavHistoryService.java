@@ -100,14 +100,18 @@ public class MfNavHistoryService {
      */
     @Transactional
     public int syncHoldingValuations(String schemeCode) {
-        Optional<BigDecimal> nav = latestNav(schemeCode);
-        if (nav.isEmpty()) return 0;
+        if (schemeCode == null || schemeCode.trim().isEmpty()) return 0;
+        Optional<MfNavHistory> latest = navHistoryRepository.findTopBySchemeCodeOrderByDateDesc(schemeCode.trim());
+        if (latest.isEmpty() || latest.get().getNav() == null || latest.get().getNav().signum() <= 0) return 0;
+        BigDecimal nav = latest.get().getNav();
+        java.time.LocalDate navDate = latest.get().getDate();
 
         List<Holding> holdings = holdingRepository.findByAmfiSchemeCode(schemeCode.trim());
         int updated = 0;
         for (Holding h : holdings) {
-            if (h.getCurrentPrice() != null && nav.get().compareTo(h.getCurrentPrice()) == 0) continue;
-            h.setCurrentPrice(nav.get());
+            if (h.getCurrentPrice() != null && nav.compareTo(h.getCurrentPrice()) == 0
+                    && navDate != null && navDate.equals(h.getPriceAsOf())) continue;
+            h.applyPrice(nav, navDate);
             h.setUpdatedAt(LocalDateTime.now());
             holdingRepository.save(h);
             updated++;

@@ -53,6 +53,20 @@ public class TransactionFingerprinter {
             sb.append('|').append(key(pe.getPaymentReference()));
             sb.append('|').append(key(pe.getPaymentStatus()));
         }
+        // Fields added for later event types, each appended only when present so every
+        // transaction recorded before they existed keeps its stored hash.
+        if (pe.getCorporateAction() != null) {
+            sb.append("|ca:").append(pe.getCorporateAction()).append(':').append(norm(pe.getRatioFrom()))
+                .append(':').append(norm(pe.getRatioTo())).append(':').append(key(pe.getNewSymbol()));
+        }
+        // Two fills of the same size and price on one day are two trades when their trade
+        // numbers differ; without the number they hashed identically and the second was dropped.
+        if (pe.getTradeReference() != null && !pe.getTradeReference().isBlank()) {
+            sb.append("|ref:").append(key(pe.getTradeReference()));
+        }
+        if (pe.getInstrumentKind() != null) sb.append("|kind:").append(key(pe.getInstrumentKind()));
+        if (pe.getTds() != null) sb.append("|tds:").append(norm(pe.getTds()));
+        if (pe.getIncoming() != null) sb.append("|in:").append(pe.getIncoming());
         // Appended only when non-zero so every first occurrence keeps its existing hash.
         if (pe.getOccurrenceInSource() > 0) {
             sb.append("|#").append(pe.getOccurrenceInSource());

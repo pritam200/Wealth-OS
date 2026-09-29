@@ -20,6 +20,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,7 +70,7 @@ class PortfolioServiceTest {
         // (see PortfolioService#recomputeFromLedger), so the ledger must be stubbed to match
         // the BUY this call is expected to record — holdingRepository.save assigns id 99L to
         // new holdings (see setup()).
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(99L)).thenReturn(Collections.singletonList(
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(99L)).thenReturn(Collections.singletonList(
             Transaction.builder().type(Transaction.TransactionType.BUY)
                 .quantity(new BigDecimal("10")).price(new BigDecimal("1200.00"))
                 .transactionDate(LocalDate.of(2026, 1, 1)).build()));
@@ -100,7 +101,7 @@ class PortfolioServiceTest {
         when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "RELIANCE.NS")).thenReturn(Optional.of(existing));
         // The ledger replay needs the prior BUY (reconstructing the existing 10@1000 position)
         // plus this new BUY — quantity/averageCost are now always derived from this list.
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L)).thenReturn(Arrays.asList(
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(5L)).thenReturn(Arrays.asList(
             Transaction.builder().type(Transaction.TransactionType.BUY)
                 .quantity(new BigDecimal("10")).price(new BigDecimal("1000.00"))
                 .transactionDate(LocalDate.of(2026, 1, 1)).build(),
@@ -132,7 +133,7 @@ class PortfolioServiceTest {
             .buyDate(LocalDate.of(2026, 3, 1))
             .build();
         when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "RELIANCE.NS")).thenReturn(Optional.of(existing));
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L)).thenReturn(Arrays.asList(
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(5L)).thenReturn(Arrays.asList(
             Transaction.builder().type(Transaction.TransactionType.BUY)
                 .quantity(new BigDecimal("10")).price(new BigDecimal("1000.00"))
                 .transactionDate(LocalDate.of(2026, 3, 1)).build(),
@@ -162,7 +163,7 @@ class PortfolioServiceTest {
             .broker("HDFC").folio("12345")
             .build();
         when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "MF01.MF")).thenReturn(Optional.of(existing));
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L)).thenReturn(Arrays.asList(
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(5L)).thenReturn(Arrays.asList(
             Transaction.builder().type(Transaction.TransactionType.BUY)
                 .quantity(new BigDecimal("10")).price(new BigDecimal("100.00"))
                 .transactionDate(LocalDate.of(2025, 1, 1)).build(),
@@ -239,13 +240,11 @@ class PortfolioServiceTest {
         when(portfolioRepository.findByIdAndUserId(PORTFOLIO_ID, USER_ID))
             .thenReturn(Optional.of(Portfolio.builder().id(PORTFOLIO_ID).build()));
         when(holdingRepository.findByIdAndPortfolioId(9001L, PORTFOLIO_ID)).thenReturn(Optional.empty());
-        com.marketai.income.repository.IncomeRepository incomeRepo =
-            mock(com.marketai.income.repository.IncomeRepository.class);
 
         assertThatThrownBy(() -> service.sellHolding(PORTFOLIO_ID, 9001L, USER_ID,
-                new BigDecimal("999999"), new BigDecimal("1"), incomeRepo))
+                new BigDecimal("999999"), new BigDecimal("1"), null))
             .isInstanceOf(com.marketai.common.exception.ResourceNotFoundException.class);
-        verify(incomeRepo, never()).save(any());
+        verify(transactionRepository, never()).save(any(Transaction.class));
         verify(holdingRepository, never()).delete(any(Holding.class));
     }
 
@@ -262,92 +261,90 @@ class PortfolioServiceTest {
         verify(holdingRepository, never()).deleteById(anyLong());
     }
 
-    @Test
-    void sellHolding_computesPnlAndReducesQuantity() {
+    private Holding reliance10At1000() {
         Holding h = Holding.builder()
-            .id(5L).portfolio(Portfolio.builder().id(PORTFOLIO_ID).user(null).build())
+            .id(5L).portfolio(Portfolio.builder().id(PORTFOLIO_ID).build())
             .symbol("RELIANCE.NS").name("Reliance")
             .quantity(new BigDecimal("10")).averageCost(new BigDecimal("1000.00"))
             .build();
-        Portfolio portfolio = Portfolio.builder().id(PORTFOLIO_ID).build();
-        when(portfolioRepository.findByIdAndUserId(PORTFOLIO_ID, USER_ID)).thenReturn(Optional.of(portfolio));
+        when(portfolioRepository.findByIdAndUserId(PORTFOLIO_ID, USER_ID))
+            .thenReturn(Optional.of(Portfolio.builder().id(PORTFOLIO_ID).build()));
         when(holdingRepository.findByIdAndPortfolioId(5L, PORTFOLIO_ID)).thenReturn(Optional.of(h));
-        // quantity is now always re-derived by replaying the ledger (prior BUY + this SELL),
-        // not by directly decrementing the field.
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L)).thenReturn(Arrays.asList(
-            Transaction.builder().type(Transaction.TransactionType.BUY)
-                .quantity(new BigDecimal("10")).price(new BigDecimal("1000.00"))
-                .transactionDate(LocalDate.of(2025, 1, 1)).build(),
-            Transaction.builder().type(Transaction.TransactionType.SELL)
-                .quantity(new BigDecimal("4")).price(new BigDecimal("1500.00"))
-                .transactionDate(LocalDate.now()).build()));
+        return h;
+    }
 
-        com.marketai.income.repository.IncomeRepository incomeRepo = mock(com.marketai.income.repository.IncomeRepository.class);
-        when(incomeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+    private static Transaction txn(Transaction.TransactionType type, String qty, String price, LocalDate date) {
+        return Transaction.builder().type(type).quantity(new BigDecimal(qty)).price(new BigDecimal(price))
+            .transactionDate(date).build();
+    }
 
-        // Sell 4 of 10 at 1500 -> saleValue = 6000, costBasis = 4*1000=4000, pnl = 2000
-        service.sellHolding(PORTFOLIO_ID, 5L, USER_ID, new BigDecimal("4"), new BigDecimal("1500.00"), incomeRepo);
+    @Test
+    void sellHolding_isRecordedOnTheTradeDateAndReducesQuantity() {
+        Holding h = reliance10At1000();
+        LocalDate tradeDate = LocalDate.of(2026, 8, 7);
+        // First read: the ledger before the sale (the dated oversell check); then after it.
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(5L)).thenReturn(Arrays.asList(
+            txn(Transaction.TransactionType.BUY, "10", "1000.00", LocalDate.of(2025, 1, 1))), Arrays.asList(
+            txn(Transaction.TransactionType.BUY, "10", "1000.00", LocalDate.of(2025, 1, 1)),
+            txn(Transaction.TransactionType.SELL, "4", "1500.00", tradeDate)));
 
-        ArgumentCaptor<com.marketai.income.entity.Income> incomeCaptor = ArgumentCaptor.forClass(com.marketai.income.entity.Income.class);
-        verify(incomeRepo).save(incomeCaptor.capture());
-        assertThat(incomeCaptor.getValue().getAmount()).isEqualByComparingTo("2000.00");
-        assertThat(incomeCaptor.getValue().getSource()).isEqualTo(com.marketai.income.entity.IncomeSource.CAPITAL_GAIN);
+        service.sellHolding(PORTFOLIO_ID, 5L, USER_ID, new BigDecimal("4"), new BigDecimal("1500.00"), tradeDate);
 
-        assertThat(h.getQuantity()).isEqualByComparingTo("6"); // 10 - 4 remaining
-        verify(holdingRepository).save(h);
+        ArgumentCaptor<Transaction> sale = ArgumentCaptor.forClass(Transaction.class);
+        verify(transactionRepository).save(sale.capture());
+        assertThat(sale.getValue().getTransactionDate()).isEqualTo(tradeDate);
+        assertThat(sale.getValue().getType()).isEqualTo(Transaction.TransactionType.SELL);
+        assertThat(h.getQuantity()).isEqualByComparingTo("6");
+    }
+
+    @Test
+    void sellHolding_fullSaleClosesThePositionButKeepsItsHistory() {
+        Holding h = reliance10At1000();
+        // First read: the ledger before the sale (the dated oversell check); then after it.
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(5L)).thenReturn(Arrays.asList(
+            txn(Transaction.TransactionType.BUY, "10", "1000.00", LocalDate.of(2025, 1, 1))), Arrays.asList(
+            txn(Transaction.TransactionType.BUY, "10", "1000.00", LocalDate.of(2025, 1, 1)),
+            txn(Transaction.TransactionType.SELL, "10", "1500.00", LocalDate.of(2026, 8, 7))));
+
+        service.sellHolding(PORTFOLIO_ID, 5L, USER_ID, new BigDecimal("10"), new BigDecimal("1500.00"),
+            LocalDate.of(2026, 8, 7));
+
+        // Deleting the holding cascaded to every BUY/SELL row — the realized-gain record with it.
         verify(holdingRepository, never()).delete(any(Holding.class));
+        verify(holdingRepository).save(h);
+        assertThat(h.getQuantity()).isEqualByComparingTo("0");
     }
 
     @Test
-    void sellHolding_deletesHoldingWhenFullyLiquidated() {
-        Holding h = Holding.builder()
-            .id(5L).portfolio(Portfolio.builder().id(PORTFOLIO_ID).build())
-            .symbol("RELIANCE.NS").name("Reliance")
-            .quantity(new BigDecimal("10")).averageCost(new BigDecimal("1000.00"))
-            .build();
-        when(holdingRepository.findByIdAndPortfolioId(5L, PORTFOLIO_ID)).thenReturn(Optional.of(h));
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L)).thenReturn(Arrays.asList(
-            Transaction.builder().type(Transaction.TransactionType.BUY)
-                .quantity(new BigDecimal("10")).price(new BigDecimal("1000.00"))
-                .transactionDate(LocalDate.of(2025, 1, 1)).build(),
-            Transaction.builder().type(Transaction.TransactionType.SELL)
-                .quantity(new BigDecimal("10")).price(new BigDecimal("1500.00"))
-                .transactionDate(LocalDate.now()).build()));
-        com.marketai.income.repository.IncomeRepository incomeRepo = mock(com.marketai.income.repository.IncomeRepository.class);
-        when(incomeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+    void sellHolding_refusesToSellMoreThanIsHeld() {
+        reliance10At1000();
 
-        service.sellHolding(PORTFOLIO_ID, 5L, USER_ID, new BigDecimal("10"), new BigDecimal("1500.00"), incomeRepo);
-
-        // Fully sold -> the ledger replay nets to zero -> holding deleted (by object, via
-        // recomputeFromLedger), never left at a negative quantity.
-        verify(holdingRepository).delete(h);
-        verify(holdingRepository, never()).save(h);
+        assertThatThrownBy(() -> service.sellHolding(PORTFOLIO_ID, 5L, USER_ID,
+                new BigDecimal("999"), new BigDecimal("1500.00"), LocalDate.of(2026, 8, 7)))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("only 10 are held");
+        verify(transactionRepository, never()).save(any(Transaction.class));
     }
 
     @Test
-    void sellHolding_clampsOversell() {
-        // Selling more than is held must not go negative — it should clamp to what's owned,
-        // never fabricate a negative-quantity holding or an inflated capital gain.
-        Holding h = Holding.builder()
-            .id(5L).portfolio(Portfolio.builder().id(PORTFOLIO_ID).build())
-            .symbol("RELIANCE.NS").name("Reliance")
-            .quantity(new BigDecimal("10")).averageCost(new BigDecimal("1000.00"))
-            .build();
-        when(holdingRepository.findByIdAndPortfolioId(5L, PORTFOLIO_ID)).thenReturn(Optional.of(h));
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L)).thenReturn(Arrays.asList(
-            Transaction.builder().type(Transaction.TransactionType.BUY)
-                .quantity(new BigDecimal("10")).price(new BigDecimal("1000.00"))
-                .transactionDate(LocalDate.of(2025, 1, 1)).build(),
-            Transaction.builder().type(Transaction.TransactionType.SELL)
-                .quantity(new BigDecimal("10")).price(new BigDecimal("1500.00")) // clamped to 10
-                .transactionDate(LocalDate.now()).build()));
-        com.marketai.income.repository.IncomeRepository incomeRepo = mock(com.marketai.income.repository.IncomeRepository.class);
-        when(incomeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+    void realizedEquityGains_keepTheSignOfALoss() {
+        Holding gain = Holding.builder().id(5L).symbol("RELIANCE.NS").build();
+        Holding loss = Holding.builder().id(6L).symbol("INFY.NS").build();
+        Holding fund = Holding.builder().id(7L).symbol("PPFAS.MF").build();
+        when(portfolioRepository.findByUserId(USER_ID)).thenReturn(List.of(Portfolio.builder().id(PORTFOLIO_ID).build()));
+        when(holdingRepository.findByPortfolioId(PORTFOLIO_ID)).thenReturn(List.of(gain, loss, fund));
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(5L)).thenReturn(List.of(
+            txn(Transaction.TransactionType.BUY, "10", "1000", LocalDate.of(2025, 1, 1)),
+            txn(Transaction.TransactionType.SELL, "4", "1500", LocalDate.of(2026, 5, 1))));      // +2000
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(6L)).thenReturn(List.of(
+            txn(Transaction.TransactionType.BUY, "10", "2000", LocalDate.of(2025, 1, 1)),
+            txn(Transaction.TransactionType.SELL, "10", "1700", LocalDate.of(2026, 6, 1)),      // -3000
+            txn(Transaction.TransactionType.SELL, "1", "1", LocalDate.of(2025, 2, 1))));        // before FY, ignored
 
-        service.sellHolding(PORTFOLIO_ID, 5L, USER_ID, new BigDecimal("999"), new BigDecimal("1500.00"), incomeRepo);
+        BigDecimal net = service.realizedEquityGains(USER_ID, LocalDate.of(2026, 4, 1), LocalDate.of(2027, 3, 31));
 
-        // Clamped to 10 -> fully sold -> deleted, not left at a negative quantity
-        verify(holdingRepository).delete(h);
+        assertThat(net).isEqualByComparingTo("-1000.00");
+        verify(transactionRepository, never()).findByHoldingIdOrderByTransactionDateAscIdAsc(7L);
     }
 
     @Test
@@ -355,7 +352,7 @@ class PortfolioServiceTest {
         Holding garbage = Holding.builder().id(224L).symbol("NAMECOSTOFINVESTMENT.MF").name("Name Cost of Investment")
             .quantity(new BigDecimal("3266.46")).averageCost(new BigDecimal("2219.43")).build();
         when(portfolioRepository.findByUserId(USER_ID)).thenReturn(Collections.singletonList(Portfolio.builder().id(PORTFOLIO_ID).build()));
-        when(holdingRepository.findByPortfolioId(PORTFOLIO_ID)).thenReturn(Collections.singletonList(garbage));
+        when(holdingRepository.findOpenByPortfolioId(PORTFOLIO_ID)).thenReturn(Collections.singletonList(garbage));
 
         IntegrityReportDto report = service.checkIntegrity(USER_ID);
 
@@ -372,7 +369,7 @@ class PortfolioServiceTest {
         Holding b = Holding.builder().id(2L).symbol("MF14-1089.MF").name("ICICI Pru Large Cap Fund")
             .folio("43691089").quantity(BigDecimal.ONE).averageCost(BigDecimal.TEN).build();
         when(portfolioRepository.findByUserId(USER_ID)).thenReturn(Collections.singletonList(Portfolio.builder().id(PORTFOLIO_ID).build()));
-        when(holdingRepository.findByPortfolioId(PORTFOLIO_ID)).thenReturn(Arrays.asList(a, b));
+        when(holdingRepository.findOpenByPortfolioId(PORTFOLIO_ID)).thenReturn(Arrays.asList(a, b));
 
         IntegrityReportDto report = service.checkIntegrity(USER_ID);
 
@@ -391,7 +388,7 @@ class PortfolioServiceTest {
         Holding b = Holding.builder().id(217L).symbol("LARGECAPFUNDERSTWHILEBLUECHIPF.MF").name("Large Cap Fund (erstwhile Bluechip Fund)")
             .quantity(BigDecimal.ONE).averageCost(new BigDecimal("11000")).build();
         when(portfolioRepository.findByUserId(USER_ID)).thenReturn(Collections.singletonList(Portfolio.builder().id(PORTFOLIO_ID).build()));
-        when(holdingRepository.findByPortfolioId(PORTFOLIO_ID)).thenReturn(Arrays.asList(a, b));
+        when(holdingRepository.findOpenByPortfolioId(PORTFOLIO_ID)).thenReturn(Arrays.asList(a, b));
 
         IntegrityReportDto report = service.checkIntegrity(USER_ID);
 
@@ -405,7 +402,7 @@ class PortfolioServiceTest {
         Holding clean = Holding.builder().id(1L).symbol("HDFCBANK.NS").name("HDFC Bank")
             .quantity(BigDecimal.TEN).averageCost(new BigDecimal("1500")).build();
         when(portfolioRepository.findByUserId(USER_ID)).thenReturn(Collections.singletonList(Portfolio.builder().id(PORTFOLIO_ID).build()));
-        when(holdingRepository.findByPortfolioId(PORTFOLIO_ID)).thenReturn(Collections.singletonList(clean));
+        when(holdingRepository.findOpenByPortfolioId(PORTFOLIO_ID)).thenReturn(Collections.singletonList(clean));
         // Simulate the local stock-seed lookup finding this as a real, known ticker (as it
         // would in production) so a merely-not-yet-priced holding isn't mistaken for garbage.
         when(marketDataService.searchStocks("HDFCBANK")).thenReturn(Collections.singletonList(
@@ -429,8 +426,8 @@ class PortfolioServiceTest {
             .broker("NSE").quantity(new BigDecimal("29")).averageCost(new BigDecimal("5019.98")).build();
         Holding b = Holding.builder().id(166L).symbol("TITAN.NS").name("TITAN")
             .broker("MStock").quantity(new BigDecimal("6")).averageCost(new BigDecimal("5019.98")).build();
-        when(holdingRepository.findByPortfolioId(PORTFOLIO_ID)).thenReturn(Collections.singletonList(a));
-        when(holdingRepository.findByPortfolioId(pf2)).thenReturn(Collections.singletonList(b));
+        when(holdingRepository.findOpenByPortfolioId(PORTFOLIO_ID)).thenReturn(Collections.singletonList(a));
+        when(holdingRepository.findOpenByPortfolioId(pf2)).thenReturn(Collections.singletonList(b));
         // Simulate the local stock-seed lookup finding TITAN.NS as a real, known ticker (as it
         // would in production) so these merely-not-yet-priced holdings aren't mistaken for
         // garbage — they're already correctly flagged as DUPLICATE_SYMBOL instead.
@@ -460,18 +457,18 @@ class PortfolioServiceTest {
         Transaction removeBuy = Transaction.builder().id(999L).holding(remove)
             .type(Transaction.TransactionType.BUY).quantity(new BigDecimal("6"))
             .price(new BigDecimal("5200.00")).transactionDate(LocalDate.of(2026, 8, 19)).build();
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(166L))
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(166L))
             .thenReturn(Collections.singletonList(removeBuy));
         // After reparenting, the merged holding's ledger replay must see both transactions —
         // quantity/averageCost are now always derived from this list, not hand-rolled math.
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(229L))
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(229L))
             .thenReturn(Arrays.asList(keepBuy, removeBuy));
 
         Holding result = service.mergeHoldings(USER_ID, 229L, 166L);
 
-        // (29*5000 + 6*5200) / 35 = (145000+31200)/35 = 176200/35 = 5034.29
+        // (29*5000 + 6*5200) / 35 = (145000+31200)/35 = 176200/35 = 5034.2857 (four decimals)
         assertThat(result.getQuantity()).isEqualByComparingTo("35");
-        assertThat(result.getAverageCost()).isEqualByComparingTo("5034.29");
+        assertThat(result.getAverageCost()).isEqualByComparingTo("5034.2857");
         verify(holdingRepository).delete(remove);
         ArgumentCaptor<Transaction> txnCaptor = ArgumentCaptor.forClass(Transaction.class);
         verify(transactionRepository).save(txnCaptor.capture());
@@ -495,6 +492,51 @@ class PortfolioServiceTest {
     }
 
     @Test
+    void resolveFundSymbol_keepsTwoOptionsOfOneFundApartAndFollowsTheIsinAcrossNames() {
+        Holding growth = Holding.builder().id(1L).symbol("HDFCMIDCAPOPPORTUNITIESFUNDDIR.MF")
+            .name("HDFC Mid-Cap Opportunities Fund - Direct Growth").isin("INF179K01XQ0")
+            .quantity(BigDecimal.TEN).averageCost(BigDecimal.TEN).build();
+        when(holdingRepository.findByPortfolioIdAndIsinIgnoreCase(PORTFOLIO_ID, "INF179K01XQ0")).thenReturn(List.of(growth));
+        when(holdingRepository.findByPortfolioIdAndIsinIgnoreCase(PORTFOLIO_ID, "INF179K01XR8")).thenReturn(List.of());
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "HDFCMIDCAPOPPORTUNITIESFUNDDIR.MF"))
+            .thenReturn(Optional.of(growth));
+
+        // The IDCW option truncates to the same 30 characters — it must get its own symbol.
+        assertThat(service.resolveFundSymbol(PORTFOLIO_ID, "HDFCMIDCAPOPPORTUNITIESFUNDDIR.MF", "INF179K01XR8"))
+            .isEqualTo("HDFCMIDCAPOPPORTUNITIESFUNDDIR-INF179K01XR8.MF");
+        // A differently spelled name with the Growth ISIN lands on the Growth holding.
+        assertThat(service.resolveFundSymbol(PORTFOLIO_ID, "HDFCMIDCAPOPPFUNDDIRECTGROWTH.MF", "INF179K01XQ0"))
+            .isEqualTo("HDFCMIDCAPOPPORTUNITIESFUNDDIR.MF");
+        // No ISIN: the name-derived symbol, as before.
+        assertThat(service.resolveFundSymbol(PORTFOLIO_ID, "SOMEFUND.MF", null)).isEqualTo("SOMEFUND.MF");
+    }
+
+    @Test
+    void mergeDuplicateSymbols_leavesAGroupAloneWhenBothRowsHoldTheSameTrade() {
+        User owner = User.builder().id(USER_ID).build();
+        Portfolio pf1 = Portfolio.builder().id(PORTFOLIO_ID).user(owner).build();
+        Holding a = Holding.builder().id(1L).portfolio(pf1).symbol("FUND-A.MF").name("Fund A").isin("INF000X01AB1")
+            .quantity(BigDecimal.TEN).averageCost(BigDecimal.TEN).build();
+        Holding b = Holding.builder().id(2L).portfolio(pf1).symbol("FUND-A-DIRECT.MF").name("Fund A Direct").isin("INF000X01AB1")
+            .quantity(BigDecimal.TEN).averageCost(BigDecimal.TEN).build();
+        when(portfolioRepository.findByUserId(USER_ID)).thenReturn(List.of(pf1));
+        when(holdingRepository.findByPortfolioId(PORTFOLIO_ID)).thenReturn(List.of(a, b));
+        LocalDate day = LocalDate.of(2026, 5, 4);
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(1L)).thenReturn(List.of(
+            Transaction.builder().id(10L).holding(a).type(Transaction.TransactionType.BUY)
+                .quantity(BigDecimal.TEN).price(BigDecimal.TEN).transactionDate(day).build()));
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(2L)).thenReturn(List.of(
+            Transaction.builder().id(11L).holding(b).type(Transaction.TransactionType.BUY)
+                .quantity(BigDecimal.TEN).price(BigDecimal.TEN).transactionDate(day).build()));
+
+        MergeSummaryDto summary = service.mergeDuplicateSymbols(USER_ID);
+
+        assertThat(summary.getHoldingsMerged()).isZero();
+        assertThat(summary.getSkipped()).singleElement().asString().contains("same trade twice");
+        verify(holdingRepository, never()).delete(any(Holding.class));
+    }
+
+    @Test
     void mergeDuplicateSymbols_bulkMergesAllGroupsAndKeepsTheOneWithMoreHistory() {
         User owner = User.builder().id(USER_ID).build();
         Portfolio pf1 = Portfolio.builder().id(PORTFOLIO_ID).user(owner).build();
@@ -513,14 +555,14 @@ class PortfolioServiceTest {
         when(holdingRepository.findById(229L)).thenReturn(Optional.of(titanA));
         when(holdingRepository.findById(166L)).thenReturn(Optional.of(titanB));
         // titanA has 2 recorded transactions, titanB has 1 — titanA should be kept.
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(229L)).thenReturn(Arrays.asList(
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(229L)).thenReturn(Arrays.asList(
             Transaction.builder().id(1L).holding(titanA).type(Transaction.TransactionType.BUY)
                 .quantity(BigDecimal.ONE).price(BigDecimal.TEN).transactionDate(LocalDate.now()).build(),
             Transaction.builder().id(2L).holding(titanA).type(Transaction.TransactionType.BUY)
                 .quantity(BigDecimal.ONE).price(BigDecimal.TEN).transactionDate(LocalDate.now()).build()));
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(166L)).thenReturn(Collections.singletonList(
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(166L)).thenReturn(Collections.singletonList(
             Transaction.builder().id(3L).holding(titanB).type(Transaction.TransactionType.BUY)
-                .quantity(BigDecimal.ONE).price(BigDecimal.TEN).transactionDate(LocalDate.now()).build()));
+                .quantity(BigDecimal.ONE).price(BigDecimal.TEN).transactionDate(LocalDate.now().minusDays(3)).build()));
 
         MergeSummaryDto summary = service.mergeDuplicateSymbols(USER_ID);
 

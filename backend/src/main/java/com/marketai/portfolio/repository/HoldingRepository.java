@@ -9,8 +9,19 @@ import java.util.List;
 import java.util.Optional;
 
 public interface HoldingRepository extends JpaRepository<Holding, Long> {
+    /** Every holding in the portfolio, including closed (fully sold, zero-unit) positions. */
     List<Holding> findByPortfolioId(Long portfolioId);
+
+    List<Holding> findByPortfolioIdAndQuantityGreaterThan(Long portfolioId, java.math.BigDecimal quantity);
+
+    /** Positions still held. A fully sold holding is kept at zero units so its trade history
+     *  survives; anything that values, lists or advises on positions reads this instead. */
+    default List<Holding> findOpenByPortfolioId(Long portfolioId) {
+        return findByPortfolioIdAndQuantityGreaterThan(portfolioId, java.math.BigDecimal.ZERO);
+    }
     Optional<Holding> findByPortfolioIdAndSymbol(Long portfolioId, String symbol);
+
+    List<Holding> findByPortfolioIdAndIsinIgnoreCase(Long portfolioId, String isin);
 
     /**
      * Loads a holding only if it really sits in the given portfolio. Callers that have already

@@ -28,7 +28,79 @@ export interface ReconciliationReport {
   failedImports: number;
   pdfsPending: number;
   status: 'OK' | 'ACTION_REQUIRED';
+  /** "✓ Sync Complete" only when every financial event is accounted for. */
+  headline?: string;
+  /** Financial events read (or re-read) this run, from every email body and attachment. */
+  eventsSeen?: number;
+  eventsAccounted?: number;
+  eventsUnresolved?: number;
+  /** Unresolved events on record in total, including earlier runs. */
+  outstandingUnresolved?: number;
   actionItems: string[];
+}
+
+export type EventState = 'IMPORTED' | 'DUPLICATE_OF_EXISTING' | 'RESOLVED' | 'REQUIRES_REVIEW'
+  | 'RECONCILIATION_REQUIRED' | 'FAILED_WITH_REASON';
+
+/** One financial event found in an email, and where it ended up. */
+export interface EmailFinancialEvent {
+  id: number;
+  gmailMessageId: string;
+  eventKey: string;
+  itemIndex: number | null;
+  sourceKind: 'BODY' | 'ATTACHMENT' | 'EMAIL';
+  attachmentName: string | null;
+  documentHash: string | null;
+  statementProvider: string | null;
+  llmProvider: string | null;
+  llmModel: string | null;
+  promptVersion: string | null;
+  extractionMethod: string | null;
+  extractedAt: string | null;
+  confidence: number | null;
+  eventType: string | null;
+  eventStatus: string | null;
+  amount: number | null;
+  currency: string | null;
+  eventDate: string | null;
+  merchant: string | null;
+  instrument: string | null;
+  reference: string | null;
+  evidence: string | null;
+  state: EventState;
+  reason: string | null;
+  validationStatus: string | null;
+  dedupStatus: string | null;
+  resolvedBy: string | null;
+  lastSeenAt: string | null;
+}
+
+export interface UnresolvedEventsView {
+  byState: Record<EventState, number>;
+  total: number;
+  unresolved: number;
+  emailsWithUnresolved: number;
+  events: { event: EmailFinancialEvent; subject: string | null; sender: string | null }[];
+}
+
+export interface EmailManifest {
+  gmailMessageId: string;
+  subject: string | null;
+  sender: string | null;
+  emailStatus: string | null;
+  status: 'COMPLETE' | 'RECONCILIATION_REQUIRED' | 'NO_FINANCIAL_EVENTS' | 'FAILED';
+  attachmentsFound: number | null;
+  attachmentsProcessed: number | null;
+  attachmentNotes: string | null;
+  documentsDetected: number;
+  eventsDetected: number;
+  eventsImported: number;
+  eventsDuplicate: number;
+  eventsResolved: number;
+  eventsConflict: number;
+  eventsUnresolved: number;
+  openAttachments: string[];
+  events: EmailFinancialEvent[];
 }
 
 /** The one shape describing what a sync actually did — previously these figures were split
@@ -174,6 +246,12 @@ export const gmailApi = {
   // Persistent, queryable reconciliation report — see ReconciliationReportDto for why
   // `duplicates`/`reconciled` are nullable rather than defaulting to 0.
   getReconciliationReport: () => apiClient.get<ReconciliationReportDto>('/api/gmail/reconciliation-report'),
+  // Zero-missed ledger: every financial event found in email, and where it ended up.
+  getUnresolvedEvents: () => apiClient.get<UnresolvedEventsView>('/api/gmail/events/unresolved'),
+  getEmailManifest: (gmailMessageId: string) =>
+    apiClient.get<EmailManifest>(`/api/gmail/emails/${encodeURIComponent(gmailMessageId)}/manifest`),
+  resolveEvent: (id: number, note?: string) =>
+    apiClient.post<EmailFinancialEvent>(`/api/gmail/events/${id}/resolve`, { note }),
 };
 
 /* ── Async sync jobs ──────────────────────────────────────────────────────────────────────
@@ -181,7 +259,7 @@ export const gmailApi = {
    and the UI polls it. The old blocking POST /api/gmail/sync is kept for compatibility but
    should not be used for large windows.                                                   */
 
-export type SyncJobStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+export type SyncJobStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'PARTIAL_SUCCESS' | 'RECONCILIATION_REQUIRED' | 'FAILED' | 'CANCELLED';
 
 export interface SyncJob {
   id: number;

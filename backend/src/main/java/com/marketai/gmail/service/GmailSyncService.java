@@ -21,8 +21,6 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Orchestrates a Gmail sync. Every fetched email — with or without a PDF attachment — is handed
@@ -37,7 +35,9 @@ import java.util.concurrent.locks.ReentrantLock;
 public class GmailSyncService {
 
     private static final Logger log = LoggerFactory.getLogger(GmailSyncService.class);
-    private static final ConcurrentHashMap<Long, ReentrantLock> USER_SYNC_LOCKS = new ConcurrentHashMap<>();
+    /** Returned when the user's mailbox is already being synced; the job runner requeues on it
+     *  rather than counting it as a failed attempt. */
+    public static final String SYNC_IN_PROGRESS = "A sync is already in progress. Please wait for it to complete.";
 
     private final GmailTokenRepository tokenRepo;
     private final ProcessedEmailRepository processedRepo;
@@ -49,6 +49,12 @@ public class GmailSyncService {
     private final com.marketai.ai.review.service.EmailReviewService emailReviewService;
     private final EmailLLMParserService emailLlmParserService;
     private final com.marketai.document.classify.SubjectPatternStage subjectPatternStage;
+    private final com.marketai.sync.service.SyncLockService syncLockService;
+    private final com.marketai.gmail.ledger.FinancialEventLedger ledger;
+    private final com.marketai.gmail.ledger.EmailManifestService manifestService;
+
+    /** Beyond this a text attachment is not sent to the extractor (25 extraction calls); it is flagged instead. */
+    static final int MAX_TEXT_ATTACHMENT_CHARS = 200_000;
 
     // Sender domain, e.g. "no-reply@mstock.com" -> "mstock.com" — the key used to save/reuse
     // a statement password, since a given institution's statements always come from the same
@@ -75,15 +81,23 @@ public class GmailSyncService {
     }
 
     public GmailSyncResult syncForUser(Long userId, String lookbackPeriod) {
-        ReentrantLock lock = USER_SYNC_LOCKS.computeIfAbsent(userId, k -> new ReentrantLock());
-        if (!lock.tryLock()) {
+        return syncForUser(userId, lookbackPeriod, null);
+    }
+
+    /**
+     * @param beforeSync bookkeeping reset to run once the lock is held (see
+     *                   {@link GmailResyncResetService}) — never before, or a re-sync refused
+     *                   because another sync is running would still have wiped state
+     */
+    public GmailSyncResult syncForUser(Long userId, String lookbackPeriod, Runnable beforeSync) {
+        var lock = syncLockService.tryAcquire(userId);
+        if (lock.isEmpty()) {
             log.warn("Sync already in progress for user {} — skipping", userId);
-            return emptyResult("A sync is already in progress. Please wait for it to complete.");
+            return emptyResult(SYNC_IN_PROGRESS);
         }
-        try {
+        try (var held = lock.get()) {
+            if (beforeSync != null) beforeSync.run();
             return doSyncForUser(userId, lookbackPeriod, null);
-        } finally {
-            lock.unlock();
         }
     }
 
@@ -98,15 +112,13 @@ public class GmailSyncService {
         if (messageIds == null || messageIds.isEmpty()) {
             return emptyResult(null);
         }
-        ReentrantLock lock = USER_SYNC_LOCKS.computeIfAbsent(userId, k -> new ReentrantLock());
-        if (!lock.tryLock()) {
+        var lock = syncLockService.tryAcquire(userId);
+        if (lock.isEmpty()) {
             log.warn("Sync already in progress for user {} — skipping", userId);
-            return emptyResult("A sync is already in progress. Please wait for it to complete.");
+            return emptyResult(SYNC_IN_PROGRESS);
         }
-        try {
+        try (var held = lock.get()) {
             return doSyncForUser(userId, null, messageIds);
-        } finally {
-            lock.unlock();
         }
     }
 
@@ -126,7 +138,10 @@ public class GmailSyncService {
 
         int imported = 0, skipped = 0, failed = 0;
         int totalEmails = 0, totalAttachments = 0, totalTransactionsFound = 0, duplicatesSkipped = 0;
-        int queuedForReview = 0;
+        int queuedForReview = 0, conflicts = 0;
+        BOOKKEEPING_FAILURES.get()[0] = 0;
+        com.marketai.gmail.ledger.FinancialEventLedger.resetFailures();
+        LocalDateTime runStart = LocalDateTime.now();
         List<String> summaries = new ArrayList<>();
         List<GmailSyncResult.SyncLogEntry> logEntries = new ArrayList<>();
         List<String> actionItems = new ArrayList<>();
@@ -246,9 +261,11 @@ public class GmailSyncService {
                 // detail only present in the PDF, not the email body summary).
                 List<GmailClientService.PdfAttachmentRef> pdfRefs = gmailClient.findPdfAttachments(message);
                 boolean queuedPdf = false;
+                // Classified once per email: it serves both the password hint and the body's sender check.
+                EmailLLMParserService.Classification bodyClassification = null;
                 if (!pdfRefs.isEmpty()) {
                     totalAttachments += pdfRefs.size();
-                    steps.add("Found " + pdfRefs.size() + " PDF attachment(s)");
+                    steps.add("Found " + pdfRefs.size() + " document attachment(s)");
                     for (GmailClientService.PdfAttachmentRef pdf : pdfRefs) {
                         // Look up by filename, not attachmentId — Gmail can return a different
                         // attachmentId for the same physical attachment on repeated fetches,
@@ -256,7 +273,10 @@ public class GmailSyncService {
                         // fresh PendingPdf (and a fresh import attempt) on every resync.
                         PendingPdf existingPdf = pendingPdfRepo.findByUserIdAndGmailMessageIdAndFilename(userId, msgId, pdf.filename).orElse(null);
                         if (existingPdf != null) {
-                            if ("NEEDS_PASSWORD".equals(existingPdf.getStatus()) || "PASSWORD_FAILED".equals(existingPdf.getStatus()) || "FAILED".equals(existingPdf.getStatus())) {
+                            // A scan parked as unreadable is retried only once an image-capable model
+                            // is configured — otherwise it would be downloaded again every sync.
+                            boolean retryScan = "NEEDS_OCR".equals(existingPdf.getStatus()) && pdfImportService.canReadScans();
+                            if (retryScan || "NEEDS_PASSWORD".equals(existingPdf.getStatus()) || "PASSWORD_FAILED".equals(existingPdf.getStatus()) || "FAILED".equals(existingPdf.getStatus())) {
                                 steps.add("PDF " + pdf.filename + " — retrying (" + existingPdf.getStatus() + ")");
                                 try {
                                     pdfImportService.tryAutoUnlock(userId, existingPdf);
@@ -268,6 +288,7 @@ public class GmailSyncService {
                                     }
                                 } catch (Exception e) {
                                     steps.add("Auto-unlock retry failed: " + e.getMessage());
+                                    actionItems.add("Statement " + pdf.filename + " could not be opened on retry: " + e.getMessage());
                                 }
                             } else {
                                 steps.add("PDF " + pdf.filename + " already processed — skipping");
@@ -284,7 +305,10 @@ public class GmailSyncService {
                         // user's stored identity. A hint that doesn't map to a known strategy
                         // (see EmailLLMParserService#mapPasswordHint) is stored as null — fail
                         // safe, no password guess.
-                        EmailLLMParserService.Classification cls = emailLlmParserService.classify(from, subject, body);
+                        if (bodyClassification == null) {
+                            bodyClassification = emailLlmParserService.classify(userId, msgId, from, subject, body);
+                        }
+                        EmailLLMParserService.Classification cls = bodyClassification;
                         String hint = cls.passwordHintType() != null ? cls.passwordHintType().name()
                             : pdfImportService.findKnownHint(userId, providerKey);
 
@@ -319,6 +343,7 @@ public class GmailSyncService {
                         } catch (Exception e) {
                             steps.add("Auto-unlock error: " + e.getMessage());
                             log.warn("Auto-unlock attempt errored for pending {}: {}", savedPdf.getId(), e.getMessage());
+                            actionItems.add("Statement " + pdf.filename + " could not be opened: " + e.getMessage());
                         }
                         queuedPdf = true;
                     }
@@ -326,11 +351,77 @@ public class GmailSyncService {
 
                 // Single unconditional LLM extraction call for the email body — replaces the
                 // former 18-parser cascade plus the EmailIntelAgent/AiEmailExtractor fallbacks.
-                EmailLLMParserService.Classification bodyClassification = emailLlmParserService.classify(from, subject, body);
+                if (bodyClassification == null) {
+                    bodyClassification = emailLlmParserService.classify(userId, msgId, from, subject, body);
+                }
                 EmailLLMParserService.Result result = emailLlmParserService.process(
                     userId, user, from, subject, body, msgId, bodyClassification);
 
-                totalTransactionsFound += result.getImported() + result.getQueuedForReview() + result.getRejected();
+                // Every attachment is accounted for: PDFs and images went to the statement queue
+                // above; text attachments are read here like the body; anything else is named in
+                // the manifest, and flagged for a person when the email is a financial one.
+                List<GmailClientService.AttachmentInfo> attachments = gmailClient.listAttachments(message);
+                List<String> attachmentNotes = new ArrayList<>();
+                int attachmentsRead = pdfRefs.size();
+                boolean financialEmail = result.getOutcome() != EmailLLMParserService.Outcome.NOT_FINANCIAL
+                    || queuedPdf || emailLlmParserService.looksFinancial(from, subject, body);
+                int images = 0;
+                for (GmailClientService.AttachmentInfo att : attachments) {
+                    String attKey = "att:" + att.filename();
+                    switch (att.kind()) {
+                        case TEXT -> {
+                            try {
+                                byte[] bytes = gmailClient.downloadAttachment(gmail, msgId, att.attachmentId());
+                                String text = GmailClientService.attachmentText(bytes, att.filename(), att.mimeType());
+                                if (text.isBlank()) {
+                                    attachmentNotes.add(att.filename() + ": empty");
+                                    continue;
+                                }
+                                if (text.length() > MAX_TEXT_ATTACHMENT_CHARS) {
+                                    String why = att.filename() + " is too large to read automatically (" + text.length()
+                                        + " characters). Open it and add any transactions it lists by hand, then mark this resolved.";
+                                    attachmentNotes.add(att.filename() + ": too large to read automatically");
+                                    if (financialEmail) recordAttachmentProblem(userId, msgId, att, attKey, why);
+                                    continue;
+                                }
+                                EmailLLMParserService.Result read = emailLlmParserService.process(
+                                    userId, user, from, subject, text, msgId, bodyClassification,
+                                    EmailLLMParserService.attachmentItemIndexBase(att.filename()),
+                                    new EmailLLMParserService.SourceDoc(att.attachmentId(), att.filename(),
+                                        EmailLLMParserService.sha256(text), com.marketai.common.ledger.Provenance.ATTACHMENT_LLM));
+                                result = EmailLLMParserService.merge(result, read);
+                                attachmentsRead++;
+                                totalAttachments++;
+                                ledger.resolveIfOpen(userId, msgId, attKey, "Read on a later sync.");
+                                steps.add("Read attachment " + att.filename() + ": " + read.getExtracted() + " event(s)");
+                            } catch (Exception e) {
+                                // Retried with the email: marking the whole result incomplete keeps it open.
+                                String why = att.filename() + " could not be downloaded (" + e.getMessage() + ") — it will be retried on the next sync.";
+                                attachmentNotes.add(att.filename() + ": could not be downloaded");
+                                recordAttachmentProblem(userId, msgId, att, attKey, why);
+                                result = EmailLLMParserService.merge(result, EmailLLMParserService.Result.builder()
+                                    .outcome(EmailLLMParserService.Outcome.REVIEW).incomplete(true).detail(why).build());
+                            }
+                        }
+                        case UNSUPPORTED -> {
+                            attachmentNotes.add(att.label() + ": not read automatically");
+                            if (financialEmail) {
+                                recordAttachmentProblem(userId, msgId, att, attKey, att.label() + " could not be read automatically. "
+                                    + "Open it and add any transactions it lists by hand, then mark this resolved.");
+                            }
+                        }
+                        case NOT_A_DOCUMENT -> {
+                            if (att.mimeType() != null && att.mimeType().startsWith("image/")) images++;
+                            else attachmentNotes.add(att.filename() + ": not a financial document");
+                        }
+                        case DOCUMENT, INLINE_TEXT -> { }
+                    }
+                }
+                if (images > 0) attachmentNotes.add(images + " small or inline image(s) — logos and signatures, not documents");
+
+                totalTransactionsFound += result.getExtracted();
+                duplicatesSkipped += result.getDuplicates();
+                conflicts += result.getConflicts();
 
                 switch (result.getOutcome()) {
                     case IMPORTED -> {
@@ -340,7 +431,8 @@ public class GmailSyncService {
                         steps.add("LLM extraction: " + result.getImported() + " transaction(s) imported"
                             + (result.getQueuedForReview() > 0 ? ", " + result.getQueuedForReview() + " queued for review" : ""));
                         saveProcessed(userId, msgId, "IMPORTED", "IMPORTED",
-                            String.join("; ", result.getSummaries()), from, "EmailLLMParserService");
+                            String.join("; ", result.getSummaries()), from, "EmailLLMParserService",
+                            subject, EmailLLMParserService.countsOf(result));
                         logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                             .gmailMessageId(msgId).sender(from).subject(subject)
                             .matchedParser("EmailLLMParserService").status("IMPORTED")
@@ -355,7 +447,8 @@ public class GmailSyncService {
                         queuedForReview += result.getQueuedForReview();
                         steps.add("Sent to review queue: " + result.getDetail());
                         saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED",
-                            result.getDetail() != null ? result.getDetail() : "Queued for review", from, "EmailLLMParserService");
+                            result.getDetail() != null ? result.getDetail() : "Queued for review", from, "EmailLLMParserService",
+                            subject, EmailLLMParserService.countsOf(result));
                         logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                             .gmailMessageId(msgId).sender(from).subject(subject)
                             .matchedParser("EmailLLMParserService").status("REVIEW_REQUIRED")
@@ -364,15 +457,17 @@ public class GmailSyncService {
                     }
                     case NOT_FINANCIAL -> {
                         if (!queuedPdf) {
-                            String summary = "No transaction found in body and no PDF attachment: " + subject;
+                            String summary = (result.getDetail() != null && !"Model found no transactions".equals(result.getDetail())
+                                ? result.getDetail() : "Read in full; no financial transaction found") + ": " + subject;
                             steps.add(summary);
-                            saveProcessed(userId, msgId, NO_TRANSACTION, "SKIPPED", summary, from, null);
+                            saveProcessed(userId, msgId, NO_TRANSACTION, "SKIPPED", summary, from, null,
+                                subject, EmailLLMParserService.countsOf(result));
                             logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                                 .gmailMessageId(msgId).sender(from).subject(subject)
                                 .status("SKIPPED").detail(summary).pipelineSteps(steps).build());
                         } else {
                             String summary = "PDF queued for unlock: " + subject;
-                            saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED", summary, from, "PendingPdf");
+                            saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED", summary, from, "PendingPdf", subject, null);
                             logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                                 .gmailMessageId(msgId).sender(from).subject(subject)
                                 .matchedParser("PDF").status("PDF_QUEUED").detail(summary)
@@ -381,10 +476,12 @@ public class GmailSyncService {
                         skipped++;
                     }
                 }
+                manifestService.refresh(userId, msgId, attachments.size(), attachmentsRead, String.join("; ", attachmentNotes));
                 } catch (Exception e) {
                     log.error("Failed to process message {} for user {}: {}", msgId, userId, e.getMessage(), e);
                     failed++;
-                    saveProcessed(userId, msgId, "ERROR", "FAILED", "Sync error: " + e.getMessage(), null, null);
+                    saveProcessed(userId, msgId, "ERROR", "FAILED", "Sync error: " + e.getMessage(), null, null, null,
+                        com.marketai.gmail.entity.DocumentCounts.builder().outcome(com.marketai.gmail.entity.DocumentCounts.FAILED).build());
                     logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                         .gmailMessageId(msgId).status("FAILED").detail("Sync error: " + e.getMessage())
                         .build());
@@ -396,11 +493,12 @@ public class GmailSyncService {
             try {
                 int bulkUnlocked = pdfImportService.bulkAutoUnlock(userId);
                 if (bulkUnlocked > 0) {
+                    // Statements, not transactions: their lines are counted on each PendingPdf.
                     summaries.add("Auto-unlocked " + bulkUnlocked + " previously locked statement(s) using saved passwords");
-                    imported += bulkUnlocked;
                 }
             } catch (Exception e) {
                 log.warn("Bulk auto-unlock failed: {}", e.getMessage());
+                actionItems.add("Locked statements could not be retried this run: " + e.getMessage());
             }
 
             token.setLastSyncAt(LocalDateTime.now());
@@ -415,10 +513,51 @@ public class GmailSyncService {
         int pendingPdfs = 0;
         try {
             pendingPdfs = pdfImportService.list(userId).size();
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            log.warn("Could not count locked statements for user {}: {}", userId, e.getMessage());
+            actionItems.add("Could not check for statements still waiting for a password: " + e.getMessage());
+        }
         if (pendingPdfs > 0) {
             actionItems.add(pendingPdfs + " PDF attachment(s) still awaiting password unlock");
         }
+        int unsaved = BOOKKEEPING_FAILURES.get()[0];
+        if (unsaved > 0) {
+            actionItems.add(unsaved + " email(s) could not be marked as processed and will be read again next sync");
+        }
+        if (conflicts > 0) {
+            actionItems.add(conflicts + " transaction(s) quote a payment reference already recorded with different "
+                + "details — see the Reconciliation Center");
+        }
+        if (queuedForReview > 0) {
+            actionItems.add(queuedForReview + " item(s) waiting in the review queue");
+        }
+
+        // Coverage: every event read this run, and every one still open from before, must be
+        // accounted for before the run can call itself complete.
+        long eventsSeen = 0, unresolvedThisRun = 0, outstanding = 0;
+        boolean coverageKnown = true;
+        try {
+            var seen = ledger.seenSince(userId, runStart);
+            eventsSeen = seen.values().stream().mapToLong(Long::longValue).sum();
+            unresolvedThisRun = com.marketai.gmail.ledger.FinancialEventLedger.unresolvedIn(seen);
+            var coverage = ledger.coverage(userId);
+            outstanding = coverage.unresolved();
+            if (outstanding > 0) {
+                actionItems.add(outstanding + " financial event(s) in " + coverage.emailsWithUnresolved()
+                    + " email(s) are not yet accounted for — each is listed with its reason under "
+                    + "Reconciliation Center → Unresolved email events");
+            }
+        } catch (Exception e) {
+            coverageKnown = false;
+            log.warn("Coverage check failed for user {}: {}", userId, e.getMessage());
+            actionItems.add("Could not check that every financial event was accounted for: " + e.getMessage());
+        }
+        int ledgerFailures = com.marketai.gmail.ledger.FinancialEventLedger.failures();
+        if (ledgerFailures > 0) {
+            actionItems.add(ledgerFailures + " event record(s) could not be saved to the import ledger — the emails "
+                + "concerned will be checked again next sync");
+        }
+        boolean complete = failed == 0 && syncError == null && actionItems.isEmpty() && coverageKnown && outstanding == 0;
 
         GmailSyncResult.ReconciliationReport reconciliation = GmailSyncResult.ReconciliationReport.builder()
             .emailsProcessed(totalEmails)
@@ -428,7 +567,13 @@ public class GmailSyncService {
             .duplicatesSkipped(duplicatesSkipped)
             .failedImports(failed)
             .pdfsPending(pendingPdfs)
-            .status(failed == 0 && pendingPdfs == 0 && syncError == null ? "OK" : "ACTION_REQUIRED")
+            .status(complete ? "OK" : "ACTION_REQUIRED")
+            .headline(syncError != null ? "⚠ Sync stopped before finishing"
+                : complete ? "✓ Sync Complete" : "⚠ Sync completed with reconciliation required")
+            .eventsSeen(eventsSeen)
+            .eventsAccounted(eventsSeen - unresolvedThisRun)
+            .eventsUnresolved(unresolvedThisRun)
+            .outstandingUnresolved(outstanding)
             .actionItems(actionItems)
             .build();
 
@@ -466,9 +611,30 @@ public class GmailSyncService {
         });
     }
 
+    private void recordAttachmentProblem(Long userId, String msgId, GmailClientService.AttachmentInfo att,
+                                         String key, String reason) {
+        ledger.record(com.marketai.gmail.ledger.EmailFinancialEvent.builder()
+            .userId(userId).gmailMessageId(msgId).eventKey(key)
+            .sourceKind(com.marketai.gmail.ledger.EmailFinancialEvent.EMAIL)
+            .attachmentId(att.attachmentId()).attachmentName(att.filename())
+            .eventType("ATTACHMENT").state(com.marketai.gmail.ledger.EventState.RECONCILIATION_REQUIRED)
+            .reason(reason).validationStatus("NOT_CHECKED").dedupStatus("NOT_CHECKED")
+            .extractedAt(LocalDateTime.now())
+            .build());
+    }
+
     // Upsert, not insert: a retried FAILED email already has a row, and (user_id,
     // gmail_message_id) is unique — a blind insert would throw and lose the new outcome.
     private void saveProcessed(Long userId, String msgId, String type, String status, String summary, String sender, String matchedParser) {
+        saveProcessed(userId, msgId, type, status, summary, sender, matchedParser, null, null);
+    }
+
+    /**
+     * @return false when the row could not be written — the email will simply be read again next
+     *         time, but the caller records it so the run doesn't report a clean result
+     */
+    private boolean saveProcessed(Long userId, String msgId, String type, String status, String summary, String sender,
+                                  String matchedParser, String subject, com.marketai.gmail.entity.DocumentCounts counts) {
         try {
             ProcessedEmail row = processedRepo.findByUserIdAndGmailMessageId(userId, msgId)
                 .orElseGet(() -> ProcessedEmail.builder().userId(userId).gmailMessageId(msgId).build());
@@ -478,9 +644,18 @@ public class GmailSyncService {
             row.setSender(sender != null && sender.length() > 320 ? sender.substring(0, 320) : sender);
             row.setResultSummary(summary != null && summary.length() > 900 ? summary.substring(0, 900) : summary);
             row.setProcessedAt(LocalDateTime.now());
+            if (subject != null) row.setSubject(subject.length() > 500 ? subject.substring(0, 500) : subject);
+            if (counts != null) row.setCounts(counts);
             processedRepo.save(row);
+            return true;
         } catch (Exception e) {
             log.warn("Failed to save ProcessedEmail for message {}: {}", msgId, e.getMessage());
+            BOOKKEEPING_FAILURES.get()[0]++;
+            return false;
         }
     }
+
+    /** ProcessedEmail writes that failed during the current run on this thread (a run is one
+     *  thread from start to finish), reported as an action item. */
+    private static final ThreadLocal<int[]> BOOKKEEPING_FAILURES = ThreadLocal.withInitial(() -> new int[1]);
 }

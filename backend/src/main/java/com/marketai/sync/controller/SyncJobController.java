@@ -46,7 +46,7 @@ public class SyncJobController {
         private LocalDateTime startedAt;
         private LocalDateTime finishedAt;
 
-        static SyncJobDto from(SyncJob j) {
+        public static SyncJobDto from(SyncJob j) {
             return SyncJobDto.builder()
                 .id(j.getId())
                 .type(j.getType().name())

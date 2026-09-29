@@ -25,6 +25,11 @@ export interface PlannedInvestmentResponse {
   remainingAmount: number;
   overInvestedAmount: number;
   completionPercent: number;
+  /** PLANNED → FUNDED (sent to broker/AMC, not all invested) → INVESTED (below plan) → SETTLED. */
+  stage?: 'PLANNED' | 'FUNDED' | 'INVESTED' | 'SETTLED';
+  fundedAmount?: number;
+  investedAmount?: number;
+  awaitingInvestment?: number;
 }
 
 export interface MonthlyPlanReviewResponse {
@@ -34,6 +39,9 @@ export interface MonthlyPlanReviewResponse {
   totalPending: number;
   totalOverInvested: number;
   completionRate: number;
+  totalFunded?: number;
+  totalInvested?: number;
+  totalAwaitingInvestment?: number;
   completed: PlannedInvestmentResponse[];
   pending: PlannedInvestmentResponse[];
   overInvested: PlannedInvestmentResponse[];

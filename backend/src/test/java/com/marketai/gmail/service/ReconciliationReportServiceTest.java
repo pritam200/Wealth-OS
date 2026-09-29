@@ -160,17 +160,20 @@ class ReconciliationReportServiceTest {
     void detailRowsIncludeFailedPdfsTracedByFilenameAndSortedMostRecentFirst() {
         List<PendingPdf> pdfs = Arrays.asList(
             pdf("p1", "FAILED", "contract-note-jan.pdf", "no-reply@zerodha.com", "Could not read PDF"),
-            pdf("p2", "PASSWORD_FAILED", "statement-feb.pdf", "no-reply@mstock.com", "Saved password failed")
+            pdf("p2", "PASSWORD_FAILED", "statement-feb.pdf", "no-reply@mstock.com", "Saved password failed"),
+            pdf("p3", "NEEDS_OCR", "scan-mar.pdf", "no-reply@sbi.co.in", "Scanned image")
         );
         when(pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(
-            eq(USER_ID), eq(Arrays.asList("FAILED", "PASSWORD_FAILED"))))
+            eq(USER_ID), eq(Arrays.asList("FAILED", "PASSWORD_FAILED", "NEEDS_OCR"))))
             .thenReturn(pdfs);
 
         ReconciliationReportDto report = service.build(USER_ID);
 
-        assertThat(report.getDetails()).hasSize(2);
+        assertThat(report.getDetails()).hasSize(3);
+        assertThat(report.getDetails()).extracting(ReconciliationReportDto.DetailRow::getStatus)
+            .containsExactlyInAnyOrder("Failed", "Password failed", "Scanned — unreadable");
         assertThat(report.getDetails()).allMatch(d -> "PDF".equals(d.getSource()));
         assertThat(report.getDetails()).extracting(ReconciliationReportDto.DetailRow::getSubject)
-            .containsExactlyInAnyOrder("contract-note-jan.pdf", "statement-feb.pdf");
+            .containsExactlyInAnyOrder("contract-note-jan.pdf", "statement-feb.pdf", "scan-mar.pdf");
     }
 }

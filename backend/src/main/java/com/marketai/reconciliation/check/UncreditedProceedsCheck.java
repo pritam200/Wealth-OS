@@ -69,6 +69,9 @@ public class UncreditedProceedsCheck implements ReconciliationCheck {
 
         for (Transaction t : transactionRepository.findRecentSales(userId, since)) {
             if (t.getPrice() == null || t.getQuantity() == null) continue;
+            // The redemption leg of a fund switch went straight into the other scheme; no cash
+            // was released, so there is nothing that should have been credited.
+            if (isSwitchLeg(t)) continue;
             proceeds = proceeds.add(t.getPrice().multiply(t.getQuantity()));
             disposals++;
         }
@@ -114,6 +117,11 @@ public class UncreditedProceedsCheck implements ReconciliationCheck {
                 disposals, WINDOW_DAYS, strip(proceeds), strip(credited), strip(gap)))
             .build());
         return issues;
+    }
+
+    public static boolean isSwitchLeg(Transaction t) {
+        String g = t.getProvenance() != null ? t.getProvenance().getLinkGroup() : null;
+        return g != null && g.startsWith("SWITCH");
     }
 
     private static String strip(BigDecimal v) {

@@ -17,6 +17,9 @@ public class MonthlyPlanReviewResponse {
     private BigDecimal totalPending;
     private BigDecimal totalOverInvested;
     private double completionRate; // 0-100
+    private BigDecimal totalFunded;              // sent to brokers/AMCs/banks for this month's lines
+    private BigDecimal totalInvested;            // actually invested
+    private BigDecimal totalAwaitingInvestment;  // funded, not yet invested
     private List<PlannedInvestmentResponse> completed;
     private List<PlannedInvestmentResponse> pending;
     private List<PlannedInvestmentResponse> overInvested;

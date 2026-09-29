@@ -43,3 +43,6 @@ docs/_build/
 # Production secrets and backups (deploy/)
 deploy/.env
 deploy/backups/
+
+# Claude Code scratch worktrees
+.claude/worktrees/

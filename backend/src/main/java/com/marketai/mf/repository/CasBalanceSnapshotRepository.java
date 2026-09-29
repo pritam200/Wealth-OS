@@ -17,4 +17,9 @@ public interface CasBalanceSnapshotRepository extends JpaRepository<CasBalanceSn
     /** Most recent statement for a folio+scheme pair, when the scheme code did resolve. */
     Optional<CasBalanceSnapshot> findTopByUserIdAndFolioAndSchemeCodeOrderByAsOfDateDesc(
             Long userId, String folio, String schemeCode);
+
+    /** Whether this statement's balance for the folio/scheme on that date is already recorded
+     *  (a null scheme code matches rows with no scheme code). */
+    boolean existsByUserIdAndFolioAndSchemeCodeAndAsOfDate(Long userId, String folio, String schemeCode,
+                                                           java.time.LocalDate asOfDate);
 }

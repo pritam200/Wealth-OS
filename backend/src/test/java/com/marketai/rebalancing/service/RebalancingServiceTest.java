@@ -50,7 +50,7 @@ class RebalancingServiceTest {
 
         when(otherAssetRepository.findByUserIdOrderByCreatedAtDesc(anyLong())).thenReturn(Collections.emptyList());
         when(stockRepository.findBySymbol(anyString())).thenReturn(Optional.empty());
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(anyLong())).thenReturn(Collections.emptyList());
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(anyLong())).thenReturn(Collections.emptyList());
     }
 
     private Holding stock(long id, String symbol, double qty, double avgCost, double price) {
@@ -99,7 +99,7 @@ class RebalancingServiceTest {
             List.of(flag), List.of());
         when(portfolioContextService.build(USER)).thenReturn(ctx);
 
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(1L))
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(1L))
             .thenReturn(List.of(buy(bigco, LocalDate.of(2024, 1, 1), 900, 100)));
 
         RebalancingSuggestionsResponse resp = service.build(USER);
@@ -158,7 +158,7 @@ class RebalancingServiceTest {
             List.of(flag), List.of(sectorExposure));
         when(portfolioContextService.build(USER)).thenReturn(ctx);
 
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(4L))
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(4L))
             .thenReturn(List.of(buy(weak, LocalDate.of(2024, 1, 1), 100, 100)));
 
         RebalancingSuggestionsResponse resp = service.build(USER);
@@ -177,7 +177,7 @@ class RebalancingServiceTest {
         when(portfolioContextService.getAllHoldings(USER)).thenReturn(List.of(h));
 
         // Bought long ago at 100; selling now at 200 is a clean long-term gain per unit of 100.
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(5L))
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(5L))
             .thenReturn(List.of(buy(h, LocalDate.of(2020, 1, 1), 1000, 100)));
 
         PortfolioContext.Flag flag = PortfolioContext.Flag.builder()
@@ -203,7 +203,7 @@ class RebalancingServiceTest {
     void noTaxFigureWithoutTransactionHistory() {
         Holding h = stock(6L, "NOTXN.NS", 900, 100, 100);
         when(portfolioContextService.getAllHoldings(USER)).thenReturn(List.of(h));
-        when(transactionRepository.findByHoldingIdOrderByTransactionDateAsc(6L)).thenReturn(Collections.emptyList());
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(6L)).thenReturn(Collections.emptyList());
 
         PortfolioContext.Flag flag = PortfolioContext.Flag.builder()
             .type("SINGLE_STOCK").label("NOTXN").percent(90.0).severity("HIGH").message("x").build();

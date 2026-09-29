@@ -16,6 +16,9 @@ public interface MfNavHistoryRepository extends JpaRepository<MfNavHistory, Long
     /** Most recent stored NAV for a scheme — the value that should back a holding's current price. */
     Optional<MfNavHistory> findTopBySchemeCodeOrderByDateDesc(String schemeCode);
 
+    /** The two latest stored NAVs — what moved a fund's value since the previous one. */
+    List<MfNavHistory> findTop2BySchemeCodeOrderByDateDesc(String schemeCode);
+
     List<MfNavHistory> findBySchemeCodeAndDateBetweenOrderByDateAsc(
             String schemeCode, LocalDate from, LocalDate to);
 
