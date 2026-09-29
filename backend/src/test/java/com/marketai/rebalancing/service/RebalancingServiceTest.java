@@ -250,4 +250,16 @@ class RebalancingServiceTest {
 
         assertThat(resp.getScopeNote()).contains("not a target-allocation rebalancer");
     }
+
+    @org.junit.jupiter.api.Test
+    void trimSizeActuallyBringsThePositionDownToTheGuideline() {
+        // ₹40k stock in a ₹100k equity book, 25% guideline: selling ₹20k leaves ₹20k of ₹80k = 25%.
+        java.math.BigDecimal sell = RebalancingService.sellToReachShare(
+            new java.math.BigDecimal("40000"), new java.math.BigDecimal("100000"), new java.math.BigDecimal("25"));
+        org.assertj.core.api.Assertions.assertThat(sell).isEqualByComparingTo("20000.00");
+        java.math.BigDecimal remaining = new java.math.BigDecimal("40000").subtract(sell);
+        java.math.BigDecimal book = new java.math.BigDecimal("100000").subtract(sell);
+        org.assertj.core.api.Assertions.assertThat(remaining.divide(book, 4, java.math.RoundingMode.HALF_UP))
+            .isEqualByComparingTo("0.2500");
+    }
 }

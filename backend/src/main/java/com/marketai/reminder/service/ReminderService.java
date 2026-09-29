@@ -118,18 +118,19 @@ public class ReminderService {
 
         // Insurance premiums (next due date within 15 days or already overdue) — same
         // due-date-lookahead shape as the other blocks above, keyed off the stored
-        // nextPremiumDueDate rather than a derived schedule since premium dates are bank/
-        // insurer-set and don't follow a fixed cadence off the policy start date.
+        // nextPremiumDueDate (insurer-set), rolled forward by the premium frequency once a due
+        // date is past the grace period, and skipped once the policy's end date has passed.
         insuranceRepo.findByUserIdOrderByCreatedAtDesc(userId).forEach(p -> {
-            if (p.getNextPremiumDueDate() == null) return;
             if (!"ACTIVE".equalsIgnoreCase(p.getStatus() == null ? "ACTIVE" : p.getStatus())) return;
-            long d = ChronoUnit.DAYS.between(today, p.getNextPremiumDueDate());
+            LocalDate due = p.nextDueDateAsOf(today);
+            if (due == null) return;
+            long d = ChronoUnit.DAYS.between(today, due);
             if (d <= 15) {
                 out.add(ReminderResponse.builder()
                     .type("INSURANCE_PREMIUM")
                     .title("Premium due — " + p.getInsurer())
                     .subtitle(p.getPolicyType() + " · ₹" + strip(p.getPremiumAmount()) + " " + p.getPremiumFrequency())
-                    .dueDate(p.getNextPremiumDueDate()).daysUntil(d)
+                    .dueDate(due).daysUntil(d)
                     .amount(p.getPremiumAmount()).severity(sev(d)).build());
             }
         });

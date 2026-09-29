@@ -51,6 +51,19 @@ public class CashFlowForecastService {
     private final RecurringInvestmentRepository recurringInvestmentRepository;
     private final FixedDepositRepository fixedDepositRepository;
     private final RecurringDepositRepository recurringDepositRepository;
+    private final com.marketai.rent.repository.RentScheduleRepository rentScheduleRepository;
+    private final com.marketai.rent.repository.RentRepository rentRepository;
+
+    /** Income that genuinely repeats month to month. Bonuses, sale proceeds, capital gains,
+     *  dividends and "other" credits are one-offs: two in a quarter doesn't make them monthly,
+     *  and projecting them every month overstated future cash by the full amount each month. */
+    private static final java.util.Set<IncomeSource> RECURRING_INCOME = java.util.EnumSet.of(
+        IncomeSource.SALARY, IncomeSource.RENTAL, IncomeSource.INTEREST,
+        IncomeSource.FREELANCE, IncomeSource.BUSINESS);
+
+    /** Floor on the run-rate window. A brand-new account with a few days of history would
+     *  otherwise extrapolate one large purchase into a daily habit. */
+    private static final int MIN_RUN_RATE_DAYS = 30;
 
     @Transactional(readOnly = true)
     public List<DailyProjection> forecast(Long userId, int daysAhead) {
@@ -68,6 +81,7 @@ public class CashFlowForecastService {
         addSipDebits(userId, today, end, byDate);
         addFdMaturities(userId, today, end, byDate);
         addRdMaturities(userId, today, end, byDate);
+        addRent(userId, today, end, byDate);
 
         List<DailyProjection> out = new ArrayList<>();
         BigDecimal running = startingBalance;
@@ -94,6 +108,7 @@ public class CashFlowForecastService {
         for (Income i : history) bySource.computeIfAbsent(i.getSource(), k -> new ArrayList<>()).add(i);
 
         for (Map.Entry<IncomeSource, List<Income>> entry : bySource.entrySet()) {
+            if (!RECURRING_INCOME.contains(entry.getKey())) continue;
             List<Income> rows = entry.getValue();
             if (rows.size() < MIN_OCCURRENCES_FOR_RECURRING_INCOME) continue;
 
@@ -116,7 +131,13 @@ public class CashFlowForecastService {
     private void addExpenseRunRate(Long userId, LocalDate today, LocalDate end, Map<LocalDate, List<ProjectedEvent>> byDate) {
         LocalDate historyStart = today.minusMonths(HISTORY_MONTHS);
         List<Expense> history = expenseRepository.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(userId, historyStart, today);
-        long historyDays = Math.max(1, ChronoUnit.DAYS.between(historyStart, today));
+        // Divide by the span the history actually covers — the full 3-month window diluted the
+        // rate for anyone whose records start more recently (a new account, a new family member).
+        LocalDate earliest = history.stream().map(Expense::getExpenseDate).filter(d -> d != null)
+            .min(LocalDate::compareTo).orElse(historyStart);
+        long coveredDays = ChronoUnit.DAYS.between(earliest, today) + 1;
+        long historyDays = Math.min(ChronoUnit.DAYS.between(historyStart, today),
+            Math.max(MIN_RUN_RATE_DAYS, coveredDays));
 
         Map<ExpenseCategory, BigDecimal> totalsByCategory = new LinkedHashMap<>();
         for (Expense e : history) {
@@ -143,19 +164,45 @@ public class CashFlowForecastService {
         for (RecurringInvestment ri : recurringInvestmentRepository.findByUserIdOrderByCreatedAtDesc(userId)) {
             if (!"ACTIVE".equals(ri.getStatus())) continue;
 
-            LocalDate scheduleEnd = ri.getTenureMonths() != null
-                ? ri.getStartDate().plusMonths(ri.getTenureMonths())
-                : end;
-            LocalDate windowEnd = scheduleEnd.isBefore(end) ? scheduleEnd : end;
+            if (ri.getStartDate() == null || ri.getAmount() == null) continue;
 
-            for (LocalDate due = firstOccurrenceAfter(ri.getStartDate(), today);
-                 !due.isAfter(windowEnd);
-                 due = due.plusMonths(1)) {
+            // Instalment k is always start.plusMonths(k), computed from the anchor each time:
+            // stepping due = due.plusMonths(1) clamped a 29th–31st SIP to the 28th after February
+            // and kept it there. A tenure of n months means instalments k = 0 … n-1.
+            int maxInstalments = ri.getTenureMonths() != null ? ri.getTenureMonths() : Integer.MAX_VALUE;
+            for (int k = 0; k < maxInstalments; k++) {
+                LocalDate due = ri.getStartDate().plusMonths(k);
+                if (due.isAfter(end)) break;
                 if (due.isBefore(today.plusDays(1))) continue;
                 add(byDate, due, ProjectedEvent.builder()
                     .label(ri.getLabel() + " (" + ri.getType() + ")")
                     .amount(ri.getAmount().negate())
                     .type("SIP")
+                    .estimated(false)
+                    .build());
+            }
+        }
+    }
+
+    /* ── Rent (known — explicit monthly schedule) ──────────────────────────────────────────
+       Rent payments are booked to the Rent ledger, not as Expense rows, so the expense run-rate
+       never sees them; without this block a ₹31,000/month rent was simply missing. A month
+       already marked paid for the schedule is skipped. */
+
+    private void addRent(Long userId, LocalDate today, LocalDate end, Map<LocalDate, List<ProjectedEvent>> byDate) {
+        for (com.marketai.rent.entity.RentSchedule rs : rentScheduleRepository.findByUserIdAndActiveTrue(userId)) {
+            if (rs.getAmount() == null || rs.getDueDayOfMonth() == null) continue;
+            int day = Math.max(1, Math.min(31, rs.getDueDayOfMonth()));
+            for (LocalDate monthStart = today.withDayOfMonth(1); !monthStart.isAfter(end); monthStart = monthStart.plusMonths(1)) {
+                LocalDate due = monthStart.withDayOfMonth(Math.min(day, monthStart.lengthOfMonth()));
+                if (due.isBefore(today.plusDays(1)) || due.isAfter(end)) continue;
+                boolean paid = rentRepository.findByUserIdAndMonthAndScheduleId(userId, monthStart, rs.getId())
+                    .map(r -> r.getPaidDate() != null).orElse(false);
+                if (paid) continue;
+                add(byDate, due, ProjectedEvent.builder()
+                    .label("Rent" + (rs.getPaidTo() != null ? " — " + rs.getPaidTo() : ""))
+                    .amount(rs.getAmount().negate())
+                    .type("RENT")
                     .estimated(false)
                     .build());
             }
@@ -235,14 +282,6 @@ public class CashFlowForecastService {
             candidate = LocalDate.of(next.getYear(), next.getMonthValue(), Math.min(dayOfMonth, next.lengthOfMonth()));
         }
         return candidate;
-    }
-
-    /** First occurrence of a monthly schedule anchored at {@code startDate} that falls on or
-     *  after {@code from} — same "anchor day, clamped to month length" rule as above. */
-    private LocalDate firstOccurrenceAfter(LocalDate startDate, LocalDate from) {
-        int anchorDay = startDate.getDayOfMonth();
-        if (!startDate.isBefore(from)) return startDate;
-        return nextOccurrenceOnOrAfter(from, anchorDay);
     }
 
     private static void add(Map<LocalDate, List<ProjectedEvent>> byDate, LocalDate date, ProjectedEvent event) {

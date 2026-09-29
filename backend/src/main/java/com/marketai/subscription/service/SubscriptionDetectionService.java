@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -40,6 +41,10 @@ public class SubscriptionDetectionService {
     private final ExpenseRepository expenseRepository;
 
     public List<SubscriptionResponse> detectSubscriptions(Long userId) {
+        return detectSubscriptions(userId, LocalDate.now());
+    }
+
+    List<SubscriptionResponse> detectSubscriptions(Long userId, LocalDate today) {
         List<Expense> expenses = expenseRepository.findByUserIdOrderByExpenseDateAsc(userId);
 
         Map<String, List<Expense>> byMerchant = new LinkedHashMap<>();
@@ -55,27 +60,31 @@ public class SubscriptionDetectionService {
 
         List<SubscriptionResponse> out = new ArrayList<>();
         for (List<Expense> group : byMerchant.values()) {
-            detectForMerchant(group).ifPresent(out::add);
+            detectForMerchant(group, today).ifPresent(out::add);
         }
         out.sort(Comparator.comparing(SubscriptionResponse::getLastSeenDate).reversed());
         return out;
     }
 
-    private Optional<SubscriptionResponse> detectForMerchant(List<Expense> sortedAsc) {
+    private Optional<SubscriptionResponse> detectForMerchant(List<Expense> sortedAsc, LocalDate today) {
         if (sortedAsc.size() < MIN_OCCURRENCES) return Optional.empty();
 
         // Checked most-common-first purely so a fund with weirdly-close-to-monthly weekly
         // charges doesn't get misclassified — MONTHLY's wider window is tried first.
         for (SubscriptionCadence cadence : new SubscriptionCadence[]{SubscriptionCadence.MONTHLY, SubscriptionCadence.WEEKLY, SubscriptionCadence.ANNUAL}) {
-            Optional<SubscriptionResponse> found = detectForCadence(sortedAsc, cadence);
+            Optional<SubscriptionResponse> found = detectForCadence(sortedAsc, cadence, today);
             if (found.isPresent()) return found;
         }
         return Optional.empty();
     }
 
-    private Optional<SubscriptionResponse> detectForCadence(List<Expense> sortedAsc, SubscriptionCadence cadence) {
+    private Optional<SubscriptionResponse> detectForCadence(List<Expense> sortedAsc, SubscriptionCadence cadence, LocalDate today) {
         List<Expense> run = longestTrailingRun(sortedAsc, cadence);
         if (run.size() < MIN_OCCURRENCES) return Optional.empty();
+
+        // Two missed cycles in a row means it was cancelled — don't list it as still running.
+        long sinceLast = ChronoUnit.DAYS.between(run.get(run.size() - 1).getExpenseDate(), today);
+        if (sinceLast > 2 * maxGapDays(cadence)) return Optional.empty();
 
         BigDecimal last = run.get(run.size() - 1).getAmount();
         BigDecimal baseline = average(run.subList(0, run.size() - 1));
@@ -118,12 +127,15 @@ public class SubscriptionDetectionService {
     }
 
     private boolean inRange(long gapDays, SubscriptionCadence cadence) {
-        switch (cadence) {
-            case WEEKLY: return gapDays >= 5 && gapDays <= 9;
-            case MONTHLY: return gapDays >= 25 && gapDays <= 35;
-            case ANNUAL: return gapDays >= 350 && gapDays <= 380;
-            default: return false;
-        }
+        return gapDays >= minGapDays(cadence) && gapDays <= maxGapDays(cadence);
+    }
+
+    private static long minGapDays(SubscriptionCadence cadence) {
+        return switch (cadence) { case WEEKLY -> 5; case MONTHLY -> 25; case ANNUAL -> 350; };
+    }
+
+    private static long maxGapDays(SubscriptionCadence cadence) {
+        return switch (cadence) { case WEEKLY -> 9; case MONTHLY -> 35; case ANNUAL -> 380; };
     }
 
     private boolean withinTolerance(BigDecimal amount, BigDecimal baseline) {

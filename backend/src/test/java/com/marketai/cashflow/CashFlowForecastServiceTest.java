@@ -39,6 +39,8 @@ class CashFlowForecastServiceTest {
     private RecurringInvestmentRepository recurringInvestments;
     private FixedDepositRepository fixedDeposits;
     private RecurringDepositRepository recurringDeposits;
+    private com.marketai.rent.repository.RentScheduleRepository rentSchedules;
+    private com.marketai.rent.repository.RentRepository rents;
     private CashFlowForecastService service;
 
     private static BigDecimal bd(String s) { return new BigDecimal(s); }
@@ -51,8 +53,11 @@ class CashFlowForecastServiceTest {
         recurringInvestments = mock(RecurringInvestmentRepository.class);
         fixedDeposits = mock(FixedDepositRepository.class);
         recurringDeposits = mock(RecurringDepositRepository.class);
+        rentSchedules = mock(com.marketai.rent.repository.RentScheduleRepository.class);
+        rents = mock(com.marketai.rent.repository.RentRepository.class);
         service = new CashFlowForecastService(
-            cashAccounts, incomes, expenses, recurringInvestments, fixedDeposits, recurringDeposits);
+            cashAccounts, incomes, expenses, recurringInvestments, fixedDeposits, recurringDeposits,
+            rentSchedules, rents);
 
         when(cashAccounts.sumBalanceByUser(USER)).thenReturn(bd("100000"));
         when(incomes.findByUserIdAndIncomeDateBetweenOrderByIncomeDateDesc(eq(USER), any(), any()))
@@ -190,5 +195,82 @@ class CashFlowForecastServiceTest {
         assertThat(anyIncomeEvent).isFalse();
         // With no events at all, the balance simply stays flat at the starting cash figure.
         assertThat(forecast.get(forecast.size() - 1).getProjectedBalance()).isEqualByComparingTo("100000.00");
+    }
+
+    @Test
+    void sipOnThe31stDoesNotDriftToThe28thAfterFebruary() {
+        // Anchor well in the past on a 31st; every later month with 31 days must debit on the 31st.
+        RecurringInvestment sip = RecurringInvestment.builder()
+            .id(2L).type(RecurringInvestment.Type.SIP).label("Nifty Index")
+            .amount(bd("1000")).startDate(LocalDate.of(2025, 1, 31)).status("ACTIVE").build();
+        when(recurringInvestments.findByUserIdOrderByCreatedAtDesc(USER)).thenReturn(List.of(sip));
+
+        List<DailyProjection> forecast = service.forecast(USER, 400);
+
+        List<LocalDate> sipDates = forecast.stream()
+            .filter(d -> d.getEvents().stream().anyMatch(e -> "SIP".equals(e.getType())))
+            .map(DailyProjection::getDate).toList();
+        assertThat(sipDates).isNotEmpty();
+        assertThat(sipDates).allSatisfy(d -> assertThat(d.getDayOfMonth()).isEqualTo(d.lengthOfMonth()));
+    }
+
+    @Test
+    void aFixedTenureSipStopsAfterItsLastInstalment() {
+        LocalDate start = LocalDate.now().plusDays(1);
+        RecurringInvestment sip = RecurringInvestment.builder()
+            .id(3L).type(RecurringInvestment.Type.SIP).label("Short SIP")
+            .amount(bd("1000")).startDate(start).tenureMonths(3).status("ACTIVE").build();
+        when(recurringInvestments.findByUserIdOrderByCreatedAtDesc(USER)).thenReturn(List.of(sip));
+
+        long debits = service.forecast(USER, 200).stream()
+            .flatMap(d -> d.getEvents().stream()).filter(e -> "SIP".equals(e.getType())).count();
+
+        assertThat(debits).isEqualTo(3);
+    }
+
+    @Test
+    void rentFromTheScheduleIsProjected() {
+        LocalDate today = LocalDate.now();
+        com.marketai.rent.entity.RentSchedule rs = com.marketai.rent.entity.RentSchedule.builder()
+            .id(9L).userId(USER).amount(bd("31000")).dueDayOfMonth(5).paidTo("Landlord").active(true).build();
+        when(rentSchedules.findByUserIdAndActiveTrue(USER)).thenReturn(List.of(rs));
+        when(rents.findByUserIdAndMonthAndScheduleId(any(), any(), any())).thenReturn(java.util.Optional.empty());
+
+        List<DailyProjection> forecast = service.forecast(USER, 70);
+
+        long rentEvents = forecast.stream().flatMap(d -> d.getEvents().stream())
+            .filter(e -> "RENT".equals(e.getType())).count();
+        assertThat(rentEvents).isGreaterThanOrEqualTo(2);
+        assertThat(forecast.get(forecast.size() - 1).getProjectedBalance())
+            .isLessThanOrEqualTo(bd("100000").subtract(bd("31000").multiply(BigDecimal.valueOf(rentEvents))));
+    }
+
+    @Test
+    void oneOffIncomeIsNotProjectedAsMonthly() {
+        LocalDate today = LocalDate.now();
+        when(incomes.findByUserIdAndIncomeDateBetweenOrderByIncomeDateDesc(eq(USER), any(), any()))
+            .thenReturn(List.of(
+                income(today.minusDays(20), "150000", IncomeSource.UNMATCHED_SALE),
+                income(today.minusDays(50), "150000", IncomeSource.UNMATCHED_SALE),
+                income(today.minusDays(10), "50000", IncomeSource.BONUS),
+                income(today.minusDays(70), "50000", IncomeSource.BONUS)));
+
+        boolean anyIncome = service.forecast(USER, 90).stream()
+            .flatMap(d -> d.getEvents().stream()).anyMatch(e -> "INCOME".equals(e.getType()));
+
+        assertThat(anyIncome).isFalse();
+    }
+
+    @Test
+    void shortHistoryIsNotDilutedAcrossTheWholeWindow() {
+        LocalDate today = LocalDate.now();
+        // ₹3,000 over the last 30 days (a fresh account): the rate is ₹100/day, not ₹3,000/92.
+        when(expenses.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(eq(USER), any(), any()))
+            .thenReturn(List.of(expense(today.minusDays(29), "3000", ExpenseCategory.GROCERIES)));
+
+        ProjectedEvent daily = service.forecast(USER, 2).get(1).getEvents().stream()
+            .filter(e -> "EXPENSE".equals(e.getType())).findFirst().orElseThrow();
+
+        assertThat(daily.getAmount().negate()).isEqualByComparingTo("100.0000");
     }
 }

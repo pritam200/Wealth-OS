@@ -163,22 +163,25 @@ public class RebalancingService {
         Double pctOfAssets = pct(currentValue, totalAssets);
         Double pctOfEquity = pct(currentValue, equityValue);
 
-        BigDecimal target;
+        BigDecimal excessValue;
         String basis;
         Double currentPercent;
         if (pctOfAssets != null && BigDecimal.valueOf(pctOfAssets).compareTo(SINGLE_STOCK_PCT_OF_ASSETS_HIGH) > 0) {
-            target = totalAssets.multiply(SINGLE_STOCK_PCT_OF_ASSETS_HIGH).divide(BigDecimal.valueOf(100));
+            // Sale proceeds stay in total assets (as cash), so the denominator doesn't move.
+            BigDecimal target = totalAssets.multiply(SINGLE_STOCK_PCT_OF_ASSETS_HIGH).divide(BigDecimal.valueOf(100));
+            excessValue = currentValue.subtract(target);
             basis = "10% of total assets guideline";
             currentPercent = pctOfAssets;
         } else if (pctOfEquity != null && BigDecimal.valueOf(pctOfEquity).compareTo(SINGLE_STOCK_PCT_OF_EQUITY_HIGH) > 0) {
-            target = equityValue.multiply(SINGLE_STOCK_PCT_OF_EQUITY_HIGH).divide(BigDecimal.valueOf(100));
+            // Proceeds leave the equity book, so the book shrinks with the sale.
+            excessValue = sellToReachShare(currentValue, equityValue, SINGLE_STOCK_PCT_OF_EQUITY_HIGH);
             basis = "25% of equity-book guideline";
             currentPercent = pctOfEquity;
         } else {
             return null; // flag no longer reproducible against fresh numbers — don't guess
         }
 
-        BigDecimal excessValue = currentValue.subtract(target).min(currentValue).max(BigDecimal.ZERO);
+        excessValue = excessValue.min(currentValue).max(BigDecimal.ZERO);
         if (excessValue.signum() <= 0) return null;
 
         return sizeAndPrice(flag.getType(), flag.getLabel(), h, excessValue, currentValue, currentPercent, basis,
@@ -197,8 +200,8 @@ public class RebalancingService {
         BigDecimal knownSectorBook = sectorExposure.getValue()
             .multiply(BigDecimal.valueOf(100))
             .divide(BigDecimal.valueOf(sectorExposure.getPercentOfEquity()), 2, RoundingMode.HALF_UP);
-        BigDecimal target = knownSectorBook.multiply(SECTOR_PCT_OF_EQUITY_HIGH).divide(BigDecimal.valueOf(100));
-        BigDecimal sectorExcess = sectorExposure.getValue().subtract(target).max(BigDecimal.ZERO);
+        BigDecimal sectorExcess = sellToReachShare(sectorExposure.getValue(), knownSectorBook, SECTOR_PCT_OF_EQUITY_HIGH)
+            .max(BigDecimal.ZERO);
         if (sectorExcess.signum() <= 0) return null;
 
         List<Holding> members = new ArrayList<>();
@@ -376,6 +379,19 @@ public class RebalancingService {
             if (stripped.equalsIgnoreCase(label)) return h;
         }
         return null;
+    }
+
+    /**
+     * How much of a position worth {@code value} to sell so it becomes {@code sharePct}% of a book
+     * worth {@code book} — when the sold amount leaves the book too. Solving
+     * (value − x) / (book − x) = p gives x = (value − p·book) / (1 − p). The simpler
+     * value − p·book undersells: a ₹40k stock in a ₹100k book trimmed by ₹15k is still 29% of
+     * what remains, so following the suggestion left the flag in place.
+     */
+    static BigDecimal sellToReachShare(BigDecimal value, BigDecimal book, BigDecimal sharePct) {
+        BigDecimal p = sharePct.divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
+        return value.subtract(p.multiply(book))
+            .divide(BigDecimal.ONE.subtract(p), 2, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal nz(BigDecimal v) { return v != null ? v : BigDecimal.ZERO; }

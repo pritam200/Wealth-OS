@@ -80,10 +80,19 @@ public class TaxController {
         return sb.toString();
     }
 
-    private String csvField(Object value) {
+    /**
+     * Names in this export come from extracted email/statement text, so they are untrusted. A
+     * cell starting with = + - @ (or tab/CR) is run as a formula by Excel and Sheets, so text
+     * cells get a leading apostrophe; numbers and dates are written as-is so they stay numeric.
+     * Line breaks are quoted, or they would split one disposal across two rows.
+     */
+    static String csvField(Object value) {
         if (value == null) return "";
         String s = value.toString();
-        return (s.contains(",") || s.contains("\""))
+        if (value instanceof CharSequence && !s.isEmpty() && "=+-@\t\r".indexOf(s.charAt(0)) >= 0) {
+            s = "'" + s;
+        }
+        return (s.contains(",") || s.contains("\"") || s.contains("\n") || s.contains("\r"))
             ? "\"" + s.replace("\"", "\"\"") + "\"" : s;
     }
 }

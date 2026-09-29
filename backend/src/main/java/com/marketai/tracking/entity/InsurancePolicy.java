@@ -64,4 +64,28 @@ public class InsurancePolicy {
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    /** Days a missed premium stays "overdue" before the next one is assumed to be what's due. */
+    public static final int PREMIUM_GRACE_DAYS = 30;
+
+    /**
+     * The premium actually due as of {@code today}. The stored date is only updated when the user
+     * edits the policy, so without rolling it forward by the premium frequency it would read as
+     * overdue forever after the first payment. Null when no date is set or the policy has ended.
+     */
+    public LocalDate nextDueDateAsOf(LocalDate today) {
+        if (nextPremiumDueDate == null) return null;
+        if (endDate != null && endDate.isBefore(today)) return null;
+        int months = switch (premiumFrequency == null ? PremiumFrequency.ANNUAL : premiumFrequency) {
+            case MONTHLY -> 1;
+            case QUARTERLY -> 3;
+            case ANNUAL -> 12;
+        };
+        LocalDate graceStart = today.minusDays(PREMIUM_GRACE_DAYS);
+        LocalDate due = nextPremiumDueDate;
+        // Step from the stored anchor (not the previous step) so a 31st doesn't drift to the 28th.
+        for (int k = 1; due.isBefore(graceStart); k++) due = nextPremiumDueDate.plusMonths((long) k * months);
+        if (endDate != null && due.isAfter(endDate)) return null;
+        return due;
+    }
 }

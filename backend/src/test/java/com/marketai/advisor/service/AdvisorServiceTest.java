@@ -125,4 +125,22 @@ class AdvisorServiceTest {
         assertThat(resp.getTool()).isEqualTo(AdvisorTool.UNKNOWN);
         verifyNoInteractions(portfolioContextService, expenseService, reminderService);
     }
+
+    @Test
+    @DisplayName("spend totals leave out card-bill payments and self transfers")
+    void recentExpensesExcludeAccountTransfers() {
+        when(llm.isEnabled()).thenReturn(true);
+        when(llm.complete(anyString(), anyString())).thenReturn(LlmCompletion.builder()
+            .text("{\"tool\": \"RECENT_EXPENSES\"}").provider("gemini").model("m").build());
+        when(expenseService.listExpenses(1L)).thenReturn(java.util.List.of(
+            com.marketai.expense.dto.ExpenseResponse.builder().amount(new BigDecimal("40000")).category("Shopping").build(),
+            com.marketai.expense.dto.ExpenseResponse.builder().amount(new BigDecimal("40000")).category("Account Transfer").build()));
+
+        AdvisorAskRequest req = new AdvisorAskRequest();
+        req.setQuestion("How much did I spend?");
+        AdvisorAskResponse resp = service.ask(1L, req);
+
+        assertThat(resp.getGroundedData().get("totalLast90Days")).isEqualTo(new BigDecimal("40000"));
+        assertThat(resp.getAnswer()).contains("₹40000");
+    }
 }

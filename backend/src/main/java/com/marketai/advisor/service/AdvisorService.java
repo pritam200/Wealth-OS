@@ -145,7 +145,13 @@ public class AdvisorService {
     }
 
     private AdvisorAskResponse answerRecentExpenses(Long userId) {
-        List<ExpenseResponse> expenses = expenseService.listExpenses(userId);
+        // Card-bill payments and self transfers move money that was already spent or is still
+        // the user's; counting them double-counts every card purchase. Same exclusion as the
+        // app's other spend totals.
+        List<ExpenseResponse> expenses = expenseService.listExpenses(userId).stream()
+            .filter(e -> !com.marketai.expense.entity.ExpenseCategory.ACCOUNT_TRANSFER.getLabel().equals(e.getCategory())
+                && !com.marketai.expense.entity.ExpenseCategory.INVESTMENT.getLabel().equals(e.getCategory()))
+            .toList();
         BigDecimal total = expenses.stream().map(ExpenseResponse::getAmount)
             .filter(a -> a != null).reduce(BigDecimal.ZERO, BigDecimal::add);
 

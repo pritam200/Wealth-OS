@@ -23,6 +23,7 @@ class SubscriptionDetectionServiceTest {
     private static final Long USER_ID = 1L;
 
     private ExpenseRepository expenseRepository;
+    private static final LocalDate TODAY = LocalDate.of(2026, 9, 1);
     private SubscriptionDetectionService service;
 
     @BeforeEach
@@ -49,7 +50,7 @@ class SubscriptionDetectionServiceTest {
         expenses.add(expense("Netflix", new BigDecimal("499.00"), LocalDate.of(2026, 8, 15)));
         stub(expenses);
 
-        List<SubscriptionResponse> found = service.detectSubscriptions(USER_ID);
+        List<SubscriptionResponse> found = service.detectSubscriptions(USER_ID, TODAY);
 
         assertThat(found).hasSize(1);
         SubscriptionResponse sub = found.get(0);
@@ -68,7 +69,7 @@ class SubscriptionDetectionServiceTest {
         expenses.add(expense("Netflix", new BigDecimal("649.00"), LocalDate.of(2026, 8, 15)));
         stub(expenses);
 
-        List<SubscriptionResponse> found = service.detectSubscriptions(USER_ID);
+        List<SubscriptionResponse> found = service.detectSubscriptions(USER_ID, TODAY);
 
         assertThat(found).hasSize(1);
         SubscriptionResponse sub = found.get(0);
@@ -83,7 +84,7 @@ class SubscriptionDetectionServiceTest {
         expenses.add(expense("Croma", new BigDecimal("45000.00"), LocalDate.of(2026, 8, 1)));
         stub(expenses);
 
-        assertThat(service.detectSubscriptions(USER_ID)).isEmpty();
+        assertThat(service.detectSubscriptions(USER_ID, TODAY)).isEmpty();
     }
 
     @Test
@@ -95,6 +96,18 @@ class SubscriptionDetectionServiceTest {
         expenses.add(expense("Amazon", new BigDecimal("5200.00"), LocalDate.of(2026, 8, 27)));
         stub(expenses);
 
-        assertThat(service.detectSubscriptions(USER_ID)).isEmpty();
+        assertThat(service.detectSubscriptions(USER_ID, TODAY)).isEmpty();
+    }
+
+    @Test
+    void aMonthlyChargeThatStoppedTwoCyclesAgo_isNotReportedAsActive() {
+        List<Expense> expenses = new ArrayList<>();
+        expenses.add(expense("Netflix", new BigDecimal("499.00"), LocalDate.of(2026, 6, 15)));
+        expenses.add(expense("Netflix", new BigDecimal("499.00"), LocalDate.of(2026, 7, 15)));
+        expenses.add(expense("Netflix", new BigDecimal("499.00"), LocalDate.of(2026, 8, 15)));
+        stub(expenses);
+
+        assertThat(service.detectSubscriptions(USER_ID, LocalDate.of(2026, 10, 24))).hasSize(1);
+        assertThat(service.detectSubscriptions(USER_ID, LocalDate.of(2026, 10, 26))).isEmpty();
     }
 }

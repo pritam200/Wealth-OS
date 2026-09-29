@@ -76,8 +76,9 @@ public class InsurancePolicyService {
     }
 
     private InsurancePolicyResponse toResponse(InsurancePolicy p) {
-        Long days = p.getNextPremiumDueDate() != null
-            ? ChronoUnit.DAYS.between(LocalDate.now(), p.getNextPremiumDueDate()) : null;
+        LocalDate today = LocalDate.now();
+        LocalDate due = p.nextDueDateAsOf(today);
+        Long days = due != null ? ChronoUnit.DAYS.between(today, due) : null;
         return InsurancePolicyResponse.builder()
             .id(p.getId())
             .policyType(p.getPolicyType())
@@ -86,7 +87,7 @@ public class InsurancePolicyService {
             .sumAssured(p.getSumAssured())
             .premiumAmount(p.getPremiumAmount())
             .premiumFrequency(p.getPremiumFrequency())
-            .nextPremiumDueDate(p.getNextPremiumDueDate())
+            .nextPremiumDueDate(due)
             .startDate(p.getStartDate())
             .endDate(p.getEndDate())
             .notes(p.getNotes())

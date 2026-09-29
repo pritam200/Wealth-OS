@@ -148,4 +148,36 @@ class InsurancePolicyServiceTest {
         assertThat(reminders.get(0).getType()).isEqualTo("INSURANCE_PREMIUM");
         assertThat(reminders.get(0).getDaysUntil()).isEqualTo(3L);
     }
+    private static final LocalDate TODAY = LocalDate.of(2026, 9, 29);
+
+    private static InsurancePolicy policy(InsurancePolicy.PremiumFrequency freq, LocalDate due, LocalDate end) {
+        return InsurancePolicy.builder().policyType(InsurancePolicy.PolicyType.TERM).insurer("HDFC Life")
+            .premiumAmount(new BigDecimal("1000")).premiumFrequency(freq)
+            .nextPremiumDueDate(due).endDate(end).status("ACTIVE").build();
+    }
+
+    @Test
+    @DisplayName("a premium just missed stays overdue through the grace period")
+    void recentlyMissedPremiumStaysOverdue() {
+        LocalDate due = TODAY.minusDays(10);
+        assertThat(policy(InsurancePolicy.PremiumFrequency.ANNUAL, due, null).nextDueDateAsOf(TODAY)).isEqualTo(due);
+    }
+
+    @Test
+    @DisplayName("a stored due date long past rolls forward by the premium frequency instead of staying overdue forever")
+    void pastDueDateRollsForward() {
+        assertThat(policy(InsurancePolicy.PremiumFrequency.ANNUAL, LocalDate.of(2025, 3, 15), null).nextDueDateAsOf(TODAY))
+            .isEqualTo(LocalDate.of(2027, 3, 15));
+        assertThat(policy(InsurancePolicy.PremiumFrequency.MONTHLY, LocalDate.of(2026, 1, 31), null).nextDueDateAsOf(TODAY))
+            .isEqualTo(LocalDate.of(2026, 8, 31));   // 29 days late: still within grace
+        assertThat(policy(InsurancePolicy.PremiumFrequency.QUARTERLY, LocalDate.of(2026, 2, 1), null).nextDueDateAsOf(TODAY))
+            .isEqualTo(LocalDate.of(2026, 11, 1));
+    }
+
+    @Test
+    @DisplayName("an ended policy has no premium due, and none is projected past its end date")
+    void endedPolicyHasNoPremiumDue() {
+        assertThat(policy(InsurancePolicy.PremiumFrequency.ANNUAL, TODAY.plusDays(5), TODAY.minusDays(1)).nextDueDateAsOf(TODAY)).isNull();
+        assertThat(policy(InsurancePolicy.PremiumFrequency.ANNUAL, LocalDate.of(2025, 3, 15), LocalDate.of(2026, 12, 31)).nextDueDateAsOf(TODAY)).isNull();
+    }
 }
