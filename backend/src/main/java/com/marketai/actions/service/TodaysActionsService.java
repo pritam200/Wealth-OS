@@ -90,7 +90,7 @@ public class TodaysActionsService {
             String assetType = isMf ? "MF" : "STOCK";
             Double pnlPercent = h.getPnlPercent() != null ? h.getPnlPercent().doubleValue() : null;
 
-            if (a == null || "INSUFFICIENT_DATA".equals(a.getNextAction())) {
+            if (a == null || "INSUFFICIENT_DATA".equals(a.getNextAction()) || "STALE_DATA".equals(a.getNextAction())) {
                 notAnalysed.add(NotAnalysed.builder()
                     .symbol(symbol).name(name).assetType(assetType)
                     .reason(a != null && a.getNextActionReason() != null ? a.getNextActionReason() : "Recommendation engine returned no result.")
@@ -139,7 +139,8 @@ public class TodaysActionsService {
                         .why(a.getNextActionReason())
                         .risk(topRisk(a))
                         .confidence(a.getConfidenceScore())
-                        .dataTimestamp(java.time.LocalDateTime.now())
+                        // The session the analysis was computed from, not the request time.
+                        .dataTimestamp(a.getPriceDate() != null ? a.getPriceDate().atTime(15, 30) : null)
                         .expectedOutcome(expectedOutcome(a))
                         .build());
                     break;
@@ -164,6 +165,7 @@ public class TodaysActionsService {
                 }
                 case "CONTINUE":
                 case "CONTINUE_SIP":
+                case "NO_ACTIONABLE_SIGNAL":
                 case "HOLD": {
                     hold.add(HoldAction.builder()
                         .symbol(symbol).name(name).assetType(assetType)
@@ -173,6 +175,7 @@ public class TodaysActionsService {
                     break;
                 }
                 case "REVIEW":
+                case "AVOID":
                 case "PAUSE_SIP":
                 case "REBALANCE": {
                     watch.add(WatchAction.builder()
@@ -272,12 +275,12 @@ public class TodaysActionsService {
     private String expectedOutcome(AnalystAssessment a) {
         if (a == null || a.getRating() == null) return null;
         String rating = a.getRating().toUpperCase();
-        if (rating.contains("STRONG BUY") || rating.contains("BUY")) {
-            return "Adding here raises exposure to a holding the model scores positively; "
-                 + "the stated risk is what would invalidate that view.";
+        if (rating.equals("BUY")) {
+            return "Adding here raises exposure to a holding whose BUY signal has beaten the base rate on its own history; "
+                 + "past hit rates are not a guarantee, and the stated risk is what would invalidate the view.";
         }
-        if (rating.contains("SELL") || rating.contains("REDUCE")) {
-            return "Trimming reduces exposure to a holding the model scores negatively and frees cash to redeploy.";
+        if (rating.equals("SELL")) {
+            return "Trimming reduces exposure to a holding whose SELL signal has beaten the base rate on its own history, and frees cash to redeploy.";
         }
         return "No change expected in the near term — the position is held pending a clearer signal.";
     }
@@ -326,7 +329,9 @@ public class TodaysActionsService {
 
     private String watchCondition(String action, AnalystAssessment a) {
         switch (action) {
-            case "REVIEW": return "Re-check if the trend confirms into a stronger downtrend, or set a stop-loss now.";
+            case "REVIEW": return "CONFLICTING_EVIDENCE".equals(a.getResearchActionability())
+                    ? "Research found conflicting evidence — read it on the stock page before acting."
+                    : "Re-check the original thesis against the validated signal, or set a stop-loss now.";
             case "PAUSE_SIP": return "Resume once the fund's XIRR/trend improves — see reasoning.";
             case "REBALANCE": return "Trim toward the 25% single-fund guideline on the next rebalance.";
             default: return a.getNextActionReason();
@@ -361,24 +366,19 @@ public class TodaysActionsService {
      * Same staged-deployment principle as {@code RedemptionService.getDeploymentPlan} (20%
      * now / 30% after a correction / 50% via monthly SIP), computed ahead of an actual
      * redemption rather than after one. The "after a correction" trigger is Nifty 50's own
-     * ATR-derived expected move — a real, current number — never a guessed market bottom.
+     * realised-volatility one-σ 20-session move — a real, current number — never a guessed market bottom.
      */
     private ReinvestmentPlan buildReinvestmentPlan(BigDecimal totalToRedeploy) {
         BigDecimal now = totalToRedeploy.multiply(BigDecimal.valueOf(0.20)).setScale(2, RoundingMode.HALF_UP);
         BigDecimal afterCorrection = totalToRedeploy.multiply(BigDecimal.valueOf(0.30)).setScale(2, RoundingMode.HALF_UP);
         BigDecimal viaSip = totalToRedeploy.subtract(now).subtract(afterCorrection);
 
-        String trigger = "Market data unavailable — no specific pullback level could be computed today.";
+        String trigger = "Nifty 50 volatility unavailable — no pullback level is set; deploy this tranche by SIP instead.";
         try {
-            TechnicalAnalysisDto ta = technicalIndicatorService.analyse(NIFTY_SYMBOL);
-            if (ta.getPrice() != null && ta.getAtr() != null) {
-                double price = ta.getPrice().doubleValue();
-                double sigma = ta.getAtr().doubleValue() * Math.sqrt(21); // ~1-month expected move
-                double level = price - sigma;
-                trigger = String.format("Nifty 50 below %.0f (a %.1f%% pullback from today's %.0f)", level, sigma / price * 100, price);
-            }
+            String t = com.marketai.forecast.model.VolatilityModel.pullbackTrigger(technicalIndicatorService.analyse(NIFTY_SYMBOL), 20);
+            if (t != null) trigger = t;
         } catch (Exception e) {
-            log.debug("Could not compute reinvestment trigger: {}", e.getMessage());
+            log.debug("Could not compute pullback trigger: {}", e.getMessage());
         }
 
         List<ReinvestmentPlan.Tranche> tranches = new ArrayList<>();

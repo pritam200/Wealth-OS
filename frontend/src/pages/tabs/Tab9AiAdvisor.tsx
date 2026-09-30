@@ -13,6 +13,7 @@ import { portfolioApi } from '../../api/portfolio';
 import { recommendationApi, recommendationMfApi, isInsufficient } from '../../api/analyst';
 import type { NextAction, MfNextAction } from '../../api/analyst';
 import { aiApi } from '../../api/ai';
+import { ResearchSection } from '../../components/research/ResearchPanel';
 import { marketApi } from '../../api/market';
 import type { PortfolioSummary, HoldingDto, AiResponse, MarketOverview } from '../../types';
 
@@ -29,7 +30,7 @@ interface Action {
   signal?: string;
   trend?: string;
   rsi?: number;
-  confidenceScore?: number;
+  confidenceScore?: number | null;
   taxImpact?: string | null;
 }
 
@@ -50,6 +51,9 @@ const ACTION_META: Record<ActionKind, { label: string; cls: string; Icon: any }>
   SWITCH_FUND:            { label: 'Switch Fund',   cls: 'text-bear bg-bear/10 border-bear/30',       Icon: ArrowDownRight },
   // Not an action — the engine had nothing verifiable to work from, or the call failed.
   // Styled unlike Hold (dashed, unfilled, dimmer) so it can't be read as "nothing to do".
+  AVOID:                  { label: 'Avoid adding',  cls: 'text-bear bg-bear/10 border-bear/30',       Icon: ArrowDownRight },
+  NO_ACTIONABLE_SIGNAL:   { label: 'No signal',     cls: 'text-gray-400 bg-surface-hover border-surface-border', Icon: Minus },
+  STALE_DATA:             { label: 'Stale data',    cls: 'text-amber-300 bg-transparent border-dashed border-amber-500/50', Icon: HelpCircle },
   INSUFFICIENT_DATA:      { label: 'No data',       cls: 'text-gray-600 bg-transparent border-dashed border-gray-700', Icon: HelpCircle },
 };
 
@@ -59,6 +63,7 @@ const HEADLINE: Record<ActionKind, string> = {
   CONTINUE_SIP: 'Keep the SIP running', INCREASE_SIP: 'Step up the SIP', PAUSE_SIP: 'Pause new contributions',
   PARTIAL_PROFIT_BOOKING: 'Book partial profit', FULL_REDEMPTION: 'Redeem', REBALANCE: 'Rebalance allocation',
   SWITCH_FUND: 'Switch to a better fund',
+  AVOID: 'Avoid adding for now', NO_ACTIONABLE_SIGNAL: 'No validated signal', STALE_DATA: 'Price data is out of date',
   INSUFFICIENT_DATA: 'Not enough data to analyse',
 };
 
@@ -93,10 +98,11 @@ async function decide(h: HoldingDto, totalMfPortfolioValue: number): Promise<Act
     const kind = (insufficient ? 'INSUFFICIENT_DATA' : data.nextAction) as ActionKind;
     return {
       holding: h, kind, headline: HEADLINE[kind] ?? 'Hold',
-      reason: data.nextActionReason || data.aiNarrative || data.basis,
+      // Never the AI narrative: the reason must come from the engine's own verified inputs.
+      reason: data.nextActionReason || data.basis,
       // Indicator context is only shown when it's real — on the INSUFFICIENT path the
       // rating is null and the trend is UNKNOWN.
-      signal: insufficient ? undefined : data.rating ?? undefined,
+      signal: data.rating === 'BUY' || data.rating === 'SELL' ? data.rating : undefined,
       trend: insufficient ? undefined : data.fundamentals?.trend,
       rsi: insufficient ? undefined : data.fundamentals?.rsi ?? undefined,
       confidenceScore: data.confidenceScore,
@@ -135,7 +141,7 @@ export function Tab9AiAdvisor() {
         ACCUMULATE: 3, INCREASE_SIP: 3,
         CONTINUE: 4, CONTINUE_SIP: 4,
         PAUSE_SIP: 4.5,
-        HOLD: 5,
+        HOLD: 5, AVOID: 3.5, NO_ACTIONABLE_SIGNAL: 5.5, STALE_DATA: 5.8,
         // Least urgent — there's nothing to act on, because there was nothing to analyse.
         INSUFFICIENT_DATA: 6,
       };
@@ -263,7 +269,7 @@ export function Tab9AiAdvisor() {
                 const open = expanded === a.holding.id;
                 return (
                   <div key={a.holding.id} className={`card py-3 ${open ? 'md:col-span-2' : ''}`}>
-                    <div className={isStock ? 'cursor-pointer' : ''} onClick={() => isStock && setExpanded(open ? null : a.holding.id)}>
+                    <div className="cursor-pointer" onClick={() => setExpanded(open ? null : a.holding.id)}>
                       <div className="flex items-start justify-between mb-1.5">
                         <div className="min-w-0">
                           <div className="font-mono text-ink text-sm font-semibold">{a.holding.symbol.replace('.NS', '').replace('.MF', '')}</div>
@@ -278,22 +284,22 @@ export function Tab9AiAdvisor() {
                         <span className={a.holding.pnlPercent >= 0 ? 'text-bull' : 'text-bear'}>
                           {maskText(`${a.holding.pnlPercent >= 0 ? '+' : ''}${a.holding.pnlPercent?.toFixed(1)}%`)}
                         </span>
-                        {a.signal && <span className="text-gray-600">Signal {a.signal}</span>}
+                        {a.signal && <span className="text-gray-600">Validated {a.signal}{a.confidenceScore != null ? ` · ${a.confidenceScore}% historical hit rate` : ''}</span>}
                         {a.trend && <span className="text-gray-600">{a.trend.replace(/_/g, ' ').toLowerCase()}</span>}
                         {a.rsi != null && <span className="text-gray-600">RSI {a.rsi.toFixed(0)}</span>}
                       </div>
                       <p className="text-xs text-gray-400 leading-snug"><span className="text-ink font-medium">{a.headline}.</span> {a.reason}</p>
                       {a.taxImpact && <p className="text-2xs text-neutral/90 mt-1">{a.taxImpact}</p>}
-                      {isStock && (
-                        <div className="text-2xs text-brand mt-1.5 flex items-center gap-1">
-                          {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                          {open ? 'Hide full analysis' : 'Why? Full multi-factor analysis'}
-                        </div>
-                      )}
+                      <div className="text-2xs text-brand mt-1.5 flex items-center gap-1">
+                        {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                        {open ? 'Hide full analysis' : isStock ? 'Why? Full analysis and research' : 'Fund research'}
+                      </div>
                     </div>
-                    {open && isStock && (
-                      <div className="mt-3 pt-3 border-t border-surface-border/40">
-                        <AnalystPanel symbol={a.holding.symbol} name={a.holding.name} />
+                    {open && (
+                      <div className="mt-3 pt-3 border-t border-surface-border/40 space-y-3">
+                        {isStock && <AnalystPanel symbol={a.holding.symbol} name={a.holding.name} />}
+                        <ResearchSection subject={isStock ? { kind: 'stock', symbol: a.holding.symbol, name: a.holding.name } : { kind: 'fund', symbol: a.holding.symbol }}
+                          title={isStock ? 'AI Research' : 'AI fund research'} />
                       </div>
                     )}
                   </div>

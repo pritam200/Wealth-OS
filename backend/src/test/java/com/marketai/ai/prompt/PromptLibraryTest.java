@@ -24,8 +24,10 @@ class PromptLibraryTest {
         "transaction-extraction-v2", "ad9fa80e4e092414",
         "scan-transcription-v1", "fbbe1913031b0286",
         "advisor-routing-v1", "8601dcb7de5c58af",
-        "stock-second-opinion-v1", "f792aa892c715237",
-        "general-analyst-v1", "03fa0e26b017a00a",
+        "general-analyst-v2", "9fbf456c0ff07384",
+        "research-analyst-v2", "eb6984bdab1ccd5d",
+        "research-devils-advocate-v2", "d5de50ac020d46ae",
+        "research-web-v1", "02f8823b848c57d1",
         "connection-check-v1", "eb9be5e2fc3fa64d");
 
     @Test

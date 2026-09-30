@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
+import { ResearchSection } from '../../components/research/ResearchPanel';
 import { useNavigate } from 'react-router-dom';
 import { aiApi } from '../../api/ai';
 import { marketApi } from '../../api/market';
+import { forecastApi } from '../../api/forecast';
+import type { ForecastResponse } from '../../api/forecast';
 import type { TechnicalAnalysis, QuoteDto } from '../../types';
 import { Target, Zap, AlertTriangle, Search } from 'lucide-react';
 import { AnalystPanel } from '../../components/market/AnalystPanel';
@@ -14,21 +17,42 @@ const fmt = (n: number) =>
 // stored history — formatting null would print "₹0" as though it were a measured level.
 const fmtOr = (n: number | null | undefined) => (n == null ? '—' : fmt(n));
 
-function ProjectionCard({ symbol, quote, tech, aiSummary }: {
+function RangeBox({ title, f }: { title: string; f: ForecastResponse | null }) {
+  if (!f) return <div className="bg-surface-hover rounded-lg p-3 text-2xs text-gray-600">{title}: unavailable</div>;
+  if (!f.range50 || !f.range90) {
+    return (
+      <div className="bg-surface-hover rounded-lg p-3">
+        <div className="stat-label mb-1">{title}</div>
+        <div className="text-2xs text-gray-500">{f.statusReason ?? 'No range — not enough valid price history.'}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="bg-surface-hover rounded-lg p-3">
+      <div className="stat-label mb-2">{title}</div>
+      <div className="space-y-1 text-xs">
+        <div className="flex justify-between"><span className="text-gray-400">50% range</span><span className="font-mono text-ink">{fmt(f.range50.low)} – {fmt(f.range50.high)}</span></div>
+        <div className="flex justify-between"><span className="text-gray-400">90% range</span><span className="font-mono text-ink">{fmt(f.range90.low)} – {fmt(f.range90.high)}</span></div>
+      </div>
+      <div className="text-2xs text-gray-500 mt-1.5">
+        {f.range90.historicalCoverage != null
+          ? `The 90% range held in ${(f.range90.historicalCoverage * 100).toFixed(0)}% of past windows.`
+          : 'Historical coverage not measured.'}
+      </div>
+    </div>
+  );
+}
+
+function ProjectionCard({ symbol, quote, tech, f1m, f3m, aiSummary }: {
   symbol: string;
   quote: QuoteDto | null;
   tech: TechnicalAnalysis | null;
+  f1m: ForecastResponse | null;
+  f3m: ForecastResponse | null;
   aiSummary: string;
 }) {
   const navigate = useNavigate();
   if (!quote || !tech) return null;
-
-  const bull1M = quote.currentPrice * 1.05;
-  const base1M = quote.currentPrice * 1.02;
-  const bear1M = quote.currentPrice * 0.95;
-  const bull3M = quote.currentPrice * 1.12;
-  const base3M = quote.currentPrice * 1.06;
-  const bear3M = quote.currentPrice * 0.88;
 
   return (
     <div className="card hover:border-brand/30 transition-colors cursor-pointer" onClick={() => navigate(`/stock/${symbol}`)}>
@@ -38,50 +62,40 @@ function ProjectionCard({ symbol, quote, tech, aiSummary }: {
           <p className="text-gray-500 text-xs truncate max-w-[200px]">{quote.name}</p>
         </div>
         <div className="text-right">
-          <div className="font-bold text-ink">{fmt(quote.currentPrice)}</div>
-          <div className={`text-sm ${quote.changePercent >= 0 ? 'text-bull' : 'text-bear'}`}>
-            {quote.changePercent >= 0 ? '+' : ''}{quote.changePercent?.toFixed(2)}%
-          </div>
+          <div className="font-bold text-ink">{fmtOr(quote.currentPrice)}</div>
+          {quote.changePercent != null && (
+            <div className={`text-sm ${quote.changePercent >= 0 ? 'text-bull' : 'text-bear'}`}>
+              {quote.changePercent >= 0 ? '+' : ''}{quote.changePercent.toFixed(2)}%
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Target projections */}
+      {/* Model-estimated ranges from the backend forecast engine — the same one the Market
+          Forecast tab uses. Never a price target. */}
+      <div className="text-2xs text-gray-500 mb-1.5">Model-estimated ranges from the {f1m?.priceDate ?? 'latest'} close</div>
       <div className="grid grid-cols-2 gap-3 mb-4">
-        <div className="bg-surface-hover rounded-lg p-3">
-          <div className="stat-label mb-2">1-Month Target</div>
-          <div className="space-y-1 text-sm">
-            <div className="flex justify-between"><span className="text-bull">Bull</span><span className="text-bull">{fmt(bull1M)}</span></div>
-            <div className="flex justify-between"><span className="text-neutral">Base</span><span className="text-neutral">{fmt(base1M)}</span></div>
-            <div className="flex justify-between"><span className="text-bear">Bear</span><span className="text-bear">{fmt(bear1M)}</span></div>
-          </div>
-        </div>
-        <div className="bg-surface-hover rounded-lg p-3">
-          <div className="stat-label mb-2">3-Month Target</div>
-          <div className="space-y-1 text-sm">
-            <div className="flex justify-between"><span className="text-bull">Bull</span><span className="text-bull">{fmt(bull3M)}</span></div>
-            <div className="flex justify-between"><span className="text-neutral">Base</span><span className="text-neutral">{fmt(base3M)}</span></div>
-            <div className="flex justify-between"><span className="text-bear">Bear</span><span className="text-bear">{fmt(bear3M)}</span></div>
-          </div>
-        </div>
+        <RangeBox title="Next 20 sessions (~1 month)" f={f1m} />
+        <RangeBox title="Next 60 sessions (~3 months)" f={f3m} />
       </div>
 
-      {/* Catalysts from tech */}
       <div className="space-y-1 text-xs border-t border-surface-border pt-3">
         <div className="flex items-center gap-2 text-gray-400">
           <Target size={12} className="text-brand" />
-          <span>S/R: {fmtOr(tech.support)} / {fmtOr(tech.resistance)}</span>
+          <span>S/R: {tech.support == null ? 'no reliable level' : fmt(tech.support)} / {tech.resistance == null ? 'no reliable level' : fmt(tech.resistance)}</span>
         </div>
         <div className="flex items-center gap-2 text-gray-400">
           <Zap size={12} className="text-neutral" />
           <span>
             RSI {tech.rsi?.toFixed(1) ?? '—'} · MACD{' '}
             {tech.macd == null ? '—' : `${tech.macd > 0 ? '+' : ''}${tech.macd.toFixed(2)}`}
+            {tech.annualizedVolatilityPct != null ? ` · volatility ${tech.annualizedVolatilityPct.toFixed(0)}%/yr` : ''}
           </span>
         </div>
         {aiSummary && (
           <div className="flex items-start gap-2 text-gray-500 mt-2">
             <AlertTriangle size={12} className="text-brand shrink-0 mt-0.5" />
-            <span className="line-clamp-2">{aiSummary}</span>
+            <span className="line-clamp-2"><span className="text-gray-600">AI summary (advisory): </span>{aiSummary}</span>
           </div>
         )}
       </div>
@@ -91,7 +105,7 @@ function ProjectionCard({ symbol, quote, tech, aiSummary }: {
 
 export function Tab4StockProjections() {
   const [search, setSearch] = useState('');
-  const [cards, setCards] = useState<{ symbol: string; quote: QuoteDto | null; tech: TechnicalAnalysis | null; ai: string }[]>([]);
+  const [cards, setCards] = useState<{ symbol: string; quote: QuoteDto | null; tech: TechnicalAnalysis | null; f1m: ForecastResponse | null; f3m: ForecastResponse | null; ai: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<{ symbol: string; name: string }[]>([]);
   const [showSug, setShowSug] = useState(false);
@@ -114,13 +128,16 @@ export function Tab4StockProjections() {
     if (cards.find(c => c.symbol === symbol)) return;
     setLoading(true);
     try {
-      const [qr, tr] = await Promise.all([marketApi.getQuote(symbol), marketApi.getTechnicals(symbol)]);
+      const [qr, tr, f1, f3] = await Promise.all([
+        marketApi.getQuote(symbol), marketApi.getTechnicals(symbol),
+        forecastApi.get(symbol, '20D').catch(() => null), forecastApi.get(symbol, '60D').catch(() => null),
+      ]);
       let aiText = '';
       try {
         const ar = await aiApi.analyseStock(symbol, 'Give a brief 1-sentence outlook');
         aiText = ar.data?.summary ?? '';
       } catch {}
-      setCards(prev => [...prev, { symbol, quote: qr.data, tech: tr.data, ai: aiText }]);
+      setCards(prev => [...prev, { symbol, quote: qr.data, tech: tr.data, f1m: f1?.data ?? null, f3m: f3?.data ?? null, ai: aiText }]);
       setSearch('');
     } catch {
       alert(`Could not load data for ${symbol}`);
@@ -135,7 +152,7 @@ export function Tab4StockProjections() {
         </div>
         <div>
           <h2 className="text-xl font-bold text-ink mb-0.5">Price Projections</h2>
-          <p className="text-gray-500 text-sm">1–3 month target price ranges, volatility and structural catalysts</p>
+          <p className="text-gray-500 text-sm">Model-estimated 1–3 month ranges, volatility and technical levels</p>
         </div>
       </div>
 
@@ -184,10 +201,12 @@ export function Tab4StockProjections() {
                 </div>
                 {c.quote && (
                   <div className="text-right">
-                    <div className="font-mono font-bold text-ink text-lg">{fmt(c.quote.currentPrice)}</div>
-                    <div className={`text-sm font-mono ${c.quote.changePercent >= 0 ? 'text-bull' : 'text-bear'}`}>
-                      {c.quote.changePercent >= 0 ? '+' : ''}{c.quote.changePercent?.toFixed(2)}%
-                    </div>
+                    <div className="font-mono font-bold text-ink text-lg">{fmtOr(c.quote.currentPrice)}</div>
+                    {c.quote.changePercent != null && (
+                      <div className={`text-sm font-mono ${c.quote.changePercent >= 0 ? 'text-bull' : 'text-bear'}`}>
+                        {c.quote.changePercent >= 0 ? '+' : ''}{c.quote.changePercent.toFixed(2)}%
+                      </div>
+                    )}
                   </div>
                 )}
                 {c.tech && (
@@ -198,20 +217,22 @@ export function Tab4StockProjections() {
                   </div>
                 )}
               </div>
-              <StockChart symbol={c.symbol} support={c.tech?.support} resistance={c.tech?.resistance} />
+              <StockChart symbol={c.symbol} support={c.tech?.support} resistance={c.tech?.resistance} tech={c.tech} />
             </div>
             {/* projections + analyst below */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-              <ProjectionCard symbol={c.symbol} quote={c.quote} tech={c.tech} aiSummary={c.ai} />
+              <ProjectionCard symbol={c.symbol} quote={c.quote} tech={c.tech} f1m={c.f1m} f3m={c.f3m} aiSummary={c.ai} />
               <AnalystPanel symbol={c.symbol} name={c.quote?.name} />
             </div>
+            <ResearchSection subject={{ kind: 'stock', symbol: c.symbol, name: c.quote?.name }} />
           </div>
         ))}
       </div>
 
       {cards.length > 0 && (
         <p className="text-xs text-gray-600">
-          Projections are model-based estimates using technical levels ±5%/12% for 1M/3M. Not financial advice.
+          Ranges come from measured volatility (zero-drift log-normal) and show where prices have typically
+          landed, not where they will go. Not financial advice.
         </p>
       )}
     </div>

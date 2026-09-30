@@ -134,13 +134,16 @@ public class YahooFinanceClient {
                 // sometimes still carries it. Fallback only — never a computed guess.
                 roe = numOrNull(result.at("/defaultKeyStatistics/returnOnEquity"), FRACTION_SCALE);
             }
-            BigDecimal debtToEquity = numOrNull(result.at("/financialData/debtToEquity"));
+            // Yahoo reports debt-to-equity as a percentage (45.3 = 0.453×); stored as a ratio.
+            BigDecimal dePct = numOrNull(result.at("/financialData/debtToEquity"), FRACTION_SCALE);
+            BigDecimal debtToEquity = dePct == null ? null : dePct.divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
             BigDecimal revenueGrowth = numOrNull(result.at("/financialData/revenueGrowth"), FRACTION_SCALE);
             BigDecimal earningsGrowth = numOrNull(result.at("/financialData/earningsGrowth"), FRACTION_SCALE);
             BigDecimal profitMargin = numOrNull(result.at("/financialData/profitMargins"), FRACTION_SCALE);
             BigDecimal currentRatio = numOrNull(result.at("/financialData/currentRatio"));
             BigDecimal pb = numOrNull(result.at("/defaultKeyStatistics/priceToBook"));
             BigDecimal eps = numOrNull(result.at("/defaultKeyStatistics/trailingEps"));
+            String industry = result.at("/assetProfile/industry").isMissingNode() ? null : result.at("/assetProfile/industry").asText(null);
 
             return Fundamentals.builder()
                     .pe(pe)
@@ -154,6 +157,18 @@ public class YahooFinanceClient {
                     .currentRatio(currentRatio)
                     .pb(pb)
                     .eps(eps)
+                    .industry(industry)
+                    .totalRevenue(numOrNull(result.at("/financialData/totalRevenue")))
+                    .ebitda(numOrNull(result.at("/financialData/ebitda")))
+                    .operatingCashflow(numOrNull(result.at("/financialData/operatingCashflow")))
+                    .freeCashflow(numOrNull(result.at("/financialData/freeCashflow")))
+                    .totalDebt(numOrNull(result.at("/financialData/totalDebt")))
+                    .totalCash(numOrNull(result.at("/financialData/totalCash")))
+                    .grossMargin(numOrNull(result.at("/financialData/grossMargins"), FRACTION_SCALE))
+                    .operatingMargin(numOrNull(result.at("/financialData/operatingMargins"), FRACTION_SCALE))
+                    .financialCurrency(result.at("/financialData/financialCurrency").isMissingNode() ? null : result.at("/financialData/financialCurrency").asText(null))
+                    .mostRecentQuarter(epochDate(result.at("/defaultKeyStatistics/mostRecentQuarter")))
+                    .lastFiscalYearEnd(epochDate(result.at("/defaultKeyStatistics/lastFiscalYearEnd")))
                     .build();
         } catch (WebClientResponseException e) {
             if (e.getStatusCode().value() == 429 || e.getStatusCode().value() == 401) {
@@ -231,6 +246,13 @@ public class YahooFinanceClient {
         return numOrNull(node, 2);
     }
 
+    /** Yahoo period-end fields are epoch seconds under /raw. */
+    static java.time.LocalDate epochDate(JsonNode node) {
+        JsonNode raw = node.at("/raw");
+        if (raw.isMissingNode() || raw.isNull() || raw.asLong() <= 0) return null;
+        return java.time.Instant.ofEpochSecond(raw.asLong()).atZone(java.time.ZoneOffset.UTC).toLocalDate();
+    }
+
     private BigDecimal numOrNull(JsonNode node, int scale) {
         JsonNode raw = node.at("/raw");
         return raw.isMissingNode() || raw.isNull() ? null : BigDecimal.valueOf(raw.asDouble()).setScale(scale, RoundingMode.HALF_UP);
@@ -255,6 +277,19 @@ public class YahooFinanceClient {
         private final BigDecimal currentRatio;
         private final BigDecimal pb;
         private final BigDecimal eps;
+        private final String industry;
+        // Absolute figures in financialCurrency, trailing twelve months.
+        private final BigDecimal totalRevenue;
+        private final BigDecimal ebitda;
+        private final BigDecimal operatingCashflow;
+        private final BigDecimal freeCashflow;
+        private final BigDecimal totalDebt;
+        private final BigDecimal totalCash;
+        private final BigDecimal grossMargin;      // fraction
+        private final BigDecimal operatingMargin;  // fraction
+        private final String financialCurrency;
+        private final java.time.LocalDate mostRecentQuarter;
+        private final java.time.LocalDate lastFiscalYearEnd;
     }
 
     /**
@@ -324,32 +359,59 @@ public class YahooFinanceClient {
     private QuoteDto parseQuote(JsonNode root, String symbol) {
         JsonNode result = root.at("/chart/result/0");
         JsonNode meta = result.at("/meta");
-        JsonNode quote = result.at("/indicators/quote/0");
 
-        BigDecimal currentPrice = bd(meta.at("/regularMarketPrice").asDouble());
-        BigDecimal previousClose = bd(meta.at("/chartPreviousClose").asDouble());
-        BigDecimal change = currentPrice.subtract(previousClose).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal changePct = previousClose.compareTo(BigDecimal.ZERO) != 0
+        // A missing field is null, never 0: asDouble() on an absent node used to turn a missing
+        // 52-week high or day range into a real-looking ₹0.00.
+        BigDecimal currentPrice = bdOrNull(meta.at("/regularMarketPrice"));
+        BigDecimal previousClose = bdOrNull(meta.at("/chartPreviousClose"));
+        if (previousClose == null) previousClose = bdOrNull(meta.at("/previousClose"));
+        BigDecimal change = currentPrice != null && previousClose != null
+                ? currentPrice.subtract(previousClose).setScale(2, RoundingMode.HALF_UP) : null;
+        BigDecimal changePct = change != null && previousClose.signum() > 0
                 ? change.divide(previousClose, 6, RoundingMode.HALF_UP)
                         .multiply(BigDecimal.valueOf(100)).setScale(4, RoundingMode.HALF_UP)
-                : BigDecimal.ZERO;
+                : null;
 
+        java.time.LocalDateTime marketTime = null;
+        String priceType = "UNKNOWN";
+        JsonNode t = meta.at("/regularMarketTime");
+        if (t.isNumber()) {
+            long ts = t.asLong();
+            marketTime = java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochSecond(ts), ZoneId.of("Asia/Kolkata"));
+            JsonNode start = meta.at("/currentTradingPeriod/regular/start"), end = meta.at("/currentTradingPeriod/regular/end");
+            long nowTs = java.time.Instant.now().getEpochSecond();
+            boolean sessionOpen = start.isNumber() && end.isNumber() && nowTs >= start.asLong() && nowTs < end.asLong();
+            // Yahoo's NSE feed is delayed; during the session the price is "delayed live",
+            // otherwise it is the last traded price of the most recent session.
+            priceType = sessionOpen ? "DELAYED_INTRADAY" : "LAST_TRADED";
+        }
+
+        JsonNode vol = meta.at("/regularMarketVolume");
         return QuoteDto.builder()
                 .symbol(symbol)
                 .currentPrice(currentPrice)
                 .previousClose(previousClose)
-                .open(bd(meta.at("/regularMarketOpen").asDouble()))
-                .high(bd(meta.at("/regularMarketDayHigh").asDouble()))
-                .low(bd(meta.at("/regularMarketDayLow").asDouble()))
-                .volume(meta.at("/regularMarketVolume").asLong())
+                .open(bdOrNull(meta.at("/regularMarketOpen")))
+                .high(bdOrNull(meta.at("/regularMarketDayHigh")))
+                .low(bdOrNull(meta.at("/regularMarketDayLow")))
+                .volume(vol.isNumber() ? vol.asLong() : null)
                 .change(change)
                 .changePercent(changePct)
-                .weekHigh52(bd(meta.at("/fiftyTwoWeekHigh").asDouble()))
-                .weekLow52(bd(meta.at("/fiftyTwoWeekLow").asDouble()))
+                .weekHigh52(bdOrNull(meta.at("/fiftyTwoWeekHigh")))
+                .weekLow52(bdOrNull(meta.at("/fiftyTwoWeekLow")))
+                .marketTime(marketTime)
+                .priceType(priceType)
+                .source("Yahoo Finance chart API (exchange data, delayed)")
                 .build();
     }
 
-    private List<OhlcvBar> parseHistory(JsonNode root) {
+    private static BigDecimal bdOrNull(JsonNode n) {
+        if (n == null || !n.isNumber()) return null;
+        double v = n.asDouble();
+        return v > 0 && Double.isFinite(v) ? BigDecimal.valueOf(v).setScale(2, RoundingMode.HALF_UP) : null;
+    }
+
+    static List<OhlcvBar> parseHistory(JsonNode root) {
         List<OhlcvBar> bars = new ArrayList<>();
         JsonNode result = root.at("/chart/result/0");
         JsonNode timestamps = result.at("/timestamp");
@@ -357,29 +419,37 @@ public class YahooFinanceClient {
 
         if (!timestamps.isArray()) return bars;
 
+        JsonNode adj = result.at("/indicators/adjclose/0/adjclose");
         for (int i = 0; i < timestamps.size(); i++) {
             long ts = timestamps.get(i).asLong();
             LocalDate date = java.time.Instant.ofEpochSecond(ts)
                     .atZone(ZoneId.of("Asia/Kolkata")).toLocalDate();
 
-            bars.add(new OhlcvBar(
-                    date,
-                    safeDouble(ohlcv.at("/open/" + i)),
-                    safeDouble(ohlcv.at("/high/" + i)),
-                    safeDouble(ohlcv.at("/low/" + i)),
-                    safeDouble(ohlcv.at("/close/" + i)),
-                    ohlcv.at("/volume/" + i).asLong(0)
-            ));
+            // Yahoo returns null OHLC for halted sessions and often for the bar still in
+            // progress. Those were stored as real 0.0 prices, which broke every moving average,
+            // made RSI read a full-price "gain" on the next bar and pushed ATR to about the
+            // price itself. A bar without a complete, positive OHLC is not a bar — skip it.
+            Double open = positiveOrNull(ohlcv.at("/open/" + i));
+            Double high = positiveOrNull(ohlcv.at("/high/" + i));
+            Double low = positiveOrNull(ohlcv.at("/low/" + i));
+            Double close = positiveOrNull(ohlcv.at("/close/" + i));
+            if (open == null || high == null || low == null || close == null) continue;
+            Double adjClose = adj.isArray() ? positiveOrNull(adj.path(i)) : null;
+
+            bars.add(new OhlcvBar(date, open, high, low, close,
+                    adjClose != null ? adjClose : close, ohlcv.at("/volume/" + i).asLong(0)));
         }
         return bars;
     }
 
-    private BigDecimal bd(double value) {
-        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
+    private static Double positiveOrNull(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull() || !node.isNumber()) return null;
+        double v = node.asDouble();
+        return v > 0 && Double.isFinite(v) ? v : null;
     }
 
-    private double safeDouble(JsonNode node) {
-        return node.isNull() ? 0.0 : node.asDouble();
+    private BigDecimal bd(double value) {
+        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
     }
 
     public static class OhlcvBar {
@@ -388,14 +458,21 @@ public class YahooFinanceClient {
         private final double high;
         private final double low;
         private final double close;
+        /** Split- and dividend-adjusted close; equals {@code close} when Yahoo gives none. */
+        private final double adjClose;
         private final long volume;
 
         public OhlcvBar(LocalDate date, double open, double high, double low, double close, long volume) {
+            this(date, open, high, low, close, close, volume);
+        }
+
+        public OhlcvBar(LocalDate date, double open, double high, double low, double close, double adjClose, long volume) {
             this.date = date;
             this.open = open;
             this.high = high;
             this.low = low;
             this.close = close;
+            this.adjClose = adjClose;
             this.volume = volume;
         }
 
@@ -404,6 +481,7 @@ public class YahooFinanceClient {
         public double high() { return high; }
         public double low() { return low; }
         public double close() { return close; }
+        public double adjClose() { return adjClose; }
         public long volume() { return volume; }
     }
 }

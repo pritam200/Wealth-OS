@@ -1,343 +1,218 @@
 package com.marketai.technical.service;
 
 import com.marketai.market.entity.PriceHistory;
-import com.marketai.market.repository.PriceHistoryRepository;
+import com.marketai.market.quality.DailySeries;
+import com.marketai.market.quality.SeriesStatus;
 import com.marketai.market.service.MarketDataService;
-import com.marketai.technical.dto.TechnicalAnalysisDto;
+import com.marketai.signal.service.MarketStructureAnalyzer;
+import com.marketai.technical.dto.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.math.MathContext;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Collectors;
 import com.marketai.common.quality.DataQuality;
 
+/**
+ * The one place technical indicators, trend and support/resistance are computed. Reads the
+ * validated daily series from {@link MarketDataService#getDailySeries}; all formulas live in
+ * {@link Indicators}, {@link TrendModel} and {@link SupportResistanceAnalyzer}.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class TechnicalIndicatorService {
 
-    private final PriceHistoryRepository priceHistoryRepository;
     private final MarketDataService marketDataService;
+    private final MarketStructureAnalyzer structureAnalyzer = new MarketStructureAnalyzer();
 
-    private static final MathContext MC = new MathContext(10, RoundingMode.HALF_UP);
+    /** Below this many valid bars nothing is computed. */
+    public static final int MIN_BARS = 20;
+    /** Daily returns used for volatility — about six months, recent enough to reflect the current regime. */
+    public static final int VOLATILITY_WINDOW = 120;
+    public static final String TIMEFRAME = "1D";
 
-    // Imported but never actually applied — every analyse() call recomputed indicators from
-    // scratch on every request. This is the underlying feed for RecommendationEngine, so
-    // caching it also caps repeated Yahoo history fetches across Portfolio/Advisor/Research.
-    @Cacheable(value = "technicals", key = "#symbol")
+    @Cacheable(value = "technicals", key = "T(com.marketai.market.service.MarketDataService).canonicalSymbol(#symbol)")
     public TechnicalAnalysisDto analyse(String symbol) {
-        List<PriceHistory> history = priceHistoryRepository.findTop200BySymbolOrderByDateDesc(symbol);
+        return analyse(marketDataService.getDailySeries(symbol, MIN_BARS));
+    }
 
-        if (history.size() < 20) {
-            try {
-                marketDataService.fetchAndStorePriceHistory(symbol, "1y");
-                history = priceHistoryRepository.findTop200BySymbolOrderByDateDesc(symbol);
-            } catch (Exception e) {
-                log.warn("Could not fetch price history for {}: {}", symbol, e.getMessage());
-            }
+    public TechnicalAnalysisDto analyse(DailySeries series) {
+        List<PriceHistory> bars = series.bars();
+        if (series.status() == SeriesStatus.INSUFFICIENT_DATA) {
+            log.info("TECHNICALS INSUFFICIENT — {}: {} valid daily bar(s)", series.symbol(), bars.size());
+            return base(series)
+                    .price(series.last() != null ? series.last().getClose() : null)
+                    .trend("INSUFFICIENT_DATA")
+                    .dataQuality(DataQuality.INSUFFICIENT.wire())
+                    .indicators(List.of())
+                    .build();
         }
 
-        // Not enough real history to compute any indicator. Report that honestly instead of
-        // synthesising indicator-shaped numbers from a single day's price change.
-        if (history.size() < 5) {
-            return insufficientData(symbol, history.size());
-        }
+        List<Double> c = series.closes();
+        double price = c.get(c.size() - 1);
+        LocalDate asOf = series.lastBarDate();
+        int n = c.size();
 
-        // Reverse to chronological order
-        List<Double> closes = history.stream()
-                .sorted((a, b) -> a.getDate().compareTo(b.getDate()))
-                .map(h -> h.getClose().doubleValue())
-                .collect(Collectors.toList());
+        Double rsi = Indicators.rsi(c, 14);
+        double[] macd = Indicators.macd(c, 12, 26, 9);
+        Double sma20 = Indicators.sma(c, 20), sma50 = Indicators.sma(c, 50), sma100 = Indicators.sma(c, 100), sma200 = Indicators.sma(c, 200);
+        Double ema20 = n >= Indicators.emaBarsRequired(20) ? Indicators.ema(c, 20) : null;
+        Double ema50 = n >= Indicators.emaBarsRequired(50) ? Indicators.ema(c, 50) : null;
+        Double ema200 = n >= Indicators.emaBarsRequired(200) ? Indicators.ema(c, 200) : null;
+        double[] bb = Indicators.bollinger(c, 20, 2.0);
+        Double atr = Indicators.atr(bars, 14);
+        double[] adx = Indicators.adx(bars, 14);
+        List<Double> rets = Indicators.logReturns(c, VOLATILITY_WINDOW);
+        Double dailyVol = rets.size() >= 20 ? Indicators.stdev(rets) : null;
+        VolumeProfile volume = volumeProfile(bars);
+        SupportResistance levels = SupportResistanceAnalyzer.analyse(bars, atr, sma50, sma200);
+        MarketStructureAnalyzer.StructureRead structure = structureAnalyzer.analyse(bars);
+        TrendAssessment trend = TrendModel.classify(new TrendModel.Inputs(price, sma50, sma200,
+                Indicators.smaAt(c, 50, 20), ema20, ema50,
+                structure.getStructure().name(), structure.getDetail(),
+                adx != null ? adx[0] : null, adx != null ? adx[1] : null, adx != null ? adx[2] : null,
+                rsi, macd != null ? macd[2] : null,
+                volume.getRelativeVolume() != null ? volume.getRelativeVolume().doubleValue() : null));
 
-        double currentPrice = closes.isEmpty() ? 0 : closes.get(closes.size() - 1);
+        List<IndicatorValue> ind = new ArrayList<>();
+        ind.add(iv("RSI14", "RSI", rsi, "index 0–100", "Wilder: seed = mean gain/loss of first 14 changes; avg = (avg·13 + x)/14; RSI = 100 − 100/(1 + avgGain/avgLoss)", 14, 15, n, asOf));
+        ind.add(iv("SMA20", "SMA 20", sma20, "₹", "Mean of the last 20 closes", 20, 20, n, asOf));
+        ind.add(iv("SMA50", "SMA 50", sma50, "₹", "Mean of the last 50 closes", 50, 50, n, asOf));
+        ind.add(iv("SMA100", "SMA 100", sma100, "₹", "Mean of the last 100 closes", 100, 100, n, asOf));
+        ind.add(iv("SMA200", "SMA 200", sma200, "₹", "Mean of the last 200 closes", 200, 200, n, asOf));
+        String emaF = "k = 2/(n+1), seeded with the SMA of the first n closes; EMA = close·k + EMA·(1−k); shown once 2n bars exist";
+        ind.add(iv("EMA20", "EMA 20", ema20, "₹", emaF, 20, 40, n, asOf));
+        ind.add(iv("EMA50", "EMA 50", ema50, "₹", emaF, 50, 100, n, asOf));
+        ind.add(iv("EMA200", "EMA 200", ema200, "₹", emaF, 200, 400, n, asOf));
+        String macdF = "EMA12 − EMA26; signal = EMA9 of that line; histogram = line − signal";
+        ind.add(iv("MACD", "MACD line", macd != null ? macd[0] : null, "₹", macdF, 26, 34, n, asOf));
+        ind.add(iv("MACD_SIGNAL", "MACD signal", macd != null ? macd[1] : null, "₹", macdF, 9, 34, n, asOf));
+        ind.add(iv("MACD_HIST", "MACD histogram", macd != null ? macd[2] : null, "₹", macdF, 9, 34, n, asOf));
+        String bbF = "SMA20 ± 2 × population standard deviation of the same 20 closes";
+        ind.add(iv("BB_UPPER", "Bollinger upper", bb != null ? bb[0] : null, "₹", bbF, 20, 20, n, asOf));
+        ind.add(iv("BB_LOWER", "Bollinger lower", bb != null ? bb[2] : null, "₹", bbF, 20, 20, n, asOf));
+        ind.add(iv("ATR14", "ATR", atr, "₹", "TR = max(H−L, |H−prevC|, |L−prevC|); Wilder: seed = mean of first 14 TR; ATR = (ATR·13 + TR)/14 through the latest bar", 14, 15, n, asOf));
+        ind.add(iv("ADX14", "ADX", adx != null ? adx[0] : null, "index 0–100", "Wilder: smoothed +DM/−DM/TR (S − S/14 + x); DI = 100·DM/TR; DX = 100·|+DI − −DI|/(+DI + −DI); ADX = Wilder average of DX", 14, 29, n, asOf));
+        ind.add(iv("VOL_DAILY", "Daily volatility", dailyVol != null ? dailyVol * 100 : null, "% per day", "Sample standard deviation of daily log returns ln(Ct/Ct−1), last 120 sessions", VOLATILITY_WINDOW, 21, n, asOf));
+        ind.add(iv("VOL_ANNUAL", "Annualised volatility", dailyVol != null ? dailyVol * Math.sqrt(252) * 100 : null, "% per year", "Daily volatility × √252", VOLATILITY_WINDOW, 21, n, asOf));
 
-        double rsi14 = calculateRSI(closes, 14);
-        double[] macd = calculateMACD(closes, 12, 26, 9);
-        double sma20 = calculateSMA(closes, 20);
-        double sma50 = calculateSMA(closes, 50);
-        double sma200 = calculateSMA(closes, 200);
-        double ema20 = calculateEMA(closes, 20);
-        double[] bb = calculateBollingerBands(closes, 20, 2.0);
-        double atr14 = calculateATR(history, 14);
-        double[] sr = calculateSupportResistance(closes);
-
-        // calculateSMA returns 0 (not an error) when there are fewer bars than the period.
-        // Treating that 0 as a real average made `price > sma200` trivially true for every
-        // symbol with <200 bars, which silently biased their trend toward UPTREND. Carry the
-        // "not computable" state through as null instead.
-        Double sma200OrNull = sma200 > 0 ? sma200 : null;
-
-        String trend = determineTrend(currentPrice, sma20, sma50, sma200OrNull);
-        String signal = generateSignal(rsi14, macd[0], macd[1], currentPrice, sma20, sma50);
-
-        return TechnicalAnalysisDto.builder()
-                .symbol(symbol)
-                .price(round(currentPrice))
-                .rsi(round(rsi14))
-                .macd(round(macd[0]))
-                .macdSignal(round(macd[1]))
-                .macdHistogram(round(macd[2]))
-                .sma20(roundOrNull(sma20))
-                .sma50(roundOrNull(sma50))
-                .sma200(sma200OrNull != null ? round(sma200OrNull) : null)
-                .ema20(roundOrNull(ema20))
-                .bollingerUpper(roundOrNull(bb[0]))
-                .bollingerMiddle(roundOrNull(bb[1]))
-                .bollingerLower(roundOrNull(bb[2]))
-                .atr(roundOrNull(atr14))
-                .support(roundOrNull(sr[0]))
-                .resistance(roundOrNull(sr[1]))
-                .trend(trend)
-                .signal(signal)
-                .signalStrength(calculateSignalStrength(rsi14, macd, currentPrice, sma20))
-                .dataQuality((sma200OrNull != null ? DataQuality.FULL : DataQuality.PARTIAL).wire())
-                .barsAvailable(history.size())
+        PriceLevel ns = levels.getNearestSupport(), nr = levels.getNearestResistance();
+        List<PriceHistory> year = bars.subList(Math.max(0, n - 250), n);
+        double hi52 = year.stream().mapToDouble(b -> b.getHigh().doubleValue()).max().orElseThrow();
+        double lo52 = year.stream().mapToDouble(b -> b.getLow().doubleValue()).min().orElseThrow();
+        return base(series)
+                .price(round(price))
+                .rsi(round(rsi))
+                .macd(macd != null ? round(macd[0]) : null)
+                .macdSignal(macd != null ? round(macd[1]) : null)
+                .macdHistogram(macd != null ? round(macd[2]) : null)
+                .sma20(round(sma20)).sma50(round(sma50)).sma100(round(sma100)).sma200(round(sma200))
+                .ema20(round(ema20)).ema50(round(ema50)).ema200(round(ema200))
+                .bollingerUpper(bb != null ? round(bb[0]) : null)
+                .bollingerMiddle(bb != null ? round(bb[1]) : null)
+                .bollingerLower(bb != null ? round(bb[2]) : null)
+                .atr(round(atr))
+                .atrPct(atr != null ? round(atr / price * 100) : null)
+                .adx(adx != null ? round(adx[0]) : null)
+                .plusDi(adx != null ? round(adx[1]) : null)
+                .minusDi(adx != null ? round(adx[2]) : null)
+                .dailyVolatilityPct(dailyVol != null ? BigDecimal.valueOf(dailyVol * 100).setScale(3, RoundingMode.HALF_UP) : null)
+                .annualizedVolatilityPct(dailyVol != null ? round(dailyVol * Math.sqrt(252) * 100) : null)
+                .volatilityBars(dailyVol != null ? rets.size() : null)
+                .volume(volume)
+                .high52w(round(hi52)).low52w(round(lo52)).range52wSessions(year.size())
+                .rangePosition52wPct(hi52 > lo52 ? round((price - lo52) / (hi52 - lo52) * 100) : null)
+                .support(ns != null ? ns.getPrice() : null)
+                .resistance(nr != null ? nr.getPrice() : null)
+                .levels(levels)
+                .trend(trend.getLabel())
+                .trendAssessment(trend)
+                .indicators(ind)
+                .dataQuality((sma200 != null ? DataQuality.FULL : DataQuality.PARTIAL).wire())
                 .build();
     }
 
-    // ─── RSI ─────────────────────────────────────────────────────────────────
-
-    public double calculateRSI(List<Double> closes, int period) {
-        if (closes.size() < period + 1) return 50.0;
-
-        double avgGain = 0, avgLoss = 0;
-
-        for (int i = 1; i <= period; i++) {
-            double change = closes.get(i) - closes.get(i - 1);
-            if (change > 0) avgGain += change;
-            else avgLoss += Math.abs(change);
-        }
-        avgGain /= period;
-        avgLoss /= period;
-
-        for (int i = period + 1; i < closes.size(); i++) {
-            double change = closes.get(i) - closes.get(i - 1);
-            double gain = Math.max(change, 0);
-            double loss = Math.max(-change, 0);
-            avgGain = (avgGain * (period - 1) + gain) / period;
-            avgLoss = (avgLoss * (period - 1) + loss) / period;
-        }
-
-        if (avgLoss == 0) return 100.0;
-        double rs = avgGain / avgLoss;
-        return 100.0 - (100.0 / (1 + rs));
-    }
-
-    // ─── MACD ────────────────────────────────────────────────────────────────
-
-    public double[] calculateMACD(List<Double> closes, int fast, int slow, int signal) {
-        List<Double> emaFast = computeEMAList(closes, fast);
-        List<Double> emaSlow = computeEMAList(closes, slow);
-
-        int diff = emaSlow.size();
-        List<Double> macdLine = new ArrayList<>();
-        for (int i = 0; i < diff; i++) {
-            macdLine.add(emaFast.get(emaFast.size() - diff + i) - emaSlow.get(i));
-        }
-
-        List<Double> signalLine = computeEMAList(macdLine, signal);
-        double macdVal = macdLine.isEmpty() ? 0 : macdLine.get(macdLine.size() - 1);
-        double signalVal = signalLine.isEmpty() ? 0 : signalLine.get(signalLine.size() - 1);
-
-        return new double[]{macdVal, signalVal, macdVal - signalVal};
-    }
-
-    // ─── SMA ─────────────────────────────────────────────────────────────────
-
-    public double calculateSMA(List<Double> closes, int period) {
-        if (closes.size() < period) return 0;
-        List<Double> slice = closes.subList(closes.size() - period, closes.size());
-        return slice.stream().mapToDouble(Double::doubleValue).average().orElse(0);
-    }
-
-    // ─── EMA ─────────────────────────────────────────────────────────────────
-
-    public double calculateEMA(List<Double> closes, int period) {
-        List<Double> emas = computeEMAList(closes, period);
-        return emas.isEmpty() ? 0 : emas.get(emas.size() - 1);
-    }
-
-    private List<Double> computeEMAList(List<Double> closes, int period) {
-        List<Double> emas = new ArrayList<>();
-        if (closes.size() < period) return emas;
-
-        double k = 2.0 / (period + 1);
-        double ema = closes.subList(0, period).stream()
-                .mapToDouble(Double::doubleValue).average().orElse(0);
-        emas.add(ema);
-
-        for (int i = period; i < closes.size(); i++) {
-            ema = closes.get(i) * k + ema * (1 - k);
-            emas.add(ema);
-        }
-        return emas;
-    }
-
-    // ─── Bollinger Bands ─────────────────────────────────────────────────────
-
-    public double[] calculateBollingerBands(List<Double> closes, int period, double stdDevMultiplier) {
-        if (closes.size() < period) return new double[]{0, 0, 0};
-
-        double sma = calculateSMA(closes, period);
-        List<Double> slice = closes.subList(closes.size() - period, closes.size());
-        double variance = slice.stream()
-                .mapToDouble(c -> Math.pow(c - sma, 2))
-                .average().orElse(0);
-        double stdDev = Math.sqrt(variance);
-
-        return new double[]{
-                sma + stdDevMultiplier * stdDev,
-                sma,
-                sma - stdDevMultiplier * stdDev
-        };
-    }
-
-    // ─── ATR ─────────────────────────────────────────────────────────────────
-
-    public double calculateATR(List<PriceHistory> history, int period) {
-        if (history.size() < 2) return 0;
-        List<PriceHistory> sorted = history.stream()
-                .sorted((a, b) -> a.getDate().compareTo(b.getDate()))
-                .collect(Collectors.toList());
-
-        double atr = 0;
-        int count = 0;
-        for (int i = 1; i < sorted.size() && count < period; i++, count++) {
-            double high = sorted.get(i).getHigh().doubleValue();
-            double low = sorted.get(i).getLow().doubleValue();
-            double prevClose = sorted.get(i - 1).getClose().doubleValue();
-            double tr = Math.max(high - low, Math.max(
-                    Math.abs(high - prevClose), Math.abs(low - prevClose)));
-            atr += tr;
-        }
-        return count > 0 ? atr / count : 0;
-    }
-
-    // ─── Support & Resistance ────────────────────────────────────────────────
-
-    public double[] calculateSupportResistance(List<Double> closes) {
-        if (closes.size() < 20) return new double[]{0, 0};
-
-        List<Double> recent = closes.subList(Math.max(0, closes.size() - 50), closes.size());
-        // A bad/missing price-history row (close = 0) must not win the min() and be
-        // reported as "support" — filter to valid positive closes first.
-        double support = recent.stream().mapToDouble(Double::doubleValue).filter(c -> c > 0).min().orElse(0);
-        double resistance = recent.stream().mapToDouble(Double::doubleValue).filter(c -> c > 0).max().orElse(0);
-        return new double[]{support, resistance};
-    }
-
-    // ─── Trend ───────────────────────────────────────────────────────────────
-
-    /**
-     * @param sma200 null when fewer than 200 bars are stored — the long-term filter is then
-     *               genuinely unknown and must not be counted as either above or below.
-     *               (Passing 0 here previously made every short-history symbol read as
-     *               "above its 200-DMA".)
-     */
-    private String determineTrend(double price, double sma20, double sma50, Double sma200) {
-        if (price == 0) return "UNKNOWN";
-        // A period whose SMA could not be computed yields 0 from calculateSMA; treat that as
-        // unknown rather than as a level the price is above.
-        boolean sma20Known = sma20 > 0, sma50Known = sma50 > 0, sma200Known = sma200 != null;
-        boolean aboveSma20  = sma20Known  && price > sma20;
-        boolean aboveSma50  = sma50Known  && price > sma50;
-        boolean aboveSma200 = sma200Known && price > sma200;
-        boolean belowSma20  = sma20Known  && price < sma20;
-        boolean belowSma50  = sma50Known  && price < sma50;
-        boolean belowSma200 = sma200Known && price < sma200;
-        boolean sma20AboveSma50 = sma20Known && sma50Known && sma20 > sma50;
-
-        if (aboveSma20 && aboveSma50 && aboveSma200 && sma20AboveSma50) return "STRONG_UPTREND";
-        if (aboveSma50 && aboveSma200) return "UPTREND";
-        // Strictest case first — previously the looser "all three below" test was checked
-        // before this one and shadowed it, making STRONG_DOWNTREND reachable only in the odd
-        // case of price above SMA20 but below SMA50/200. Since STRONG_DOWNTREND is the
-        // recommendation engine's only unconditional EXIT trigger, EXIT effectively never fired.
-        if (belowSma20 && belowSma50 && belowSma200) return "STRONG_DOWNTREND";
-        if (belowSma50 && belowSma200) return "DOWNTREND";
-        return "SIDEWAYS";
-    }
-
-    // ─── Signal ──────────────────────────────────────────────────────────────
-
-    private String generateSignal(double rsi, double macd, double macdSignal,
-                                   double price, double sma20, double sma50) {
-        int bullish = 0, bearish = 0;
-
-        if (rsi < 30) bullish += 2;
-        else if (rsi < 40) bullish += 1;
-        else if (rsi > 70) bearish += 2;
-        else if (rsi > 60) bearish += 1;
-
-        if (macd > macdSignal) bullish++;
-        else bearish++;
-
-        if (price > sma20) bullish++;
-        else bearish++;
-
-        if (price > sma50) bullish++;
-        else bearish++;
-
-        if (bullish >= 3 && bearish <= 1) return "BUY";
-        if (bearish >= 3 && bullish <= 1) return "SELL";
-        return "HOLD";
-    }
-
-    private String calculateSignalStrength(double rsi, double[] macd,
-                                            double price, double sma20) {
-        double score = 0;
-        if (rsi < 30 || rsi > 70) score += 2;
-        else if (rsi < 40 || rsi > 60) score += 1;
-        if (Math.abs(macd[0] - macd[1]) > Math.abs(price * 0.001)) score += 1;
-        if (Math.abs(price - sma20) / sma20 > 0.03) score += 1;
-
-        if (score >= 3) return "STRONG";
-        if (score >= 2) return "MODERATE";
-        return "WEAK";
-    }
-
-    /**
-     * Too little stored history to compute anything. Returns only the live price (which is
-     * real) and marks the whole payload INSUFFICIENT so callers can say "insufficient data"
-     * rather than presenting derived-from-nothing numbers as analysis.
-     *
-     * This replaces a previous fallback that invented an RSI from the day's change %, set
-     * every moving average equal to the current price, zeroed MACD, and derived ATR as a flat
-     * 1% of price — all returned in a DTO with no marker distinguishing it from real output.
-     */
-    private TechnicalAnalysisDto insufficientData(String symbol, int bars) {
-        BigDecimal price = null;
-        try {
-            com.marketai.market.dto.QuoteDto q = marketDataService.getQuote(symbol);
-            if (q != null && q.getCurrentPrice() != null) price = q.getCurrentPrice();
-        } catch (Exception e) {
-            log.warn("No quote available for {} either: {}", symbol, e.getMessage());
-        }
-        log.info("TECHNICALS INSUFFICIENT — {}: only {} daily bar(s) stored; returning no indicators", symbol, bars);
+    private TechnicalAnalysisDto.TechnicalAnalysisDtoBuilder base(DailySeries s) {
         return TechnicalAnalysisDto.builder()
-                .symbol(symbol)
-                .price(price)
-                .trend("UNKNOWN")
-                .signal("INSUFFICIENT_DATA")
-                .signalStrength(null)
-                .dataQuality(DataQuality.INSUFFICIENT.wire())
-                .barsAvailable(bars)
+                .symbol(s.symbol())
+                .seriesStatus(s.status().name())
+                .dataIssues(s.issues())
+                .barsAvailable(s.size())
+                .barsRejected(s.rejected())
+                .firstBarDate(s.isEmpty() ? null : s.bars().get(0).getDate())
+                .lastBarDate(s.lastBarDate())
+                .expectedSession(s.expectedSession())
+                .stale(s.stale())
+                .source(s.provider() != null ? s.provider() : "stored history")
+                .dataUpdatedAt(s.lastUpdated())
+                .timeframe(TIMEFRAME);
+    }
+
+    /**
+     * Volume over bars that report it. Latest vs the 20 sessions before it; trend = 20- vs
+     * 50-session average (RISING above 1.1, FALLING below 0.9 — descriptive cut-offs, not
+     * signals); unusual = more than 2 standard deviations above the 20-session mean.
+     */
+    static VolumeProfile volumeProfile(List<PriceHistory> bars) {
+        List<Long> v = new ArrayList<>();
+        for (PriceHistory b : bars) v.add(b.getVolume() != null && b.getVolume() > 0 ? b.getVolume() : null);
+        Long latest = v.isEmpty() ? null : v.get(v.size() - 1);
+        List<Double> prior20 = positives(v, v.size() - 21, v.size() - 1);
+        List<Double> last50 = positives(v, v.size() - 50, v.size());
+        List<Double> last20 = positives(v, v.size() - 20, v.size());
+        int withVol = (int) v.stream().filter(java.util.Objects::nonNull).count();
+        if (latest == null || prior20.size() < 15) {
+            return VolumeProfile.builder().latestVolume(latest).barsWithVolume(withVol)
+                    .reason(latest == null ? "Latest bar has no volume (the feed publishes none for this instrument or day)."
+                            : "Fewer than 15 of the previous 20 sessions report volume.").build();
+        }
+        double avg20 = prior20.stream().mapToDouble(Double::doubleValue).average().orElseThrow();
+        Double sd = Indicators.stdev(prior20);
+        double rel = latest / avg20;
+        Double z = sd != null && sd > 0 ? (latest - avg20) / sd : null;
+        String trend = null;
+        Double ratio = null;
+        if (last50.size() >= 40 && last20.size() >= 15) {
+            ratio = last20.stream().mapToDouble(Double::doubleValue).average().orElseThrow()
+                    / last50.stream().mapToDouble(Double::doubleValue).average().orElseThrow();
+            trend = ratio > 1.1 ? "RISING" : ratio < 0.9 ? "FALLING" : "FLAT";
+        }
+        return VolumeProfile.builder()
+                .latestVolume(latest)
+                .averageVolume20(BigDecimal.valueOf(avg20).setScale(0, RoundingMode.HALF_UP))
+                .relativeVolume(BigDecimal.valueOf(rel).setScale(2, RoundingMode.HALF_UP))
+                .volumeTrend(trend)
+                .volumeTrendRatio(ratio != null ? BigDecimal.valueOf(ratio).setScale(2, RoundingMode.HALF_UP) : null)
+                .unusual(z != null ? z > 2 : null)
+                .zScore(z != null ? BigDecimal.valueOf(z).setScale(2, RoundingMode.HALF_UP) : null)
+                .barsWithVolume(withVol)
                 .build();
     }
 
-    private BigDecimal round(double value) {
-        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
+    private static List<Double> positives(List<Long> v, int from, int to) {
+        List<Double> out = new ArrayList<>();
+        for (int i = Math.max(0, from); i < to; i++) if (v.get(i) != null) out.add(v.get(i).doubleValue());
+        return out;
     }
 
-    /** null when the indicator wasn't computable (calculateSMA/ATR/etc. return 0 in that case). */
-    private BigDecimal roundOrNull(double value) {
-        return value > 0 ? round(value) : null;
+    private static IndicatorValue iv(String key, String name, Double value, String unit, String formula,
+                                     int period, int required, int available, LocalDate asOf) {
+        boolean ok = value != null && available >= required;
+        return IndicatorValue.builder().key(key).name(name)
+                .value(ok ? BigDecimal.valueOf(value).setScale(4, RoundingMode.HALF_UP) : null)
+                .unit(unit).formula(formula).period(period).timeframe(TIMEFRAME).asOf(asOf)
+                .barsRequired(required).barsAvailable(available).available(ok)
+                .reason(ok ? null : "Needs " + required + " daily bars; " + available + " available.")
+                .build();
+    }
+
+    private static BigDecimal round(Double v) {
+        return v == null ? null : BigDecimal.valueOf(v).setScale(2, RoundingMode.HALF_UP);
     }
 }

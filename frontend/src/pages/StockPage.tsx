@@ -2,15 +2,18 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CHART, tooltipStyle } from '../theme/chartTheme';
 import { marketApi } from '../api/market';
-import { recommendationApi, isInsufficient } from '../api/analyst';
+import { recommendationApi, isInsufficient, NON_CALL_LABEL } from '../api/analyst';
 import type { AnalystAssessment } from '../api/analyst';
 import { AiCopilot } from '../components/ai/AiCopilot';
+import { AnalysisDetails } from '../components/market/AnalysisDetails';
+import { ResearchPanel } from '../components/research/ResearchPanel';
+import { useResearch } from '../components/research/useResearch';
 import type { QuoteDto, TechnicalAnalysis, PriceHistory, NewsItem } from '../types';
 import { TrendingUp, TrendingDown, ExternalLink, HelpCircle } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { format, subDays } from 'date-fns';
 
-const fmt = (n: number) =>
+const fmt = (n: number) => n == null || Number.isNaN(n) ? '—' :
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n);
 
 // Indicators are null whenever they couldn't be computed from real stored history —
@@ -29,8 +32,19 @@ const VERDICT_TONE: Record<string, string> = {
   EXIT:        'bg-bear/15 text-bear border-bear/30',
   REVIEW:      'bg-neutral/15 text-neutral border-neutral/30',
   HOLD:        'bg-gray-900 text-gray-400 border-surface-border',
+  AVOID:       'bg-bear/15 text-bear border-bear/30',
+  REBALANCE:   'bg-neutral/15 text-neutral border-neutral/30',
+  NO_ACTIONABLE_SIGNAL: 'bg-gray-900 text-gray-400 border-surface-border',
+  STALE_DATA:  'bg-transparent text-amber-300 border-dashed border-amber-500/50',
 };
-const verdictLabel = (a: string) => a.replace(/_/g, ' ');
+const verdictLabel = (a: string) => NON_CALL_LABEL[a] ?? a.replace(/_/g, ' ');
+
+const PRICE_TYPE_LABEL: Record<string, string> = {
+  DELAYED_INTRADAY: 'Delayed intraday price',
+  LAST_TRADED: 'Last traded (market closed)',
+  UNKNOWN: 'Price (timestamp unknown)',
+  STORED_CLOSE: 'Live quote unavailable — last stored daily close',
+};
 
 const RANGES = [
   { label: '1W', days: 7 },
@@ -49,18 +63,20 @@ export function StockPage() {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [range, setRange] = useState(RANGES[1]);
   const [loading, setLoading] = useState(true);
+  const research = useResearch(symbol ? { kind: 'stock', symbol } : null);
 
   useEffect(() => {
     if (!symbol) return;
     setLoading(true);
-    Promise.all([
+    // Settled, not all-or-nothing: a live-quote outage must not hide the stored-history analysis.
+    Promise.allSettled([
       marketApi.getQuote(symbol),
       marketApi.getTechnicals(symbol),
       marketApi.getStockNews(symbol),
     ]).then(([qr, tr, nr]) => {
-      setQuote(qr.data);
-      setTech(tr.data);
-      setNews(nr.data?.content ?? []);
+      setQuote(qr.status === 'fulfilled' ? qr.value.data : null);
+      setTech(tr.status === 'fulfilled' ? tr.value.data : null);
+      setNews(nr.status === 'fulfilled' ? nr.value.data?.content ?? [] : []);
     }).finally(() => setLoading(false));
   }, [symbol]);
 
@@ -93,9 +109,19 @@ export function StockPage() {
     </div>
   );
 
-  if (!quote) return <div className="card text-gray-500 text-center py-16">Stock not found</div>;
+  if (!quote && !(tech && tech.price != null)) return <div className="card text-gray-500 text-center py-16">Stock not found</div>;
 
-  const isPositive = quote.changePercent >= 0;
+  // Live quote unavailable: show the last validated daily close, labelled as such — never a
+  // blank or zero price, and no day-change figures we don't have.
+  const liveQuote = !!quote;
+  const q: QuoteDto = quote ?? {
+    symbol: tech!.symbol, name: assessment?.displayName ?? tech!.symbol, currentPrice: tech!.price!,
+    previousClose: NaN, open: NaN, high: NaN, low: NaN, volume: NaN, change: NaN, changePercent: NaN,
+    weekHigh52: tech!.high52w ?? NaN, weekLow52: tech!.low52w ?? NaN, marketCap: NaN, pe: NaN, sector: '',
+    lastUpdated: '', priceType: 'STORED_CLOSE', marketTime: null, source: tech!.source,
+  };
+
+  const isPositive = liveQuote ? q.changePercent >= 0 : true;
   const chartColor = isPositive ? CHART.bull : CHART.bear;
 
   const chartData = history.map(h => ({
@@ -113,31 +139,39 @@ export function StockPage() {
       <div className="card">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
-            <h1 className="text-3xl font-bold font-mono text-ink">{quote.symbol}</h1>
-            <p className="text-gray-400 mt-1">{quote.name}</p>
-            {quote.sector && (
+            <h1 className="text-3xl font-bold font-mono text-ink">{q.symbol}</h1>
+            <p className="text-gray-400 mt-1">{q.name}</p>
+            {q.sector && (
               <span className="text-xs bg-brand/10 text-brand border border-brand/20 px-2 py-0.5 rounded-full mt-2 inline-block">
-                {quote.sector}
+                {q.sector}
               </span>
             )}
           </div>
           <div className="text-right">
-            <div className="text-4xl font-bold text-ink">{fmt(quote.currentPrice)}</div>
-            <div className={`flex items-center gap-1 justify-end mt-1 ${isPositive ? 'text-bull' : 'text-bear'}`}>
-              {isPositive ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-              <span className="font-medium">
-                {isPositive ? '+' : ''}{fmt(quote.change)} ({isPositive ? '+' : ''}{quote.changePercent?.toFixed(2)}%)
-              </span>
+            <div className="text-4xl font-bold text-ink">{fmt(q.currentPrice)}</div>
+            {q.change != null && !Number.isNaN(q.change) && q.changePercent != null && (
+              <div className={`flex items-center gap-1 justify-end mt-1 ${isPositive ? 'text-bull' : 'text-bear'}`}>
+                {isPositive ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                <span className="font-medium">
+                  {isPositive ? '+' : ''}{fmt(q.change)} ({isPositive ? '+' : ''}{q.changePercent.toFixed(2)}%)
+                </span>
+              </div>
+            )}
+            <div className="text-2xs text-gray-600 mt-1">
+              {PRICE_TYPE_LABEL[q.priceType ?? ''] ?? 'Price'}
+              {q.marketTime ? ` · ${format(new Date(q.marketTime), 'd MMM yyyy, HH:mm')}` : ''}
+              {!liveQuote && tech?.lastBarDate ? ` of ${tech.lastBarDate}` : ''}
+              {q.source ? ` · ${q.source}` : ''}
             </div>
           </div>
         </div>
 
         <div className="grid grid-cols-4 gap-4 mt-6 pt-4 border-t border-surface-border">
           {[
-            { label: 'Open', value: fmt(quote.open) },
-            { label: 'High', value: fmt(quote.high) },
-            { label: 'Low', value: fmt(quote.low) },
-            { label: 'Prev Close', value: fmt(quote.previousClose) },
+            { label: 'Open', value: fmt(q.open) },
+            { label: 'High', value: fmt(q.high) },
+            { label: 'Low', value: fmt(q.low) },
+            { label: 'Prev Close', value: fmt(q.previousClose) },
           ].map(i => (
             <div key={i.label}>
               <div className="stat-label">{i.label}</div>
@@ -150,15 +184,15 @@ export function StockPage() {
         <div className="grid grid-cols-3 gap-4 mt-4 pt-4 border-t border-surface-border">
           <div>
             <div className="stat-label">52W High</div>
-            <div className="text-bull font-medium mt-1">{fmt(quote.weekHigh52)}</div>
+            <div className="text-bull font-medium mt-1">{fmt(q.weekHigh52)}</div>
           </div>
           <div>
             <div className="stat-label">52W Low</div>
-            <div className="text-bear font-medium mt-1">{fmt(quote.weekLow52)}</div>
+            <div className="text-bear font-medium mt-1">{fmt(q.weekLow52)}</div>
           </div>
           <div>
             <div className="stat-label">P/E Ratio</div>
-            <div className="text-ink font-medium mt-1">{quote.pe?.toFixed(1) ?? '—'}</div>
+            <div className="text-ink font-medium mt-1">{q.pe == null || Number.isNaN(q.pe) ? '—' : q.pe.toFixed(1)}</div>
           </div>
         </div>
       </div>
@@ -250,7 +284,7 @@ export function StockPage() {
                   cls: tech.macd == null ? 'text-gray-600' : tech.macd > 0 ? 'text-bull' : 'text-bear' },
                 { label: 'Trend', value: tech.trend?.replace(/_/g, ' ') ?? '—',
                   cls: tech.trend?.includes('UP') ? 'text-bull' : tech.trend?.includes('DOWN') ? 'text-bear' : 'text-neutral' },
-                { label: 'ATR', value: fmtOr(tech.atr), cls: tech.atr == null ? 'text-gray-600' : 'text-ink' },
+                { label: 'ATR (14, ₹ per day)', value: tech.atr == null ? '—' : `${fmt(tech.atr)}${tech.atrPct != null ? ` · ${tech.atrPct.toFixed(2)}%` : ''}`, cls: tech.atr == null ? 'text-gray-600' : 'text-ink' },
               ].map(i => (
                 <div key={i.label} className="bg-surface-hover rounded-lg p-3">
                   <div className="stat-label">{i.label}</div>
@@ -263,7 +297,8 @@ export function StockPage() {
               {[
                 { label: 'SMA 20 / 50 / 200', value: `${fmtOr(tech.sma20)} · ${fmtOr(tech.sma50)} · ${fmtOr(tech.sma200)}` },
                 { label: 'Bollinger Bands', value: `${fmtOr(tech.bollingerLower)} – ${fmtOr(tech.bollingerUpper)}` },
-                { label: 'Support / Resistance', value: `${fmtOr(tech.support)} / ${fmtOr(tech.resistance)}` },
+                { label: 'Support / Resistance', value: `${tech.support == null ? 'no reliable level' : fmt(tech.support)} / ${tech.resistance == null ? 'no reliable level' : fmt(tech.resistance)}` },
+                { label: 'Volatility (daily / annualised)', value: tech.dailyVolatilityPct == null ? '—' : `${tech.dailyVolatilityPct.toFixed(2)}% / ${tech.annualizedVolatilityPct?.toFixed(1)}%` },
               ].map(i => (
                 <div key={i.label} className="flex justify-between text-sm">
                   <span className="text-gray-500">{i.label}</span>
@@ -272,6 +307,10 @@ export function StockPage() {
               ))}
             </div>
 
+            <p className="text-2xs text-gray-600 mt-3">
+              Daily bars to {tech.lastBarDate ?? '—'} · {tech.source ?? 'unknown source'}
+              {tech.stale ? ' · stale' : ''}{tech.seriesStatus === 'DATA_QUALITY_WARNING' ? ' · data-quality warning' : ''}
+            </p>
             {tech.dataQuality === 'PARTIAL' && (
               <p className="text-2xs text-gray-600 mt-3 pt-2 border-t border-surface-border/60">
                 Based on {tech.barsAvailable ?? '<200'} days of stored history — the 200-day
@@ -312,6 +351,10 @@ export function StockPage() {
         </div>
       </div>
 
+      <ResearchPanel state={research} />
+
+      <AnalysisDetails symbol={symbol!} tech={tech} assessment={assessment} research={research.result} />
+
       {/* AI Analysis */}
       <AiCopilot />
     </div>
@@ -340,11 +383,11 @@ function EngineVerdict({ a }: { a: AnalystAssessment | null }) {
     <span
       title={a.nextActionReason ?? undefined}
       className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full border shrink-0 ${
-        VERDICT_TONE[a.nextAction] ?? VERDICT_TONE.HOLD
+        VERDICT_TONE[a.nextAction] ?? VERDICT_TONE.NO_ACTIONABLE_SIGNAL
       }`}
     >
       {verdictLabel(a.nextAction)}
-      <span className="font-normal opacity-75">· {a.confidenceScore}% confidence</span>
+      {a.confidenceScore != null && <span className="font-normal opacity-75">· {a.confidenceScore}% historical hit rate</span>}
     </span>
   );
 }

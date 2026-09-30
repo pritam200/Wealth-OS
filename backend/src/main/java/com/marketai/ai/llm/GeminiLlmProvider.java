@@ -27,6 +27,7 @@ public class GeminiLlmProvider implements LlmProvider {
             .text(result.text()).model(request.model()).provider(id().key())
             .latencyMs(System.currentTimeMillis() - started)
             .promptTokens(result.promptTokens()).completionTokens(result.completionTokens())
+            .grounding(result.grounding())
             .build();
     }
 

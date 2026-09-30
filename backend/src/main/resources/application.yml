@@ -4,7 +4,7 @@ spring:
 
 ---
 # Base configuration, shared by every profile. This used to be activated only for `dev`, which
-# left the prod profile without the recommendation weights (startup fails their sum check),
+# left the prod profile without the model settings,
 # Gmail OAuth, mail, the PDF-password key and sync settings. Local defaults below are
 # overridden by environment variables; the prod document at the end of the file only tightens
 # what must differ in a hosted deployment.
@@ -146,31 +146,9 @@ app:
   news:
     refresh-rate-ms: 1800000
 
-  # RecommendationEngine composite-score weights (stocks only — MFs use a separate
-  # tax/holding-period rule set).
-  #
-  # These MUST sum to 100 — AnalystService.validateWeights fails startup otherwise, because a
-  # set summing to 90 silently shrinks every composite by a tenth and moves stocks across the
-  # BUY/HOLD/SELL thresholds with nothing reporting it.
-  #
-  # Weights changed from 30/20/20/30. Two reasons, both from the competitive research in
-  # docs/research/COMPETITIVE_RESEARCH.md:
-  #
-  #   - technical and momentum are both derived from price and are highly correlated, so
-  #     30+20 double-counted the same signal. Their combined share drops 50 -> 40.
-  #   - sentiment at 30% put the largest single weight on the softest input. Value Research,
-  #     the most methodologically transparent Indian rater, does not use sentiment as a rating
-  #     input at all, and weights valuation highest.
-  #
-  # Valuation is raised to 40, making it the largest weight, to match that principle. Sentiment is reduced rather than removed: without a
-  # fundamentals feed there is no quality or growth factor to absorb the freed weight, and
-  # leaving it on price would deepen the double-count this change exists to reduce.
-  recommendation:
-    weights:
-      technical: 25
-      momentum: 15
-      valuation: 40
-      sentiment: 20
+  # Stock ratings no longer use weighted composite scores. The old technical/momentum/
+  # valuation/sentiment weights were never tested against outcomes; a rating now comes only from
+  # a signal whose calls have beaten the base rate on the stock's own history (SignalEngine).
 
   # Add your ngrok frontend URL here (comma-separated) when tunneling, e.g.
   # CORS_ALLOWED_ORIGINS=http://localhost:5173,https://7aee-153-72-47-54.ngrok-free.app

@@ -16,6 +16,14 @@ public class LlmCompletion {
     private String promptVersion;
     /** Served by the fallback provider because the configured one failed. */
     private boolean fallbackUsed;
+    /** Web-search grounding: which statements were backed by which pages. Null unless requested. */
+    private Grounding grounding;
+
+    /** The pages a grounded answer drew on, and the statements each one supports. */
+    public record Grounding(java.util.List<String> queries, java.util.List<Source> sources, java.util.List<Support> supports) {}
+    public record Source(String title, String uri) {}
+    /** One statement of the answer and the indexes (into {@code sources}) that support it. */
+    public record Support(String text, java.util.List<Integer> sourceIndexes) {}
 
     /** Which model and prompt read a document — recorded on what it produced, so a re-read by a
      *  different model or prompt can be told apart from a repeat of the same read. */

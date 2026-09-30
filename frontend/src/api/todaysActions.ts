@@ -47,7 +47,9 @@ export interface BuyAction {
   symbol: string; name: string; assetType: AssetType;
   currentValue: number; currentPercentOfEquity: number | null;
   maxAddWithoutBreachingGuideline: number | null;
-  why: string; risk: string; confidence: number;
+  why: string; risk: string;
+  /** Historical hit rate (%) of the validated call behind this action; null when there is none. */
+  confidence: number | null;
 }
 
 export interface SellReduceAction {

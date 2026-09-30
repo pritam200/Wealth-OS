@@ -40,7 +40,12 @@ public class GeminiClient {
     /** An image sent with the prompt — a scanned statement page, or a photographed receipt. */
     public record InlineImage(String mimeType, byte[] data) {}
 
-    public record Result(String text, Integer promptTokens, Integer completionTokens) {}
+    public record Result(String text, Integer promptTokens, Integer completionTokens,
+                         com.marketai.ai.llm.LlmCompletion.Grounding grounding) {
+        public Result(String text, Integer promptTokens, Integer completionTokens) {
+            this(text, promptTokens, completionTokens, null);
+        }
+    }
 
     private static final int MAX_ATTEMPTS = 4;
 
@@ -85,6 +90,11 @@ public class GeminiClient {
         config.put("maxOutputTokens", request.maxTokens() != null ? request.maxTokens() : defaultCap);
         if (request.json()) config.put("responseMimeType", "application/json");
         body.set("generationConfig", config);
+        if (request.webSearch()) {
+            ArrayNode tools = objectMapper.createArrayNode();
+            tools.add(objectMapper.createObjectNode().set("google_search", objectMapper.createObjectNode()));
+            body.set("tools", tools);
+        }
 
         String uri = settings.endpoint() + "/models/" + stripPrefix(request.model()) + ":generateContent";
         JsonNode response = null;
@@ -118,7 +128,7 @@ public class GeminiClient {
         }
 
         String finish = response == null ? null : response.at("/candidates/0/finishReason").asText(null);
-        String text = response == null ? null : response.at("/candidates/0/content/parts/0/text").asText(null);
+        String text = response == null ? null : joinParts(response.at("/candidates/0/content/parts"));
         if ("MAX_TOKENS".equals(finish) && request.json()) {
             throw new LlmUnavailableException(LlmErrorCategory.OUTPUT_INVALID, "Gemini output was cut off at the token limit");
         }
@@ -129,7 +139,41 @@ public class GeminiClient {
         JsonNode usage = response.path("usageMetadata");
         return new Result(text,
             usage.hasNonNull("promptTokenCount") ? usage.get("promptTokenCount").asInt() : null,
-            usage.hasNonNull("candidatesTokenCount") ? usage.get("candidatesTokenCount").asInt() : null);
+            usage.hasNonNull("candidatesTokenCount") ? usage.get("candidatesTokenCount").asInt() : null,
+            request.webSearch() ? grounding(response.at("/candidates/0/groundingMetadata")) : null);
+    }
+
+    /** A grounded answer can arrive split across several text parts. */
+    static String joinParts(JsonNode parts) {
+        if (parts == null || !parts.isArray()) return null;
+        StringBuilder sb = new StringBuilder();
+        for (JsonNode p : parts) if (p.hasNonNull("text")) sb.append(p.get("text").asText());
+        return sb.isEmpty() ? null : sb.toString();
+    }
+
+    /**
+     * Google Search grounding metadata: the pages used ({@code groundingChunks[].web}) and which
+     * answer segments each supports ({@code groundingSupports}). An answer with no metadata is
+     * returned with empty lists, so the caller can tell "searched, nothing cited" apart.
+     */
+    static com.marketai.ai.llm.LlmCompletion.Grounding grounding(JsonNode meta) {
+        List<String> queries = new ArrayList<>();
+        List<com.marketai.ai.llm.LlmCompletion.Source> sources = new ArrayList<>();
+        List<com.marketai.ai.llm.LlmCompletion.Support> supports = new ArrayList<>();
+        if (meta != null && !meta.isMissingNode()) {
+            for (JsonNode q : meta.path("webSearchQueries")) queries.add(q.asText());
+            for (JsonNode c : meta.path("groundingChunks")) {
+                JsonNode web = c.path("web");
+                sources.add(new com.marketai.ai.llm.LlmCompletion.Source(web.path("title").asText(null), web.path("uri").asText(null)));
+            }
+            for (JsonNode s : meta.path("groundingSupports")) {
+                String segment = s.path("segment").path("text").asText(null);
+                List<Integer> idx = new ArrayList<>();
+                for (JsonNode i : s.path("groundingChunkIndices")) if (i.asInt() >= 0 && i.asInt() < sources.size()) idx.add(i.asInt());
+                if (segment != null && !segment.isBlank() && !idx.isEmpty()) supports.add(new com.marketai.ai.llm.LlmCompletion.Support(segment.trim(), idx));
+            }
+        }
+        return new com.marketai.ai.llm.LlmCompletion.Grounding(queries, sources, supports);
     }
 
     /** Model names (without the "models/" prefix) that support generateContent. */

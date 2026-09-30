@@ -38,7 +38,8 @@ class AiServiceNoModelTest {
         llm = mock(LlmService.class);
         historyRepository = mock(AiHistoryRepository.class);
         service = new AiService(llm, historyRepository,
-            mock(MarketDataService.class), mock(TechnicalIndicatorService.class), mock(PortfolioService.class));
+            mock(MarketDataService.class), mock(TechnicalIndicatorService.class), mock(PortfolioService.class),
+            mock(com.marketai.research.service.ResearchOrchestrator.class));
         user = User.builder().id(1L).email("someone@example.com").build();
 
         when(llm.complete(any(), any(), anyString()))

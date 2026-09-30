@@ -43,16 +43,16 @@ function CollapsibleSection({ title, icon, children, onRefresh, loading }: {
   );
 }
 
-function Benchmark({ label, cagr, color, highlight, sensitive }: { label: string; cagr: string | null; color: string; highlight?: boolean; sensitive?: boolean }) {
+function Benchmark({ label, ret, color, highlight, sensitive }: { label: string; ret: string | null; color: string; highlight?: boolean; sensitive?: boolean }) {
   const maskText = useMaskedText();
-  const isNeg = cagr?.startsWith('-');
+  const isNeg = ret?.startsWith('-');
   return (
     <div className={`flex items-center justify-between py-2.5 px-2.5 rounded-lg border-b border-surface-border/50 last:border-0 ${highlight ? 'bg-brand-gradient-soft mb-1' : ''}`}>
       <div className="flex items-center gap-2">
         <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }} />
         <span className={`text-sm ${highlight ? 'text-ink font-medium' : 'text-gray-300'}`}>{label}</span>
       </div>
-      <span className={`text-sm font-mono font-semibold ${cagr == null ? 'text-gray-600' : isNeg ? 'text-bear' : 'text-bull'}`}>{cagr == null ? 'n/a' : sensitive ? maskText(cagr) : cagr}</span>
+      <span className={`text-sm font-mono font-semibold ${ret == null ? 'text-gray-600' : isNeg ? 'text-bear' : 'text-bull'}`}>{ret == null ? 'n/a' : sensitive ? maskText(ret) : ret}</span>
     </div>
   );
 }
@@ -502,7 +502,8 @@ export function Tab6MutualFunds() {
     holdings: allHoldings.length,
   };
 
-  const cagr = combined.totalInvested > 0
+  // Absolute return since purchase (not annualised, not a CAGR).
+  const absReturn = combined.totalInvested > 0
     ? ((combined.currentValue - combined.totalInvested) / combined.totalInvested * 100)
     : 0;
 
@@ -547,7 +548,7 @@ export function Tab6MutualFunds() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <StatTile label="Amount Invested" value={fmt(combined.totalInvested)} Icon={Wallet} tone="brand" />
               <StatTile label="Current Value" value={fmt(combined.currentValue)} Icon={TrendingUp} tone="brand" />
-              <StatTile label="Overall Returns" value={fmtPct(cagr)} Icon={cagr >= 0 ? TrendingUp : Layers} tone={cagr >= 0 ? 'bull' : 'bear'} />
+              <StatTile label="Overall Returns" value={fmtPct(absReturn)} Icon={absReturn >= 0 ? TrendingUp : Layers} tone={absReturn >= 0 ? 'bull' : 'bear'} />
               <StatTile label="Number of Funds" value={String(combined.holdings)} Icon={PieChart} tone="gold" sensitive={false} />
             </div>
           </CollapsibleSection>
@@ -639,11 +640,15 @@ export function Tab6MutualFunds() {
             {/* Performance & Analytics (Benchmark Comparison) */}
             <CollapsibleSection title="Performance &amp; Analytics" icon={<BarChart3 size={15} className="text-brand-light" />}
               onRefresh={loadBenchmarks} loading={benchmarksLoading}>
-              <Benchmark label="Your Portfolio Return" cagr={fmtPct(cagr)} color="#3B82F6" highlight sensitive />
-              <Benchmark label="Nifty 50 (trailing)"    cagr={benchmarks?.nifty50 != null ? fmtPct(benchmarks.nifty50) : null} color="#10B981" />
-              <Benchmark label="Sensex (trailing)"      cagr={benchmarks?.sensex != null ? fmtPct(benchmarks.sensex) : null} color="#0EA5E9" />
-              <Benchmark label="Bank Nifty (trailing)"  cagr={benchmarks?.bankNifty != null ? fmtPct(benchmarks.bankNifty) : null} color="#F59E0B" />
-              <p className="text-xs text-gray-700 mt-3">Trailing return over available price history (~9-10 months of stored data), not a calendar year. Not investment advice.</p>
+              <Benchmark label="Your portfolio (absolute, since purchase)" ret={fmtPct(absReturn)} color="#3B82F6" highlight sensitive />
+              <Benchmark label="Nifty 50 (1-year)"    ret={benchmarks?.nifty50 != null ? fmtPct(benchmarks.nifty50) : null} color="#10B981" />
+              <Benchmark label="Sensex (1-year)"      ret={benchmarks?.sensex != null ? fmtPct(benchmarks.sensex) : null} color="#0EA5E9" />
+              <Benchmark label="Bank Nifty (1-year)"  ret={benchmarks?.bankNifty != null ? fmtPct(benchmarks.bankNifty) : null} color="#F59E0B" />
+              <p className="text-xs text-gray-700 mt-3">
+                Index figures are price returns over the last 365 days; your figure is the absolute gain since
+                each purchase, so the periods differ and they are not directly comparable. Each fund&apos;s
+                recommendation compares it with the Nifty over its own holding period. Not investment advice.
+              </p>
             </CollapsibleSection>
           </div>
 

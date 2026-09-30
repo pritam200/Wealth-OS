@@ -134,8 +134,8 @@ public class RedemptionService {
     /**
      * Rule-based staged deployment plan for the remaining cash — NOT continuous AI market
      * monitoring (out of scope for this v1; see class-level note in DeploymentPlan). The
-     * "after a correction" trigger is a real number derived from Nifty 50's own ATR-based
-     * expected move (same formula ForecastService uses), not a vague "wait for a dip".
+     * "after a correction" trigger is a real number derived from Nifty 50's realised
+     * volatility (VolatilityModel, the same model ForecastService uses), not a vague "wait for a dip".
      */
     public DeploymentPlan getDeploymentPlan(Long userId, Long redemptionId) {
         MfRedemption r = redemptionRepo.findById(redemptionId)
@@ -147,17 +147,12 @@ public class RedemptionService {
         BigDecimal afterCorrection = cash.multiply(BigDecimal.valueOf(0.30)).setScale(2, RoundingMode.HALF_UP);
         BigDecimal viaSip = cash.subtract(now).subtract(afterCorrection);
 
-        String trigger = "market data unavailable — using a generic 5% pullback as the trigger";
+        String trigger = "Nifty 50 volatility unavailable — no pullback level is set; deploy this tranche by SIP instead.";
         try {
-            TechnicalAnalysisDto ta = technicalIndicatorService.analyse(NIFTY_SYMBOL);
-            if (ta.getPrice() != null && ta.getAtr() != null) {
-                double price = ta.getPrice().doubleValue();
-                double sigma = ta.getAtr().doubleValue() * Math.sqrt(21); // ~1-month expected move
-                double level = price - sigma;
-                trigger = String.format("Nifty 50 below %.0f (a %.1f%% pullback from today's %.0f)", level, sigma / price * 100, price);
-            }
+            String t = com.marketai.forecast.model.VolatilityModel.pullbackTrigger(technicalIndicatorService.analyse(NIFTY_SYMBOL), 20);
+            if (t != null) trigger = t;
         } catch (Exception e) {
-            log.debug("Could not compute correction trigger: {}", e.getMessage());
+            log.debug("Could not compute pullback trigger: {}", e.getMessage());
         }
 
         List<DeploymentPlan.Tranche> tranches = new ArrayList<>();

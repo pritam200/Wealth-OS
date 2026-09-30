@@ -1,18 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
 import { AiCopilot } from '../../components/ai/AiCopilot';
 import {
-  TrendingUp, TrendingDown, Minus, Search, RefreshCw, Loader2, Info, Radar, HelpCircle,
+  TrendingUp, TrendingDown, Minus, Search, RefreshCw, Loader2, Info, Radar, HelpCircle, AlertTriangle,
 } from 'lucide-react';
-import { forecastApi } from '../../api/forecast';
-import type { ForecastResponse, ForecastScenario } from '../../api/forecast';
+import { forecastApi, FORECAST_HORIZONS } from '../../api/forecast';
+import type { ForecastResponse, ForecastScenario, CurvePoint, DataIssue, ForecastHorizon } from '../../api/forecast';
 import { marketApi } from '../../api/market';
+import { ResearchSection } from '../../components/research/ResearchPanel';
 
 interface StockHit { symbol: string; name: string }
 
-const fmt = (n: number) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n || 0);
-const fmtPct = (n: number) => `${n >= 0 ? '+' : ''}${(n || 0).toFixed(2)}%`;
+const fmt = (n: number | null | undefined) => n == null ? '—' : new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n);
+const fmtPct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+const pctOrDash = (n: number | null | undefined) => n == null ? '—' : `${(n * 100).toFixed(0)}%`;
 
-const HORIZONS = ['1W', '2W', '4W'] as const;
+const HORIZONS = FORECAST_HORIZONS;
+
+const STATUS_LABEL: Record<string, string> = {
+  INSUFFICIENT_DATA: 'Insufficient data', STALE_DATA: 'Stale data', DATA_QUALITY_WARNING: 'Data-quality warning',
+};
 
 const SCN_STYLE: Record<string, { color: string; border: string; bg: string; bar: string; Icon: any }> = {
   Bull: { color: 'text-bull', border: 'border-bull/40', bg: 'bg-bull/5', bar: 'bg-bull', Icon: TrendingUp },
@@ -28,7 +34,7 @@ const TREND_COLOR: Record<string, string> = {
 export function Tab3MarketForecast() {
   const [indices, setIndices] = useState<Record<string, string>>({});
   const [symbol, setSymbol] = useState('NIFTY50');
-  const [horizon, setHorizon] = useState<typeof HORIZONS[number]>('2W');
+  const [horizon, setHorizon] = useState<ForecastHorizon>('20D');
   const [data, setData] = useState<ForecastResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -69,10 +75,8 @@ export function Tab3MarketForecast() {
     setSymbol(s);
   };
 
-  // No scenarios (or an explicit INSUFFICIENT_DATA signal) means the backend measured no
-  // volatility to project from. Everything below — the range map, the reference levels — would
-  // otherwise render zeros as if they were real numbers.
-  const noForecast = !!data && (data.signal === 'INSUFFICIENT_DATA' || !data.scenarios?.length);
+  // STALE/INSUFFICIENT (or no scenarios) means there is nothing honest to draw: no range, no zeros.
+  const noForecast = !!data && (data.status === 'INSUFFICIENT_DATA' || data.status === 'STALE_DATA' || !data.scenarios?.length);
   const scenarios = data?.scenarios ?? [];
   const rangeMin = scenarios.length ? Math.min(...scenarios.map(s => s.low)) : 0;
   const rangeMax = scenarios.length ? Math.max(...scenarios.map(s => s.high)) : 0;
@@ -87,7 +91,7 @@ export function Tab3MarketForecast() {
         </div>
         <div>
           <h2 className="text-xl font-bold text-ink mb-0.5">Market Forecast</h2>
-          <p className="text-gray-500 text-xs">Volatility-based projections grounded in real price history — any index or stock</p>
+          <p className="text-gray-500 text-xs">Model-estimated price ranges from measured volatility, with their historical track record</p>
         </div>
       </div>
 
@@ -159,70 +163,115 @@ export function Tab3MarketForecast() {
             <div>
               <div className="text-ink font-semibold text-lg">{data.displayName}</div>
               <span className="inline-flex items-center gap-1 mt-1 text-2xs px-2 py-0.5 rounded-full border border-dashed border-gray-700 text-gray-500">
-                <HelpCircle size={11} /> Insufficient data
+                <HelpCircle size={11} /> {STATUS_LABEL[data.status] ?? data.status}
               </span>
             </div>
             <button aria-label="Refresh" onClick={() => run(symbol)} className="btn-icon"><RefreshCw size={13} /></button>
           </div>
-          <p className="text-xs text-gray-400 leading-relaxed">{data.basis}</p>
-          <p className="text-2xs text-gray-700 mt-2">
-            No projection range is shown because volatility could not be measured — an
-            empty or zeroed band would look like a real forecast.
+          <p className="text-xs text-gray-400 leading-relaxed">{data.statusReason ?? data.basis}</p>
+          <p className="text-2xs text-gray-600 mt-2">
+            No range is shown: a band built from missing or out-of-date prices would look like a real estimate.
           </p>
+          <Issues issues={data.dataIssues} />
         </div>
       ) : data ? (
         <>
-          {/* Summary header. Deliberately no BUY/SELL/HOLD chip: `data.signal` is the raw
-              pass-through technical signal, not the centralized RecommendationEngine verdict,
-              so showing it here contradicted the Analyst panel / AI Advisor / holdings badge
-              for the same symbol. This page's job is projection ranges, not a verdict — the
-              verdict lives on the stock page and the analyst panel, from one engine. */}
+          {/* No BUY/SELL chip and no trend-derived odds: this page shows a volatility range and how
+              that range has held up historically on this instrument — nothing else. */}
           <div className="card">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div>
                 <div className="text-ink font-semibold text-lg">{data.displayName}</div>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className="text-2xl font-mono font-bold text-ink">{fmt(data.currentPrice)}</span>
-                  <span className={`text-xs font-semibold ${TREND_COLOR[data.trend] ?? 'text-gray-400'}`}>{data.trend?.replace('_', ' ')}</span>
+                  {data.trend && (
+                    <span className={`text-xs font-semibold ${TREND_COLOR[data.trend] ?? 'text-gray-400'}`}>{data.trend.replace(/_/g, ' ')}</span>
+                  )}
                 </div>
+                <div className="text-2xs text-gray-500 mt-0.5">
+                  Close of {data.priceDate ?? '—'} · {data.source ?? 'unknown source'} · {data.dataPoints} daily bars since {data.firstBarDate ?? '—'}
+                </div>
+                {data.status === 'DATA_QUALITY_WARNING' && (
+                  <div className="text-2xs text-amber-400 mt-1 flex items-center gap-1"><AlertTriangle size={11} /> {data.statusReason ?? 'Data-quality warning — see details below.'}</div>
+                )}
               </div>
               <button aria-label="Refresh" onClick={() => run(symbol)} className="btn-icon"><RefreshCw size={13} /></button>
             </div>
 
-            {/* Price range map */}
+            <div className="text-2xs text-gray-500 mb-1.5">
+              Model-estimated range for the next {data.tradingDays} trading session{data.tradingDays === 1 ? '' : 's'} (to around {data.horizonEndsAround ?? '—'})
+            </div>
             <div className="relative h-8 rounded-lg overflow-hidden flex mb-1">
               <div className="h-full bg-bear/20" style={{ width: pct(bandHigh('Bear')) }} />
               <div className="h-full bg-gray-700/40" style={{ width: `calc(${pct(bandHigh('Base'))} - ${pct(bandHigh('Bear'))})` }} />
               <div className="h-full bg-bull/20" style={{ flex: 1 }} />
-              <div className="absolute w-0.5 h-full bg-ink" style={{ left: pct(data.currentPrice) }} />
+              {data.currentPrice != null && <div className="absolute w-0.5 h-full bg-ink" style={{ left: pct(data.currentPrice) }} />}
             </div>
             <div className="relative h-5 text-2xs font-mono text-gray-500">
-              {/* rangeMin/rangeMax sit exactly at 0%/100% by definition, so they're
-                  left/right-anchored (not centered) to stay inside the bar */}
               <span className="absolute left-0 text-left text-bear">{fmt(rangeMin)}</span>
-              <span className="absolute -translate-x-1/2 text-ink" style={{ left: pct(data.currentPrice) }}>now</span>
+              {data.currentPrice != null && <span className="absolute -translate-x-1/2 text-ink" style={{ left: pct(data.currentPrice) }}>now</span>}
               <span className="absolute right-0 text-right text-bull">{fmt(rangeMax)}</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+              {[data.range50, data.range90].map(r => r && (
+                <div key={r.nominalCoverage} className="bg-surface-hover rounded p-2">
+                  <div className="stat-label text-2xs">{Math.round(r.nominalCoverage * 100)}% model range</div>
+                  <div className="font-mono text-ink text-xs font-semibold">{fmt(r.low)} – {fmt(r.high)}</div>
+                  <div className="text-2xs text-gray-500 mt-0.5">
+                    {r.historicalCoverage != null
+                      ? `Held in ${(r.historicalCoverage * 100).toFixed(1)}% of past windows`
+                      : 'Historical coverage not measured'}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Scenario cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {data.scenarios.map(s => <ScenarioCard key={s.label} s={s} />)}
+            {[...scenarios].reverse().map(s => <ScenarioCard key={s.label} s={s} empirical={data.probabilityStatus === 'EMPIRICAL'} />)}
           </div>
+          <p className="text-2xs text-gray-500 -mt-1 flex gap-1.5">
+            <Info size={11} className="text-brand shrink-0 mt-0.5" />
+            {data.probabilityStatus === 'EMPIRICAL'
+              ? data.probabilityNote
+              : 'Probability unavailable — too few independent past windows to measure how often each band occurred.'}
+          </p>
 
-          {/* Reference levels */}
           <div className="card">
-            <h3 className="text-ink font-semibold text-sm mb-3">What this forecast is based on</h3>
+            <h3 className="text-ink font-semibold text-sm mb-3">How reliable this range has been</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
               {[
-                ['Expected move (1σ)', `± ${fmt(data.expectedMove)}`],
-                ['14-day ATR', fmt(data.atr)],
-                ['RSI', data.rsi.toFixed(0)],
-                ['Data points', String(data.dataPoints)],
+                ['Daily volatility', data.volatility ? `${data.volatility.dailyPct.toFixed(2)}%` : '—'],
+                ['Annualised volatility', data.volatility ? `${data.volatility.annualizedPct.toFixed(1)}%` : '—'],
+                [`${data.horizon} volatility (1σ)`, data.volatility ? `±${data.volatility.horizonPct.toFixed(2)}%` : '—'],
+                ['Calibration', data.calibration?.label?.replace(/_/g, ' ').toLowerCase() ?? 'unmeasured'],
+                ['Past windows ending higher', pctOrDash(data.directional?.historicalUpFrequency)],
+                ['SMA50 direction call hit rate', pctOrDash(data.directional?.movingAverageBaselineHitRate)],
+                ['Typical move error (MAE)', data.pointErrors?.maeRandomWalkPct != null ? `${data.pointErrors.maeRandomWalkPct.toFixed(2)}%` : '—'],
+                ['Independent windows', data.calibration ? String(data.calibration.effectiveSample) : '—'],
+              ].map(([l, v]) => (
+                <div key={l} className="bg-surface-hover rounded p-2">
+                  <div className="stat-label text-2xs">{l}</div>
+                  <div className="font-mono text-ink text-xs font-semibold capitalize">{v}</div>
+                </div>
+              ))}
+            </div>
+            {data.calibration?.summary && <p className="text-2xs text-gray-400 mb-1">{data.calibration.summary}</p>}
+            {data.directional?.summary && <p className="text-2xs text-gray-400 mb-1">{data.directional.summary}</p>}
+            {data.pointErrors?.summary && <p className="text-2xs text-gray-400 mb-2">{data.pointErrors.summary}</p>}
+            {data.calibration?.curve?.length ? <CalibrationCurve curve={data.calibration.curve} /> : null}
+          </div>
+
+          <div className="card">
+            <h3 className="text-ink font-semibold text-sm mb-2">Context (not inputs to the range)</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+              {[
+                ['RSI (14)', data.rsi != null ? data.rsi.toFixed(1) : '—'],
                 ['SMA 50', fmt(data.sma50)],
                 ['SMA 200', fmt(data.sma200)],
-                ['Support', fmt(data.support)],
-                ['Resistance', fmt(data.resistance)],
+                ['Nearest support', data.support != null ? fmt(data.support) : 'No reliable level'],
+                ['Nearest resistance', data.resistance != null ? fmt(data.resistance) : 'No reliable level'],
               ].map(([l, v]) => (
                 <div key={l} className="bg-surface-hover rounded p-2">
                   <div className="stat-label text-2xs">{l}</div>
@@ -230,37 +279,136 @@ export function Tab3MarketForecast() {
                 </div>
               ))}
             </div>
-            <p className="text-2xs text-gray-500 flex gap-1.5"><Info size={11} className="text-brand shrink-0 mt-0.5" />{data.basis}</p>
-            <p className="text-2xs text-gray-700 mt-1.5">Informational only — not investment advice. This app never places real trades.</p>
+            {!!data.keyDrivers?.length && (
+              <ul className="text-2xs text-gray-400 space-y-0.5 mb-2 list-disc pl-4">{data.keyDrivers.map(d => <li key={d}>{d}</li>)}</ul>
+            )}
+            {!!data.keyRisks?.length && (
+              <ul className="text-2xs text-amber-400/80 space-y-0.5 mb-2 list-disc pl-4">{data.keyRisks.map(d => <li key={d}>{d}</li>)}</ul>
+            )}
+            <details className="text-2xs text-gray-500">
+              <summary className="cursor-pointer text-gray-400">Methodology</summary>
+              <p className="mt-1 leading-relaxed">{data.methodology}</p>
+              {data.volatility?.method && <p className="mt-1">{data.volatility.method}</p>}
+            </details>
+            <Issues issues={data.dataIssues} />
+            <p className="text-2xs text-gray-600 mt-2">A model estimate, not a prediction and not investment advice. This app never places real trades.</p>
           </div>
         </>
       ) : null}
+
+      <HorizonTable symbol={symbol} />
+
+      <ResearchSection key={symbol} title={indices[symbol] ? `AI market research — ${indices[symbol]}` : `AI research — ${symbol}`}
+        subject={indices[symbol] ? { kind: 'market', symbol } : { kind: 'stock', symbol }} />
 
       <AiCopilot />
     </div>
   );
 }
 
-function ScenarioCard({ s }: { s: ForecastScenario }) {
+/** Every horizon side by side: the model's ranges and how often each held in the past. */
+function HorizonTable({ symbol }: { symbol: string }) {
+  const [rows, setRows] = useState<(ForecastResponse | null)[]>([]);
+  useEffect(() => {
+    let live = true;
+    setRows([]);
+    Promise.allSettled(HORIZONS.map(h => forecastApi.get(symbol, h)))
+      .then(rs => { if (live) setRows(rs.map(r => r.status === 'fulfilled' ? r.value.data : null)); });
+    return () => { live = false; };
+  }, [symbol]);
+  const cur = rows.find(r => r?.currentPrice != null)?.currentPrice;
+  const cov = (v: number | null | undefined) => v == null ? '—' : `${(v * 100).toFixed(1)}%`;
+  return (
+    <div className="card">
+      <h3 className="text-ink font-semibold text-sm mb-2">Quantitative forecast — all horizons</h3>
+      {rows.length === 0 ? <p className="text-2xs text-gray-500">Loading…</p> : (
+        <table className="w-full text-2xs">
+          <thead><tr className="text-gray-500 text-left">
+            <th className="py-1">Horizon</th><th>50% model range</th><th>held</th><th>90% model range</th><th>held</th><th>Calibration</th>
+          </tr></thead>
+          <tbody>
+            <tr className="border-t border-surface-border/40"><td className="py-1 text-gray-400">Current</td><td colSpan={5} className="font-mono text-ink">{fmt(cur)}</td></tr>
+            {rows.map((r, i) => (
+              <tr key={HORIZONS[i]} className="border-t border-surface-border/40">
+                <td className="py-1 text-gray-400">{HORIZONS[i]}</td>
+                {r?.range90 ? <>
+                  <td className="font-mono text-gray-300">{fmt(r.range50?.low)} – {fmt(r.range50?.high)}</td>
+                  <td className="text-gray-500">{cov(r.range50?.historicalCoverage)}</td>
+                  <td className="font-mono text-gray-300">{fmt(r.range90.low)} – {fmt(r.range90.high)}</td>
+                  <td className="text-gray-500">{cov(r.range90.historicalCoverage)}</td>
+                  <td className="text-gray-500 capitalize">{r.calibration?.label?.replace(/_/g, ' ').toLowerCase() ?? 'unmeasured'}</td>
+                </> : <td colSpan={5} className="text-gray-500">{r?.statusReason ?? 'Unavailable'}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="text-2xs text-gray-600 mt-2">"Held" is the share of past windows on this instrument whose outcome landed inside the range (target: 50% and 90%).</p>
+    </div>
+  );
+}
+
+function ScenarioCard({ s, empirical }: { s: ForecastScenario; empirical: boolean }) {
   const st = SCN_STYLE[s.label] ?? SCN_STYLE.Base;
   const Icon = st.Icon;
+  const p = empirical ? s.probability : null;
   return (
     <div className={`card border ${st.border} ${st.bg} flex flex-col gap-3`}>
       <div className={`flex items-center justify-between ${st.color}`}>
-        <div className="flex items-center gap-2"><Icon size={16} /><span className="font-semibold text-sm">{s.label} Case</span></div>
-        <span className="font-bold text-sm">{s.probability}%</span>
+        <div className="flex items-center gap-2"><Icon size={16} /><span className="font-semibold text-sm">{s.label} scenario</span></div>
+        <span className="font-bold text-sm">{p != null ? `${p.toFixed(0)}%` : '—'}</span>
       </div>
-      <div className="h-2 rounded-full bg-surface-border overflow-hidden">
-        <div className={`h-full rounded-full ${st.bar}`} style={{ width: `${s.probability}%` }} />
-      </div>
+      {p != null ? (
+        <>
+          <div className="h-2 rounded-full bg-surface-border overflow-hidden">
+            <div className={`h-full rounded-full ${st.bar}`} style={{ width: `${p}%` }} />
+          </div>
+          <div className="text-2xs text-gray-500 -mt-1">
+            Historical frequency{s.probabilityCiLow != null && s.probabilityCiHigh != null ? ` (95% CI ${s.probabilityCiLow.toFixed(0)}–${s.probabilityCiHigh.toFixed(0)}%)` : ''} · model share {s.nominalProbability.toFixed(0)}%
+          </div>
+        </>
+      ) : (
+        <div className="text-2xs text-gray-500">Probability unavailable</div>
+      )}
       <div>
-        <div className="text-gray-500 text-2xs mb-1">Target range</div>
+        <div className="text-gray-500 text-2xs mb-1">Model-estimated band (percentiles {Math.round(s.quantileLow * 100)}–{Math.round(s.quantileHigh * 100)})</div>
         <div className="font-mono text-ink font-semibold text-sm">{fmt(s.low)} – {fmt(s.high)}</div>
       </div>
       <div className="bg-surface-border/40 rounded p-2">
-        <div className="text-gray-500 text-2xs mb-0.5">Expected move</div>
+        <div className="text-gray-500 text-2xs mb-0.5">Move from last close</div>
         <div className={`font-mono font-bold text-xs ${st.color}`}>{fmtPct(s.movePctLow)} to {fmtPct(s.movePctHigh)}</div>
       </div>
+    </div>
+  );
+}
+
+function CalibrationCurve({ curve }: { curve: CurvePoint[] }) {
+  return (
+    <div>
+      <div className="stat-label text-2xs mb-1">Calibration: stated range coverage vs. how often it actually held</div>
+      <div className="grid grid-cols-5 md:grid-cols-10 gap-1">
+        {curve.map(c => {
+          const gap = (c.empirical - c.nominal) * 100;
+          return (
+            <div key={c.nominal} className="bg-surface-hover rounded p-1 text-center">
+              <div className="text-2xs text-gray-500">{Math.round(c.nominal * 100)}%</div>
+              <div className={`font-mono text-2xs font-semibold ${Math.abs(gap) <= 5 ? 'text-ink' : 'text-amber-400'}`}>{(c.empirical * 100).toFixed(0)}%</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Issues({ issues }: { issues: DataIssue[] | null }) {
+  const shown = (issues ?? []).filter(i => i.warning).slice(-5);
+  if (!shown.length) return null;
+  return (
+    <div className="mt-2 space-y-0.5">
+      {shown.map((i, k) => (
+        <div key={k} className="text-2xs text-amber-400/80 flex gap-1"><AlertTriangle size={10} className="mt-0.5 shrink-0" />{i.date ? `${i.date}: ` : ''}{i.detail}</div>
+      ))}
     </div>
   );
 }

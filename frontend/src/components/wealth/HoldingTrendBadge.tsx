@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowUpRight, ArrowDownRight, Minus, Loader2, HelpCircle } from 'lucide-react';
-import { recommendationApi, isInsufficient } from '../../api/analyst';
+import { recommendationApi, isInsufficient, hitRateLabel } from '../../api/analyst';
 import type { AnalystAssessment } from '../../api/analyst';
 
 // Same next-action vocabulary AI Advisor and the Analyst panel use — this badge used to
@@ -14,6 +14,10 @@ const NEXT_ACTION_STYLE: Record<string, { cls: string; label: string }> = {
   EXIT:        { cls: 'text-bear bg-bear/10 border-bear/30', label: 'EXIT' },
   REVIEW:      { cls: 'text-neutral bg-neutral/10 border-neutral/30', label: 'REVIEW' },
   HOLD:        { cls: 'text-gray-400 bg-surface-hover border-surface-border', label: 'HOLD' },
+  AVOID:       { cls: 'text-bear bg-bear/10 border-bear/30', label: 'AVOID' },
+  REBALANCE:   { cls: 'text-neutral bg-neutral/10 border-neutral/30', label: 'REBALANCE' },
+  NO_ACTIONABLE_SIGNAL: { cls: 'text-gray-400 bg-surface-hover border-surface-border', label: 'NO SIGNAL' },
+  STALE_DATA:  { cls: 'text-amber-300 bg-transparent border-dashed border-amber-500/50', label: 'STALE' },
   // Not a recommendation — the engine declined to give one for lack of verifiable price
   // history. Deliberately styled unlike HOLD (dashed, dimmer, no fill) so "nothing to do"
   // and "we couldn't analyse this" are never mistaken for each other.
@@ -67,7 +71,7 @@ export function HoldingTrendBadge({ symbol, pnlPercent, holdingValue, totalPortf
     );
   }
 
-  const sig = NEXT_ACTION_STYLE[data.nextAction] ?? NEXT_ACTION_STYLE.HOLD;
+  const sig = NEXT_ACTION_STYLE[data.nextAction] ?? NEXT_ACTION_STYLE.NO_ACTIONABLE_SIGNAL;
   const trend = data.fundamentals?.trend;
   const up = trend?.includes('UPTREND');
   const down = trend?.includes('DOWNTREND');
@@ -75,8 +79,9 @@ export function HoldingTrendBadge({ symbol, pnlPercent, holdingValue, totalPortf
   const trendColor = up ? 'text-bull' : down ? 'text-bear' : 'text-gray-500';
   const title = [
     data.nextActionReason,
-    data.rating ? `rating ${data.rating}` : null,
-    `confidence ${data.confidenceScore}`,
+    data.rating === 'BUY' || data.rating === 'SELL' ? `validated ${data.rating}` : null,
+    hitRateLabel(data),
+    data.priceDate ? `prices as of ${data.priceDate}` : null,
   ].filter(Boolean).join(' · ');
 
   return (

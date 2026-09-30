@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { TrendingUp, TrendingDown, Minus, Sparkles, Newspaper, Gauge, Loader2, ArrowRight, HelpCircle } from 'lucide-react';
-import { analystApi, isInsufficient } from '../../api/analyst';
+import { analystApi, isInsufficient, NON_CALL_LABEL } from '../../api/analyst';
 import type { AnalystAssessment } from '../../api/analyst';
+import { ViewPill } from '../research/ResearchPanel';
 
 const fmt = (n: number | null | undefined) =>
   n == null ? '—' : new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(n);
@@ -11,17 +12,12 @@ const fmtCr = (n: number | null | undefined) =>
 const RATING: Record<string, { cls: string; Icon: any }> = {
   BUY:  { cls: 'text-white border-transparent bg-bull-gradient shadow-glow-bull', Icon: TrendingUp },
   HOLD: { cls: 'text-gray-200 border-surface-border bg-surface-hover', Icon: Minus },
+  NO_ACTIONABLE_SIGNAL: { cls: 'text-gray-300 border-surface-border bg-surface-hover', Icon: Minus },
+  NOT_RATED: { cls: 'text-gray-400 border-dashed border-gray-700 bg-transparent', Icon: HelpCircle },
+  STALE_DATA: { cls: 'text-amber-300 border-dashed border-amber-500/50 bg-transparent', Icon: HelpCircle },
   SELL: { cls: 'text-white border-transparent bg-bear-gradient shadow-glow-bear', Icon: TrendingDown },
 };
 
-// The AI verdict is tinted, not gradient-filled: a solid pill would compete with the
-// authoritative deterministic rating above it. WATCH is the model's "data too thin" answer.
-const AI_RATING_TONE: Record<string, string> = {
-  BUY:   'bg-bull/10 text-bull border-bull/40',
-  HOLD:  'bg-surface-hover text-gray-300 border-surface-border',
-  SELL:  'bg-bear/10 text-bear border-bear/40',
-  WATCH: 'bg-brand/10 text-brand-light border-brand/40',
-};
 
 // Covers both the stock (ACCUMULATE/CONTINUE/BOOK_PROFIT/EXIT/REVIEW/HOLD) and MF
 // (CONTINUE_SIP/INCREASE_SIP/...) next-action value sets from RecommendationEngine.
@@ -32,6 +28,9 @@ const NEXT_ACTION_TONE: Record<string, string> = {
   EXIT: 'text-bear border-bear/40 bg-bear/10', FULL_REDEMPTION: 'text-bear border-bear/40 bg-bear/10', SWITCH_FUND: 'text-bear border-bear/40 bg-bear/10',
   REVIEW: 'text-neutral border-neutral/40 bg-neutral/10', REBALANCE: 'text-neutral border-neutral/40 bg-neutral/10', PAUSE_SIP: 'text-neutral border-neutral/40 bg-neutral/10',
   HOLD: 'text-gray-300 border-surface-border bg-surface-hover',
+  AVOID: 'text-bear border-bear/40 bg-bear/10',
+  NO_ACTIONABLE_SIGNAL: 'text-gray-300 border-surface-border bg-surface-hover',
+  STALE_DATA: 'text-amber-300 border-amber-500/40 bg-amber-500/10',
 };
 const nextActionLabel = (a: string) => a.replace(/_/g, ' ').replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 
@@ -46,13 +45,14 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
     return () => { alive = false; };
   }, [symbol]);
 
-  if (loading) return <div className="card h-32 flex items-center justify-center text-gray-500"><Loader2 size={15} className="animate-spin mr-2" /> Running multi-factor analysis…</div>;
+  if (loading) return <div className="card h-32 flex items-center justify-center text-gray-500"><Loader2 size={15} className="animate-spin mr-2" /> Running analysis…</div>;
   if (!a) return null;
 
-  // rating is null on the INSUFFICIENT_DATA path — the backend deliberately emits no
-  // BUY/HOLD/SELL when there wasn't enough history to compute one.
+  // Only a BUY/SELL validated on this stock's own history is a call; everything else is a
+  // labelled non-call (no actionable signal, stale or insufficient data), never a HOLD chip.
   const insufficient = isInsufficient(a);
-  const rt = (a.rating && RATING[a.rating]) || RATING.HOLD;
+  const rt = (a.rating && RATING[a.rating]) || RATING.NO_ACTIONABLE_SIGNAL;
+  const ratingText = a.rating ? (NON_CALL_LABEL[a.rating] ?? a.rating) : 'Not rated';
   const RIcon = rt.Icon;
   const barColor = (s: number) => s >= 0 ? 'bg-bull-gradient' : 'bg-bear-gradient';
 
@@ -74,11 +74,11 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
         ) : (
           <div className="flex items-center gap-2">
             <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg border ${rt.cls}`}>
-              <RIcon size={13} /> {a.rating}
+              <RIcon size={13} /> {ratingText}
             </span>
-            <span className="text-2xs text-gray-500">
-              {a.conviction} conviction · score <span className="font-mono font-bold text-ink">{a.compositeScore}</span>
-            </span>
+            {a.conviction && (
+              <span className="text-2xs text-gray-500">{a.conviction.toLowerCase()} conviction (edge over base rate)</span>
+            )}
           </div>
         )}
       </div>
@@ -94,14 +94,13 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
             <span className={`text-xs font-bold px-2.5 py-1 rounded-lg border ${NEXT_ACTION_TONE[a.nextAction] ?? NEXT_ACTION_TONE.HOLD}`}>
               {nextActionLabel(a.nextAction)}
             </span>
-            {/* Confidence as a meter, not just a number — it's the main "how much weight
-                should I put on this" signal and was easy to skim past as text. */}
-            <span className="text-2xs text-gray-500">confidence</span>
-            <span className="w-16 meter" style={{ height: '5px' }}>
-              <span className={`meter-fill block ${a.confidenceScore >= 60 ? 'bg-bull-gradient' : a.confidenceScore >= 30 ? 'bg-gold-gradient' : 'bg-bear-gradient'}`}
-                style={{ width: `${Math.max(0, Math.min(100, a.confidenceScore))}%` }} />
-            </span>
-            <span className="text-2xs font-mono font-bold text-ink">{a.confidenceScore}%</span>
+            {/* confidenceScore is the measured hit rate of this call on this stock's history —
+                shown only when there is a validated call; it is not a probability of profit. */}
+            {a.confidenceScore != null && (
+              <span className="text-2xs text-gray-500">
+                right <span className="font-mono font-bold text-ink">{a.confidenceScore}%</span> of the time historically
+              </span>
+            )}
           </div>
           {a.nextActionReason && <p className="text-xs text-gray-300 leading-snug">{a.nextActionReason}</p>}
         </div>
@@ -112,15 +111,21 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
         {a.factorBreakdown.map(f => (
           <div key={f.name}>
             <div className="flex justify-between text-2xs mb-0.5">
-              <span className="text-gray-400">{f.name} <span className="text-gray-600">· {f.weightPct}%</span></span>
-              <span className={f.score >= 0 ? 'text-bull' : 'text-bear'}>{f.score >= 0 ? '+' : ''}{f.score}</span>
+              <span className="text-gray-400">
+                {f.name}
+                <span className="text-gray-600"> · {f.contributesToRating ? 'rating input' : 'context only'}</span>
+              </span>
+              {f.score != null
+                ? <span className={f.score >= 0 ? 'text-bull' : 'text-bear'}>{f.score >= 0 ? '+' : ''}{f.score}</span>
+                : f.reading ? <span className="text-gray-300">{f.reading.replace(/_/g, ' ')}</span> : null}
             </div>
-            {/* centered -100..100 bar */}
-            <div className="relative h-2 bg-surface-hover rounded-full overflow-hidden">
-              <div className="absolute left-1/2 top-0 h-full w-px bg-gray-600/50" />
-              <div className={`absolute top-0 h-full rounded-full transition-all duration-500 ease-snap ${barColor(f.score)}`}
-                style={{ left: f.score >= 0 ? '50%' : `${50 + f.score / 2}%`, width: `${Math.abs(f.score) / 2}%` }} />
-            </div>
+            {f.score != null && (
+              <div className="relative h-2 bg-surface-hover rounded-full overflow-hidden">
+                <div className="absolute left-1/2 top-0 h-full w-px bg-gray-600/50" />
+                <div className={`absolute top-0 h-full rounded-full transition-all duration-500 ease-snap ${barColor(f.score)}`}
+                  style={{ left: f.score >= 0 ? '50%' : `${50 + f.score / 2}%`, width: `${Math.abs(f.score) / 2}%` }} />
+              </div>
+            )}
             <div className="text-2xs text-gray-600 mt-0.5">{f.note}</div>
           </div>
         ))}
@@ -136,7 +141,7 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
             ['52w range', a.fundamentals.weekLow52 != null ? `${fmt(a.fundamentals.weekLow52)}–${fmt(a.fundamentals.weekHigh52)}` : '—'],
             ['In range', a.fundamentals.pctOf52wRange != null ? `${a.fundamentals.pctOf52wRange}%` : '—'],
             ['Sector', a.fundamentals.sector ?? '—'],
-            ['Trend', a.fundamentals.trend?.replace('_', ' ')],
+            ['Trend', a.fundamentals.trend?.replace(/_/g, ' ') ?? '—'],
             ['RSI', a.fundamentals.rsi != null ? a.fundamentals.rsi.toFixed(0) : '—'],
           ].map(([l, v]) => (
             <div key={l as string} className="rounded-lg bg-surface-hover border border-surface-border/60 p-2 transition-colors hover:border-brand/30">
@@ -192,9 +197,11 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
         <div>
           <div className="flex items-center gap-1.5 text-2xs text-gray-500 mb-1.5">
             <Newspaper size={11} /> Recent news
-            {a.news.positive + a.news.negative > 0 && (
+            {a.news.score != null ? (
               <span>· sentiment <span className={a.news.score >= 0 ? 'text-bull' : 'text-bear'}>{a.news.score >= 0 ? '+' : ''}{a.news.score}</span>
-              <span className="text-gray-600"> ({a.news.positive}+ / {a.news.negative}−)</span></span>
+              <span className="text-gray-600"> ({a.news.positive}+ / {a.news.negative}− of {a.news.total}{a.news.windowDays ? `, last ${a.news.windowDays} days` : ''}; {a.news.confidence?.toLowerCase() ?? 'low'} confidence; not a rating input)</span></span>
+            ) : (
+              <span className="text-gray-600">· sentiment unavailable (too few recent, relevant headlines)</span>
             )}
           </div>
           <div className="space-y-1">
@@ -203,7 +210,7 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
                 <a key={i} href={art.url ?? '#'} target="_blank" rel="noreferrer"
                   className="block text-2xs text-gray-400 hover:text-brand leading-snug">
                   <span className="text-gray-600 mr-1">›</span>{art.title}
-                  <span className="text-gray-700"> — {art.source}{art.publishedAt ? ` · ${art.publishedAt}` : ''}</span>
+                  <span className="text-gray-700"> — {art.source}{art.publishedAt ? ` · ${art.publishedAt}` : ''}{art.sentiment && art.sentiment !== 'NEUTRAL' ? ` · ${art.sentiment.toLowerCase()}` : ''}</span>
                 </a>
               ))
               : a.news.headlines.slice(0, 4).map((h, i) => <div key={i} className="text-2xs text-gray-500 truncate">• {h}</div>)}
@@ -211,59 +218,16 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
         </div>
       )}
 
-      {/* AI second opinion — the model's own call, shown BESIDE the deterministic rating.
-          Never presented as the verdict: the label, the agreement badge and the footnote all
-          make clear which number is authoritative. */}
-      {(a.aiRating || a.aiNarrative) && (
-        <div className="relative overflow-hidden rounded-xl border" style={{ borderColor: 'rgba(124,58,237,0.30)' }}>
-          <div className="h-0.5 w-full bg-violet-gradient" />
-          <div className="p-3" style={{ background: 'linear-gradient(180deg, rgba(124,58,237,0.06), transparent 70%)' }}>
-            <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
-              <div className="flex items-center gap-2">
-                <div className="icon-badge icon-badge-sm icon-badge-violet"><Sparkles size={11} /></div>
-                <span className="text-xs font-bold text-ink">AI Second Opinion</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {a.aiRating && (
-                  <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg border ${AI_RATING_TONE[a.aiRating]}`}>
-                    {a.aiRating}
-                  </span>
-                )}
-                {a.aiAgrees != null && a.rating && (
-                  <span className={`text-2xs font-semibold px-2 py-1 rounded-full border ${
-                    a.aiAgrees ? 'bg-bull/10 text-bull border-bull/30' : 'bg-neutral/10 text-neutral border-neutral/30'}`}>
-                    {a.aiAgrees ? `agrees with model (${a.rating})` : `differs — model says ${a.rating}`}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {(a.aiKeyDriver || a.aiMainRisk) && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
-                {a.aiKeyDriver && (
-                  <div className="rounded-lg bg-surface-card/70 border border-surface-border p-2">
-                    <div className="text-2xs font-semibold text-bull mb-0.5">Key driver</div>
-                    <p className="text-2xs text-gray-400 leading-snug">{a.aiKeyDriver}</p>
-                  </div>
-                )}
-                {a.aiMainRisk && (
-                  <div className="rounded-lg bg-surface-card/70 border border-surface-border p-2">
-                    <div className="text-2xs font-semibold text-bear mb-0.5">Main risk</div>
-                    <p className="text-2xs text-gray-400 leading-snug">{a.aiMainRisk}</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {a.aiNarrative && <p className="text-xs text-gray-300 leading-relaxed">{a.aiNarrative}</p>}
-
-            <p className="text-2xs text-gray-700 mt-2 pt-2 border-t border-surface-border">
-              Advisory only — the {a.rating ?? 'model'} rating and score above are computed from the
-              factor weights, not from the AI. {a.aiProvider && <>Model: <span className="font-mono">{a.aiProvider}</span>.</>}
-            </p>
-          </div>
+      {/* Research view — from the one research engine (full research is on the stock page). */}
+      <div className="rounded-xl border p-3" style={{ borderColor: 'rgba(124,58,237,0.30)' }}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="icon-badge icon-badge-sm icon-badge-violet"><Sparkles size={11} /></div>
+          <span className="text-xs font-bold text-ink">Research view</span>
+          {a.researchActionability ? <ViewPill value={a.researchActionability} /> : <span className="text-2xs text-gray-500">no research for today's data yet</span>}
         </div>
-      )}
+        {a.researchReason && <p className="text-2xs text-gray-400 mt-1.5">{a.researchReason}</p>}
+        {a.researchAt && <p className="text-2xs text-gray-600 mt-1">Research {new Date(a.researchAt).toLocaleString('en-IN')} · <span className="font-mono">{a.researchModel}</span>. Open the stock page for the evidence and the devil's-advocate review.</p>}
+      </div>
 
       <p className="text-2xs text-gray-700">{a.basis}</p>
     </div>

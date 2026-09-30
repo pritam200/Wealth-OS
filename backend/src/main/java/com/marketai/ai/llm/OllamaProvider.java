@@ -60,6 +60,10 @@ public class OllamaProvider implements LlmProvider {
 
     @Override
     public LlmCompletion generate(ProviderSettings settings, LlmRequest request) {
+        if (request.webSearch()) {
+            // A local model has no web access; answering anyway would present recall as research.
+            throw new LlmUnavailableException(LlmErrorCategory.CAPABILITY_MISSING, "Ollama models cannot search the web");
+        }
         long started = System.currentTimeMillis();
         try {
             ObjectNode body = objectMapper.createObjectNode();

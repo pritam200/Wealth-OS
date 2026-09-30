@@ -67,4 +67,19 @@ public class PriceHistory {
     private BigDecimal adjClose;
 
     private Long volume;
+
+    /** Exchange the bar was traded on: NSE, BSE or INDEX. Null on rows stored before this was recorded. */
+    @Column(length = 8)
+    private String exchange;
+
+    /** Where the bar came from, e.g. "yahoo-chart". */
+    @Column(length = 24)
+    private String provider;
+
+    /** When the bar was first stored, and when it was last rewritten by a re-fetch. */
+    @Column(name = "ingested_at")
+    private java.time.LocalDateTime ingestedAt;
+
+    @Column(name = "updated_at")
+    private java.time.LocalDateTime updatedAt;
 }

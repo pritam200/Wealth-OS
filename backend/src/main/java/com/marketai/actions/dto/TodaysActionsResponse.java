@@ -70,7 +70,8 @@ public class TodaysActionsResponse {
         private String sizingBasis;
         private String why;
         private String risk;
-        private int confidence;
+        /** Historical hit rate (%) of the validated call behind this action; null when there is none. */
+        private Integer confidence;
         /** As-of time of the price/NAV data behind this recommendation. */
         private LocalDateTime dataTimestamp;
         private String expectedOutcome;

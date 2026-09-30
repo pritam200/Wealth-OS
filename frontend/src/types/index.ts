@@ -29,6 +29,11 @@ export interface QuoteDto {
   pe: number;
   sector: string;
   lastUpdated: string;
+  /** Exchange timestamp of the price, when the provider gave one. */
+  marketTime?: string | null;
+  /** DELAYED_INTRADAY | LAST_TRADED | UNKNOWN */
+  priceType?: string | null;
+  source?: string | null;
 }
 
 export interface IndexQuote {
@@ -81,31 +86,108 @@ export type DataQuality = 'FULL' | 'PARTIAL' | 'INSUFFICIENT';
 export type TrendValue =
   | 'STRONG_UPTREND' | 'UPTREND' | 'SIDEWAYS' | 'DOWNTREND' | 'STRONG_DOWNTREND' | 'UNKNOWN';
 
+export interface PriceLevel {
+  price: number;
+  /** SWING_CLUSTER | 52W_HIGH | 52W_LOW | SMA50 | SMA200 | GAP */
+  source: string;
+  touches: number | null;
+  lastTouched: string | null;
+  distancePct: number;
+  reason: string;
+}
+
+export interface SupportResistance {
+  nearestSupport: PriceLevel | null;
+  nextSupport: PriceLevel | null;
+  nearestResistance: PriceLevel | null;
+  nextResistance: PriceLevel | null;
+  /** OK | NO_RELIABLE_LEVEL */
+  supportStatus: string;
+  resistanceStatus: string;
+  method: string;
+}
+
+export interface TrendEvidence { name: string; reading: string; detail: string; vote: boolean }
+
+export interface TrendAssessment {
+  label: TrendValue | 'INSUFFICIENT_DATA';
+  bullishVotes: number;
+  bearishVotes: number;
+  votesAvailable: number;
+  evidence: TrendEvidence[];
+  rule: string;
+}
+
+export interface IndicatorValue {
+  key: string; name: string; value: number | null; unit: string; formula: string;
+  period: number | null; timeframe: string; asOf: string | null;
+  barsRequired: number; barsAvailable: number; available: boolean; reason: string | null;
+}
+
+export interface VolumeProfile {
+  latestVolume: number | null; averageVolume20: number | null; relativeVolume: number | null;
+  volumeTrend: string | null; volumeTrendRatio: number | null; unusual: boolean | null;
+  barsWithVolume: number; reason: string | null; zscore: number | null;
+}
+
+export interface SeriesIssue { code: string; severity: string; date: string | null; detail: string; warning: boolean }
+
+/** OK | DATA_QUALITY_WARNING | STALE_DATA | INSUFFICIENT_DATA */
+export type SeriesStatus = 'OK' | 'DATA_QUALITY_WARNING' | 'STALE_DATA' | 'INSUFFICIENT_DATA';
+
+/**
+ * The canonical technical read. Every value is null when it could not be computed from
+ * validated history; never substitute 0 or 50. The frontend must not recompute any of these.
+ */
 export interface TechnicalAnalysis {
   symbol: string;
-  price: number;
-  // Every indicator below is null when it could not be computed from real stored history.
-  // They used to be unconditionally populated — sometimes with values fabricated from a
-  // single day's change — so they must all be null-checked before being displayed.
+  price: number | null;
   rsi: number | null;
   macd: number | null;
   macdSignal: number | null;
   macdHistogram: number | null;
   sma20: number | null;
   sma50: number | null;
+  sma100: number | null;
   sma200: number | null;
   ema20: number | null;
+  ema50: number | null;
+  ema200: number | null;
   bollingerUpper: number | null;
   bollingerMiddle: number | null;
   bollingerLower: number | null;
+  /** Price units (₹), not a percentage. */
   atr: number | null;
+  atrPct: number | null;
+  adx: number | null;
+  plusDi: number | null;
+  minusDi: number | null;
+  dailyVolatilityPct: number | null;
+  annualizedVolatilityPct: number | null;
+  volatilityBars: number | null;
+  volume: VolumeProfile | null;
+  high52w: number | null;
+  low52w: number | null;
+  range52wSessions: number | null;
+  rangePosition52wPct: number | null;
   support: number | null;
   resistance: number | null;
+  levels: SupportResistance | null;
   trend: TrendValue;
-  signal: 'BUY' | 'SELL' | 'HOLD' | 'INSUFFICIENT_DATA';
-  signalStrength: 'STRONG' | 'MODERATE' | 'WEAK';
+  trendAssessment: TrendAssessment | null;
+  indicators: IndicatorValue[] | null;
   dataQuality?: DataQuality | null;
+  seriesStatus: SeriesStatus;
+  dataIssues: SeriesIssue[] | null;
   barsAvailable?: number | null;
+  barsRejected: number | null;
+  firstBarDate: string | null;
+  lastBarDate: string | null;
+  expectedSession: string | null;
+  stale: boolean;
+  source: string | null;
+  dataUpdatedAt: string | null;
+  timeframe: string;
 }
 
 // ─── Portfolio ───────────────────────────────────────────────────────────────

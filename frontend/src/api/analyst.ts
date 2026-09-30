@@ -3,14 +3,50 @@ import type { DataQuality } from '../types';
 
 export type { DataQuality } from '../types';
 
-export interface AnalystFactor { name: string; score: number; weightPct: number; note: string }
+import type { TrendAssessment } from '../types';
+
+export interface AnalystFactor {
+  name: string;
+  /** TECHNICAL_SIGNAL | MARKET_TREND | MOMENTUM | VALUATION | NEWS_SENTIMENT | … */
+  category?: string | null;
+  /** Null for descriptive readings that have no defined score. */
+  score: number | null;
+  weightPct: number;
+  reading?: string | null;
+  note: string;
+  /** True only for the inputs the rating was actually derived from. */
+  contributesToRating?: boolean;
+}
+
+export interface SignalValidation {
+  horizonSessions: number; observations: number; buyCalls: number; sellCalls: number;
+  buyHitRate: number | null; buyHitRateCiLow: number | null;
+  sellHitRate: number | null; sellHitRateCiLow: number | null;
+  baseUpRate: number | null;
+  meanForwardReturnBuyPct: number | null; meanForwardReturnSellPct: number | null; meanForwardReturnAllPct: number | null;
+  currentCallValidated: boolean; summary: string;
+}
+
+export interface FundamentalFact {
+  name: string; value: number | null; unit: string; period: string | null;
+  source: string | null; fetchedAt: string | null; note: string | null;
+}
 export interface AnalystFundamentals {
   pe: number | null; marketCap: number | null;
   weekHigh52: number | null; weekLow52: number | null;
   pctOf52wRange: number | null; sector: string | null; trend: string; rsi: number | null;
 }
-export interface AnalystArticle { title: string; url: string | null; source: string | null; publishedAt: string | null }
-export interface AnalystNews { score: number; positive: number; negative: number; total: number; headlines: string[]; articles: AnalystArticle[] }
+export interface AnalystArticle {
+  title: string; url: string | null; source: string | null; publishedAt: string | null;
+  sentiment?: string | null; matchedTerms?: string[] | null; event?: string | null; ageDays?: number | null;
+}
+/** Reported separately from the rating; never folded into it. */
+export interface AnalystNews {
+  category?: string; status?: 'OK' | 'INSUFFICIENT' | string;
+  score: number | null; label?: string | null; confidence?: string | null;
+  windowDays?: number; excluded?: number; method?: string | null;
+  positive: number; negative: number; total: number; headlines: string[]; articles: AnalystArticle[];
+}
 export interface AnalystTechnicals {
   sma20: number | null; sma50: number | null; sma200: number | null;
   support: number | null; resistance: number | null;
@@ -21,9 +57,27 @@ export interface AnalystTechnicals {
 // INSUFFICIENT_DATA is not a recommendation — it's the engine explicitly declining to make
 // one because there wasn't enough stored price history. It must never be rendered like HOLD.
 export type NextAction =
-  | 'ACCUMULATE' | 'CONTINUE' | 'BOOK_PROFIT' | 'EXIT' | 'REVIEW' | 'HOLD' | 'INSUFFICIENT_DATA';
+  | 'ACCUMULATE' | 'CONTINUE' | 'BOOK_PROFIT' | 'EXIT' | 'REVIEW' | 'HOLD' | 'AVOID' | 'REBALANCE'
+  | 'NO_ACTIONABLE_SIGNAL' | 'STALE_DATA' | 'INSUFFICIENT_DATA';
+
+/** BUY/SELL only for a call validated on the instrument's own history; otherwise one of the non-ratings. */
+export type Rating = 'BUY' | 'SELL' | 'NO_ACTIONABLE_SIGNAL' | 'STALE_DATA' | 'INSUFFICIENT_DATA' | 'NOT_RATED';
 
 export const INSUFFICIENT_DATA = 'INSUFFICIENT_DATA';
+export const NO_ACTIONABLE_SIGNAL = 'NO_ACTIONABLE_SIGNAL';
+export const STALE_DATA = 'STALE_DATA';
+
+/** Human label for a rating or next action that is not a trade call. */
+export const NON_CALL_LABEL: Record<string, string> = {
+  NO_ACTIONABLE_SIGNAL: 'No actionable signal',
+  STALE_DATA: 'Stale data',
+  INSUFFICIENT_DATA: 'Insufficient data',
+  NOT_RATED: 'Not rated',
+};
+
+/** Historical hit rate label — this is what `confidenceScore` is, not a probability of profit. */
+export const hitRateLabel = (a: Pick<AnalystAssessment, 'confidenceScore'> | null | undefined) =>
+  a?.confidenceScore != null ? `${a.confidenceScore}% historical hit rate` : null;
 
 /** True when the engine declined to produce a verdict for lack of verifiable data. */
 export const isInsufficient = (a: Pick<AnalystAssessment, 'dataQuality' | 'nextAction'> | null | undefined) =>
@@ -33,37 +87,44 @@ export interface AnalystAssessment {
   symbol: string; displayName: string; price: number;
   // null when dataQuality === 'INSUFFICIENT' — the backend deliberately emits no rating
   // rather than one that isn't based on verifiable data.
-  rating: 'BUY' | 'HOLD' | 'SELL' | null;
+  rating: Rating | string | null;
   conviction: 'HIGH' | 'MEDIUM' | 'LOW' | null;
-  compositeScore: number;
+  /** Factor agreement of a validated call (−100..100); null otherwise. Not a probability. */
+  compositeScore: number | null;
+  ruleOutput?: string | null;
+  signalValidation?: SignalValidation | null;
+  trendAssessment?: TrendAssessment | null;
+  fundamentalFacts?: FundamentalFact[] | null;
+  priceDate?: string | null;
+  priceSource?: string | null;
+  seriesStatus?: string | null;
   factorBreakdown: AnalystFactor[];
   fundamentals: AnalystFundamentals;
   technicals: AnalystTechnicals | null; // null on the INSUFFICIENT path
   news: AnalystNews | null;             // null on the INSUFFICIENT path
   positives: string[]; risks: string[];
-  aiNarrative: string | null; basis: string;
+  basis: string;
 
-  // The AI's OWN call, deliberately separate from `rating` above. `rating`/`compositeScore`/
-  // `nextAction` are computed deterministically in the backend and stay authoritative; these
-  // fields are a readable second opinion. A disagreement changes nothing, and all of them are
-  // null when no model (local Ollama, or Gemini when configured) is available.
-  aiRating?: 'BUY' | 'HOLD' | 'SELL' | 'WATCH' | null;
-  aiKeyDriver?: string | null;
-  aiMainRisk?: string | null;
-  aiAgrees?: boolean | null;
-  aiProvider?: string | null;   // e.g. "ollama:qwen2.5:7b"
+  // The research engine's final view, read from stored research (see /api/research). Code-generated
+  // text only; null when no research exists for the current session.
+  researchActionability?: string | null;
+  researchReason?: string | null;
+  researchLean?: string | null;
+  researchAt?: string | null;
+  researchModel?: string | null;
 
   // Set by the backend's RecommendationEngine — the same for every consumer of a given symbol.
   // Widened to string (not the narrower NextAction/MfNextAction unions) because this one DTO
   // shape is shared by both the stock and MF recommendation endpoints, which use different
   // value sets — each consumer narrows/casts to the union it expects.
-  confidenceScore: number;   // 0..100; always 0 when dataQuality === 'INSUFFICIENT'
+  /** Historical hit rate (%) of the current validated call; null when there is none. */
+  confidenceScore: number | null;
   nextAction: string;
   nextActionReason: string | null; // plain-English explanation of why THIS action, not just the rating
   taxImpact: string | null;  // MF only; null for stocks
 
   // Truthfulness marker for the inputs behind this assessment.
-  // 'INSUFFICIENT' → nextAction is INSUFFICIENT_DATA, rating is null, confidenceScore is 0,
+  // 'INSUFFICIENT' → nextAction is INSUFFICIENT_DATA, rating is INSUFFICIENT_DATA, confidenceScore is null,
   // and risks[] explains why. The UI must show "no data" rather than a verdict.
   dataQuality?: DataQuality | null;
   barsAvailable?: number | null;   // daily bars of real price history behind this assessment

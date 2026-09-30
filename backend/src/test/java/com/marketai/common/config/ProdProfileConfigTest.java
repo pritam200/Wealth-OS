@@ -61,12 +61,6 @@ class ProdProfileConfigTest {
     void sharedSettingsReachTheProdProfile() {
         Environment env = prod(deployEnv());
 
-        // Startup validates these sum to 100 — missing entirely meant prod could not start.
-        int sum = 0;
-        for (String k : new String[]{"technical", "momentum", "valuation", "sentiment"}) {
-            sum += env.getRequiredProperty("app.recommendation.weights." + k, Integer.class);
-        }
-        assertThat(sum).isEqualTo(100);
         assertThat(env.getProperty("gmail.redirect-uri")).isEqualTo("https://family.duckdns.org/api/gmail/callback");
         assertThat(env.getProperty("gmail.frontend-url")).isEqualTo("https://family.duckdns.org");
         assertThat(env.getProperty("app.sync.worker.concurrency")).isNotBlank();

@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Info } from 'lucide-react';
 import { marketApi } from '../../api/market';
-import type { PriceHistory } from '../../types';
+import type { PriceHistory, TechnicalAnalysis } from '../../types';
 import { CHART } from '../../theme/chartTheme';
 
-const fmt = (n: number) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n || 0);
+const fmt = (n: number) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n);
 
-// 6-month candlestick (hand-drawn SVG for reliable scaling) + a plain-English read
-// of what the chart shows: trend, recent move, range position and volatility.
-export function StockChart({ symbol, support, resistance }: { symbol: string; support?: number | null; resistance?: number | null }) {
+// 6-month candlestick (hand-drawn SVG for reliable scaling) + a plain-English read of the
+// canonical technical values. Nothing is recomputed here: volatility, range position and
+// level distances all come from the backend's technical read.
+export function StockChart({ symbol, support, resistance, tech }: {
+  symbol: string; support?: number | null; resistance?: number | null; tech?: TechnicalAnalysis | null;
+}) {
   const [data, setData] = useState<PriceHistory[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -40,25 +43,26 @@ export function StockChart({ symbol, support, resistance }: { symbol: string; su
   const x = (i: number) => padL + slot * i + slot / 2;
   const y = (p: number) => padT + (max - p) / span * plotH;
 
-  const first = closes[0], last = closes[n - 1];
-  const chg6m = (last - first) / first * 100;
-  const i1m = Math.max(0, n - 22);
-  const chg1m = (last - closes[i1m]) / closes[i1m] * 100;
-  const rangePos = (last - min) / span * 100;
-  const rets = closes.slice(1).map((c, i) => c / closes[i] - 1);
-  const mean = rets.reduce((s, r) => s + r, 0) / (rets.length || 1);
-  const vol = Math.sqrt(rets.reduce((s, r) => s + (r - mean) ** 2, 0) / (rets.length || 1)) * Math.sqrt(252) * 100;
+  const last = closes[n - 1];
 
   const gridVals = [max, (max + min) / 2, min];
 
   const insights: string[] = [];
-  insights.push(`Over 6 months the price is ${chg6m >= 0 ? 'up' : 'down'} ${Math.abs(chg6m).toFixed(1)}% and ${chg1m >= 0 ? 'up' : 'down'} ${Math.abs(chg1m).toFixed(1)}% in the last month.`);
-  insights.push(rangePos >= 75 ? `Trading near its 6-month high (${rangePos.toFixed(0)}% of range) — strength, but watch for resistance.`
-    : rangePos <= 25 ? `Trading near its 6-month low (${rangePos.toFixed(0)}% of range) — weak, or a possible value zone.`
-    : `Mid-range (${rangePos.toFixed(0)}% of the 6-month band) — no extreme.`);
-  insights.push(`Annualised volatility ≈ ${vol.toFixed(0)}% — ${vol > 45 ? 'high (large swings; size positions carefully)' : vol > 25 ? 'moderate' : 'relatively calm'}.`);
-  if (support && last <= support * 1.03) insights.push(`Price is testing support near ₹${fmt(support)} — a bounce or breakdown level to watch.`);
-  if (resistance && last >= resistance * 0.97) insights.push(`Price is pushing resistance near ₹${fmt(resistance)} — a breakout above it would be bullish.`);
+  if (tech?.trendAssessment) {
+    const t = tech.trendAssessment;
+    insights.push(`Trend: ${t.label.replace(/_/g, ' ').toLowerCase()} (${t.bullishVotes} up / ${t.bearishVotes} down of ${t.votesAvailable} votes) — descriptive, not a forecast.`);
+  }
+  if (tech?.rangePosition52wPct != null && tech.high52w != null && tech.low52w != null) {
+    insights.push(`At ${tech.rangePosition52wPct.toFixed(0)}% of its 52-week range (₹${fmt(tech.low52w)} – ₹${fmt(tech.high52w)}).`);
+  }
+  if (tech?.annualizedVolatilityPct != null && tech.dailyVolatilityPct != null) {
+    insights.push(`Volatility ${tech.dailyVolatilityPct.toFixed(2)}% a day (${tech.annualizedVolatilityPct.toFixed(0)}% annualised, last ${tech.volatilityBars ?? 120} sessions).`);
+  }
+  const ns = tech?.levels?.nearestSupport, nr = tech?.levels?.nearestResistance;
+  if (ns) insights.push(`Nearest support ₹${fmt(ns.price)} (${ns.distancePct.toFixed(1)}%, ${ns.source.replace(/_/g, ' ').toLowerCase()}).`);
+  else if (tech?.levels) insights.push('No reliable support level below the current price.');
+  if (nr) insights.push(`Nearest resistance ₹${fmt(nr.price)} (+${nr.distancePct.toFixed(1)}%, ${nr.source.replace(/_/g, ' ').toLowerCase()}).`);
+  else if (tech?.levels) insights.push('No reliable resistance level above the current price.');
 
   return (
     <div>
@@ -97,12 +101,12 @@ export function StockChart({ symbol, support, resistance }: { symbol: string; su
           {resistance ? <span className="text-bear">– – resistance</span> : null}
         </span>
       </div>
-      <div className="mt-2.5 bg-surface-hover rounded-lg p-2.5">
+      {insights.length > 0 && <div className="mt-2.5 bg-surface-hover rounded-lg p-2.5">
         <div className="flex items-center gap-1.5 text-2xs text-brand mb-1"><Info size={11} /> What the chart shows</div>
         <ul className="space-y-1">
           {insights.map((t, i) => <li key={i} className="text-2xs text-gray-400 flex gap-1.5"><span className="text-gray-600">›</span>{t}</li>)}
         </ul>
-      </div>
+      </div>}
     </div>
   );
 }

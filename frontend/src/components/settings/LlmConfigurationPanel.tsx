@@ -20,7 +20,7 @@ const TASK_NAMES: Record<string, string> = {
   DOCUMENT_EXTRACTION: 'Document extraction',
   DOCUMENT_TRANSCRIPTION: 'Scan reading',
   AI_ADVISOR: 'AI Advisor',
-  FINANCIAL_ANALYSIS: 'Financial analysis',
+  FINANCIAL_ANALYSIS: 'Financial analysis & market research',
   GENERAL_ASSISTANT: 'General assistant',
 };
 

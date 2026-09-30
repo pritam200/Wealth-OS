@@ -111,9 +111,12 @@ function Section({ title, icon, count, tone, children, defaultOpen = true }: {
   );
 }
 
-function ConfidenceBadge({ confidence }: { confidence: number }) {
-  const tone = confidence >= 55 ? 'pill-bull' : confidence >= 25 ? 'pill-neutral' : 'pill-muted';
-  return <span className={tone}><span className="font-mono tabular-nums">{confidence}%</span> confidence</span>;
+// `confidence` is the measured hit rate of the validated call on this instrument's history —
+// not a probability of profit — and is absent when there is no validated call.
+function ConfidenceBadge({ confidence }: { confidence: number | null }) {
+  if (confidence == null) return null;
+  return <span className="pill-muted" title="Share of past identical calls on this instrument that were right after 20 sessions">
+    <span className="font-mono tabular-nums">{confidence}%</span> historical hit rate</span>;
 }
 
 function AssetTag({ assetType }: { assetType: string }) {

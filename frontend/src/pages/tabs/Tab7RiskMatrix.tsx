@@ -500,7 +500,10 @@ function RiskScoreCard({ wealth }: { wealth: PortfolioContext | null }) {
           <h3 className="font-semibold text-ink text-sm">Risk Score</h3>
         </div>
         <div className={`text-4xl font-bold font-mono ${riskColor} mb-1`}>{riskScore}</div>
-        <div className={`text-xs font-semibold ${riskColor} mb-3`}>{riskLabel}</div>
+        <div className={`text-xs font-semibold ${riskColor} mb-1`}>{riskLabel}</div>
+        <p className="text-2xs text-gray-600 mb-3" title="Starts at 50; +20 if equity > 70% (+10 if > 50%), −15 if equity < 20%, −10 if FD/RD > 50%, +15 if loans exceed half of stock value; clamped to 10–90.">
+          Allocation heuristic, not a statistical risk measure — hover for the rule.
+        </p>
         <div className="h-2 bg-surface-hover rounded-full overflow-hidden mb-4">
           <div className="h-full rounded-full" style={{ width: `${riskScore}%`, background: riskScore > 65 ? CHART.bear : riskScore > 40 ? CHART.neutral : CHART.bull }} />
         </div>

@@ -23,7 +23,34 @@ import java.util.Map;
 @Data @Builder
 public class SignalPayload {
 
-    public enum Type { BUY, SELL, HOLD, INSUFFICIENT_DATA }
+    public enum Type { BUY, SELL, HOLD, NO_ACTIONABLE_SIGNAL, STALE_DATA, INSUFFICIENT_DATA }
+
+    /** What the rule would say before validation; {@link #signal} is NO_ACTIONABLE_SIGNAL unless it has earned it. */
+    private Type ruleOutput;
+
+    /** How the rule's calls on this instrument have actually played out. */
+    private Validation validation;
+
+    @Data @Builder
+    public static class Validation {
+        private int horizonSessions;
+        private int observations;
+        private int buyCalls;
+        private int sellCalls;
+        /** Share of BUY calls followed by a higher close after the horizon; null with no calls. */
+        private Double buyHitRate;
+        private Double buyHitRateCiLow;
+        private Double sellHitRate;
+        private Double sellHitRateCiLow;
+        /** Unconditional share of windows that ended higher over the same period. */
+        private double baseUpRate;
+        private Double meanForwardReturnBuyPct;
+        private Double meanForwardReturnSellPct;
+        private double meanForwardReturnAllPct;
+        /** True when the current call's hit-rate lower bound beats the base rate on ≥30 independent calls. */
+        private boolean currentCallValidated;
+        private String summary;
+    }
 
     private String symbol;
 

@@ -18,7 +18,7 @@ public enum LlmTask {
     DOCUMENT_EXTRACTION("Financial document extraction (statements, PDFs)", true, EnumSet.of(LlmCapability.TEXT, LlmCapability.JSON), true),
     DOCUMENT_TRANSCRIPTION("Scanned document reading", false, EnumSet.of(LlmCapability.TEXT, LlmCapability.VISION), true),
     AI_ADVISOR("AI Advisor (question routing)", true, EnumSet.of(LlmCapability.TEXT, LlmCapability.JSON), false),
-    FINANCIAL_ANALYSIS("Financial analysis (stock second opinion)", true, EnumSet.of(LlmCapability.TEXT, LlmCapability.JSON), false),
+    FINANCIAL_ANALYSIS("Financial analysis & market research", true, EnumSet.of(LlmCapability.TEXT, LlmCapability.JSON), false),
     GENERAL_ASSISTANT("General assistant", false, EnumSet.of(LlmCapability.TEXT), false);
 
     private final String label;

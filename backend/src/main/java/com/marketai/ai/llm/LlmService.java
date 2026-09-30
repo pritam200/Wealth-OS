@@ -58,6 +58,38 @@ public class LlmService {
         return run(LlmTask.DOCUMENT_TRANSCRIPTION, prompt, userPrompt, images);
     }
 
+    /**
+     * A web-grounded answer from the task's own route, when that route can search the web (a
+     * Gemini model, with the privacy mode allowing cloud calls). Never falls back: a model
+     * without web access answering from memory is not research.
+     *
+     * @return empty when the configured route cannot search — the caller records "not supported"
+     * @throws LlmUnavailableException when a search-capable route was tried and failed
+     */
+    public Optional<LlmCompletion> webResearch(LlmTask task, PromptTemplate prompt, String userPrompt) {
+        Snapshot s = config.current();
+        if (!s.aiEnabled()) return Optional.empty();
+        Route r = s.route(task);
+        if (!r.enabled() || r.provider() != LlmProviderId.GEMINI || !s.permits(r.provider())
+            || !s.provider(r.provider()).configured()) return Optional.empty();
+        ProviderSettings settings = s.provider(r.provider()).withModel(r.model());
+        Optional<ModelInfo> info = catalog.find(settings, r.model());
+        if (info.isPresent() && !info.get().capabilities().contains(LlmCapability.TOOLS)) return Optional.empty();
+        LlmRequest request = new LlmRequest(prompt.system(), userPrompt, r.model(), false, 0.0,
+            settings.maxTokens(), settings.timeoutSeconds(), List.of(), true);
+        long started = System.currentTimeMillis();
+        try {
+            LlmCompletion c = catalog.provider(r.provider()).generate(settings, request);
+            usage.record(task, r.provider().key(), r.model(), prompt.tag(), System.currentTimeMillis() - started,
+                true, null, false, c.getPromptTokens(), c.getCompletionTokens());
+            return Optional.of(c.toBuilder().provider(r.provider().key()).model(r.model()).promptVersion(prompt.tag()).build());
+        } catch (LlmUnavailableException e) {
+            usage.record(task, r.provider().key(), r.model(), prompt.tag(), System.currentTimeMillis() - started,
+                false, e.getCategory().name(), false, null, null);
+            throw e;
+        }
+    }
+
     /** Configured to be served (no network check — a failed call reports itself). */
     public boolean isAvailable(LlmTask task) {
         Snapshot s = config.current();

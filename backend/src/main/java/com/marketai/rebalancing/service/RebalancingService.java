@@ -240,7 +240,7 @@ public class RebalancingService {
         for (Holding h : members) {
             Optional<Stock> s = safeFindStock(h.getSymbol());
             if (s.isEmpty()) continue;
-            FactorScore fs = qualityFactor.score(s.get().getRoe(), s.get().getDebtToEquity(), null, null, null);
+            FactorScore fs = qualityFactor.score(s.get().getRoe(), s.get().debtToEquityRatio(), null, null, null);
             if (!fs.isUsable()) continue;
             if (fs.score() < worstScore) {
                 worstScore = fs.score();
@@ -257,7 +257,7 @@ public class RebalancingService {
         if (members.size() == 1) return "Only " + chosen.getSymbol() + " in this sector is held.";
         Optional<Stock> s = safeFindStock(chosen.getSymbol());
         if (s.isPresent()) {
-            FactorScore fs = qualityFactor.score(s.get().getRoe(), s.get().getDebtToEquity(), null, null, null);
+            FactorScore fs = qualityFactor.score(s.get().getRoe(), s.get().debtToEquityRatio(), null, null, null);
             if (fs.isUsable()) {
                 return chosen.getSymbol() + " picked to trim: " + fs.explanation()
                     + " — the weakest quality signal among your " + members.size() + " holdings in this sector.";
