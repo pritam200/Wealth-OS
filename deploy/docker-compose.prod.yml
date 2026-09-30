@@ -1,0 +1,117 @@
+# Production stack for one Oracle Cloud "Always Free" Ampere VM (arm64). See DEPLOY.md.
+#
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+#
+# Only Caddy publishes ports (80/443, HTTPS certificates are automatic). Postgres, Redis, the
+# backend and Ollama are reachable only on the internal Docker network — never from the internet.
+
+name: marketai
+
+services:
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      TZ: Asia/Kolkata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Runs only when the data volume is first created. Hibernate (ddl-auto=update) brings the
+      # schema up to date with the entities on every start after that.
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_HOST: postgres
+      DB_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      FRONTEND_URL: https://${DOMAIN}
+      GMAIL_REDIRECT_URI: https://${DOMAIN}/api/gmail/callback
+      OLLAMA_BASE_URL: http://ollama:11434
+      TZ: Asia/Kolkata
+    # Spring Boot plus 41 scheduled jobs; the JVM takes 75% of this as heap.
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # Empty = same origin: the browser calls /api on this domain and nginx proxies it to
+        # the backend, so there is no CORS and no second hostname to secure.
+        VITE_API_URL: ""
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+  # Local model for the non-email AI features (advisor, narratives). Email reading uses Gemini.
+  # Optional: start with `--profile ollama`, then pull the model once (see DEPLOY.md). Without
+  # it, set LLM_PROVIDER=gemini in .env.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    mem_limit: 12g
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+  ollama_data:
