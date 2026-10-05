@@ -33,6 +33,10 @@ public class PortfolioController {
     private final TransactionRepository transactionRepo;
     private final HoldingRepository holdingRepo;
 
+    /** Optional: annotates holdings with institution-verification status when the data platform is present. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.marketai.dataplatform.service.HoldingVerificationOverlay verification;
+
     @PostMapping
     @Operation(summary = "Create a new portfolio")
     public ResponseEntity<Portfolio> createPortfolio(
@@ -56,13 +60,13 @@ public class PortfolioController {
     public ResponseEntity<PortfolioSummaryDto> getSummary(
             @PathVariable Long id,
             @AuthenticationPrincipal User user) {
-        return ResponseEntity.ok(portfolioService.getPortfolioSummary(id, user.getId()));
+        return ResponseEntity.ok(overlay(user.getId(), portfolioService.getPortfolioSummary(id, user.getId())));
     }
 
     @GetMapping("/combined-summary")
     @Operation(summary = "One summary across every portfolio the user owns")
     public ResponseEntity<PortfolioSummaryDto> getCombinedSummary(@AuthenticationPrincipal User user) {
-        return ResponseEntity.ok(portfolioService.getCombinedSummary(user.getId()));
+        return ResponseEntity.ok(overlay(user.getId(), portfolioService.getCombinedSummary(user.getId())));
     }
 
     @PostMapping("/{id}/holdings")
@@ -222,5 +226,10 @@ public class PortfolioController {
                 .folio(h.getFolio())
                 .createdAt(t.getCreatedAt())
                 .build();
+    }
+
+    private PortfolioSummaryDto overlay(Long userId, PortfolioSummaryDto dto) {
+        if (verification != null && dto != null) verification.annotate(userId, dto.getHoldings());
+        return dto;
     }
 }

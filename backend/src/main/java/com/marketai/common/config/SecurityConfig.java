@@ -47,6 +47,10 @@ public class SecurityConfig {
                                 // Protected instead by a shared secret in the query string
                                 // (app.gmail.push.verification-token), checked in the handler.
                                 "/api/gmail/push",
+                                // A provider reports consent outcomes here. It cannot carry a user JWT;
+                                // the provider adapter verifies the callback's signature and the
+                                // controller rejects anything it does not verify.
+                                "/api/data/callbacks/**",
                                 "/api-docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",

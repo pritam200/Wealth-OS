@@ -220,6 +220,11 @@ export interface HoldingDto {
   priceAsOf?: string | null;
   /** MARKET = current price; STALE = price older than a few days; COST = no price, valued at cost. */
   valuationBasis?: 'MARKET' | 'STALE' | 'COST';
+  /** From the canonical ledger; absent when the holding is not in it. The quantity above is never replaced by the institution's. */
+  verificationState?: 'VERIFIED' | 'UNVERIFIED' | 'NEEDS_RECONCILIATION' | null;
+  verificationSource?: string | null;
+  lastVerifiedAt?: string | null;
+  institutionQuantity?: number | null;
 }
 
 export interface AllocationDto {

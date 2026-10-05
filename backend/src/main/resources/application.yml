@@ -193,6 +193,23 @@ gmail:
   # Where the backend sends the browser back to after the OAuth callback completes.
   frontend-url: ${FRONTEND_URL:http://localhost:5174}
 
+# Canonical financial data platform (see docs/architecture/CANONICAL_DATA_PLATFORM.md).
+wealthos:
+  data:
+    # Existing legacy transactions are migrated into the canonical ledger once at startup (idempotent).
+    backfill-on-startup: ${WEALTHOS_BACKFILL_ON_STARTUP:true}
+    reconciliation:
+      # How long a single non-authoritative report (an email) waits for an institution source
+      # before it is marked UNCONFIRMED.
+      grace-days: ${WEALTHOS_GRACE_DAYS:7}
+      # Older unconfirmed transactions count in the score but are not raised one by one.
+      unconfirmed-issue-window-days: 90
+    providers:
+      mock:
+        # A development stand-in for an Account Aggregator. It holds no data of its own and is
+        # labelled MOCK everywhere. Never enable in production.
+        enabled: ${WEALTHOS_MOCK_PROVIDERS:false}
+
 logging:
   level:
     com.marketai: DEBUG

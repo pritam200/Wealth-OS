@@ -246,6 +246,11 @@ public class ResearchOrchestrator {
             }
             sb.append('\n');
         }
+        if (ctx.facts().stream().anyMatch(f -> f.label() != null && f.label().startsWith("Portfolio data quality"))) {
+            sb.append("\nDATA-QUALITY RULE: the user's holdings, cost and returns above are only as reliable as the data-quality facts say. ")
+              .append("Where the portfolio is unverified, a holding is not VERIFIED, or a data warning is listed, say so explicitly and ")
+              .append("state what is uncertain; never present such a position or return as confirmed. Email-derived records are signals, not proof.\n");
+        }
         sb.append("\nEVIDENCE (cite by id; newest first within each source):\n");
         if (evidence.isEmpty()) sb.append("(none retrieved)\n");
         for (Evidence e : evidence) {

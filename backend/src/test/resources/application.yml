@@ -32,3 +32,7 @@ app:
     base-url: https://test.news
   cors:
     allowed-origins: http://localhost:3000,http://localhost:5173
+
+wealthos:
+  data:
+    backfill-on-startup: false

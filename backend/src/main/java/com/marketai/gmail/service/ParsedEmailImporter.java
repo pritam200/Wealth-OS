@@ -43,6 +43,14 @@ public class ParsedEmailImporter {
     private final TransactionMatchScorer matchScorer;
     private final com.marketai.rent.service.RentService rentService;
 
+    /**
+     * Records the email as a signal in the canonical ledger (a candidate awaiting institution
+     * corroboration). Optional and non-final so this class still works without the data platform;
+     * it never throws, so it cannot affect the legacy import.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.marketai.dataplatform.service.EmailSignalRecorder emailSignals;
+
     /** What happened to one extracted item. Anything that can't be booked safely throws
      *  {@link ImportRejectedException} instead, so it reaches the review queue. */
     public enum ImportOutcome {
@@ -256,6 +264,7 @@ public class ParsedEmailImporter {
             .linkGroup(linkGroup(pe, gmailMessageId))
             .build();
         boolean booked = routeImport(userId, user, pe, gmailMessageId, provenance);
+        if (booked && emailSignals != null) emailSignals.record(userId, pe, gmailMessageId, fp);
 
         // Recorded only after a successful import, so a failed attempt stays retryable. A
         // duplicate the domain checks caught still gets one, so the next re-read stops at tier 2.

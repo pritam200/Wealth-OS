@@ -35,6 +35,7 @@ const Tab16TodaysActions    = lazy(() => import('./pages/tabs/Tab16TodaysActions
 const Tab17FinancialPlanner = lazy(() => import('./pages/tabs/Tab17FinancialPlanner').then(m => ({ default: m.Tab17FinancialPlanner })));
 const DashboardPage         = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
 const DataSyncPage          = lazy(() => import('./pages/DataSyncPage').then(m => ({ default: m.DataSyncPage })));
+const DataPlatformPage = lazy(() => import('./pages/DataPlatformPage').then(m => ({ default: m.DataPlatformPage })));
 const ReconciliationCenterPage = lazy(() => import('./pages/ReconciliationCenterPage').then(m => ({ default: m.ReconciliationCenterPage })));
 const SettingsPage          = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 const StockPage             = lazy(() => import('./pages/StockPage').then(m => ({ default: m.StockPage })));
@@ -87,7 +88,7 @@ const NAV_SECTIONS: readonly NavSection[] = [
   },
   {
     id: 'needs-review', label: 'Needs Review', Icon: AlertCircle,
-    tabs: [{ id: 19, label: 'Needs Review' }, { id: 22, label: 'Reconciliation Center' }],
+    tabs: [{ id: 19, label: 'Needs Review' }, { id: 22, label: 'Reconciliation Center' }, { id: 23, label: 'Data Platform' }],
   },
   {
     id: 'analytics', label: 'Analytics & Reports', Icon: Target,
@@ -227,6 +228,7 @@ function TabContent({ tab, onNavigate }: { tab: number; onNavigate: (tabId: numb
     case 20: return <CashFlowForecastPage />;
     case 21: return <SubscriptionsPage />;
     case 22: return <ReconciliationCenterPage />;
+    case 23: return <DataPlatformPage />;
     default: return <Tab1MarketTrends />;
   }
 }

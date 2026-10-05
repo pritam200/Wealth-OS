@@ -70,6 +70,15 @@ public class PortfolioSummaryDto {
         private java.time.LocalDate priceAsOf;
         /** MARKET | STALE | COST — see {@code Holding.ValuationBasis}. */
         private String valuationBasis;
+        /**
+         * Additive, read-only overlay from the canonical ledger; null when the user has no ledger or the
+         * holding is not in it. VERIFIED | UNVERIFIED | NEEDS_RECONCILIATION. The quantity above is never
+         * replaced by the institution's; it is shown beside it so a difference is visible.
+         */
+        private String verificationState;
+        private String verificationSource;
+        private java.time.LocalDateTime lastVerifiedAt;
+        private BigDecimal institutionQuantity;
     }
 
     @Data

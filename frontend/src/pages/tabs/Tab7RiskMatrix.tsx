@@ -1,3 +1,4 @@
+import { VerificationBadge } from '../../components/portfolio/VerificationBadge';
 import { useState, useEffect, useCallback, Fragment } from 'react';
 import {
   Shield, TrendingUp, AlertTriangle, Landmark,
@@ -256,6 +257,7 @@ function HoldingsGroup({ title, Icon, holdings, inv, cur, sell, reload, showSign
                       {h.folio && h.buyDate && <span> · </span>}
                       {h.buyDate && <span>Bought {h.buyDate}</span>}
                     </div>
+                    <VerificationBadge h={h} />
                   </td>
                   <td className="text-right num text-gray-300 text-xs">{mask(h.quantity)}</td>
                   <td className="text-right num text-gray-400 text-xs">{mask(fmtINR(h.averageCost))}</td>

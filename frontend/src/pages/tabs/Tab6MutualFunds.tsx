@@ -1,3 +1,4 @@
+import { VerificationBadge } from '../../components/portfolio/VerificationBadge';
 import { useEffect, useState, useCallback } from 'react';
 import { portfolioApi } from '../../api/portfolio';
 import { benchmarksApi } from '../../api/analyst';
@@ -587,6 +588,7 @@ export function Tab6MutualFunds() {
                           <div className="font-mono text-ink text-xs">{h.symbol?.replace('.MF', '')}</div>
                           <div className="text-xs text-gray-500 truncate max-w-[200px]">{h.name}</div>
                           {h.broker && <div className="text-2xs text-gray-600">{h.broker}</div>}
+                          <VerificationBadge h={h} />
                         </td>
                         <td className="text-gray-300 text-xs whitespace-nowrap">
                           {h.buyDate ? fmtDate(h.buyDate) : '—'}

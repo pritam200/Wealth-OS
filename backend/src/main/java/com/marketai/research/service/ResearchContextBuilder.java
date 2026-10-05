@@ -92,6 +92,10 @@ public class ResearchContextBuilder {
     private final MfPerformanceService mfPerformance;
     private final AmfiNavService amfiNav;
 
+    /** Optional so research still works where the data platform is absent (and in tests that build this by hand). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.marketai.dataplatform.service.DataQualityService dataQuality;
+
     /* ───────────────────────── stock ───────────────────────── */
 
     public ResearchContext forStock(String symbol, String displayName, Long userId) {
@@ -118,6 +122,7 @@ public class ResearchContextBuilder {
         macroFacts(facts);
         dataQualityFacts(ta, facts);
         if (userId != null) portfolioFacts(userId, sym, base, sectorName, facts);
+        if (userId != null) dataProvenanceFacts(userId, base, facts);
 
         EvidenceRetriever.Retrieved ev = retriever.forCompany(base, name);
         sentimentFacts(ev, facts);
@@ -166,6 +171,7 @@ public class ResearchContextBuilder {
             } catch (Exception e) { log.debug("Portfolio unavailable for fund research: {}", e.getMessage()); }
         }
         String name = h != null && h.getName() != null ? h.getName() : symbol.replace(".MF", "");
+        if (userId != null) dataProvenanceFacts(userId, symbol.replace(".MF", ""), facts);
         String schemeCode = null;
         if (h != null) {
             schemeCode = holdings.findByPortfolioIdAndSymbol(h.getPortfolioId(), h.getSymbol()).map(Holding::getAmfiSchemeCode).orElse(null);
@@ -502,6 +508,44 @@ public class ResearchContextBuilder {
             if (i.isWarning() && (i.date() == null || window == null || !i.date().isBefore(window))) recent.add(i.code() + (i.date() != null ? " " + i.date() : "") + ": " + i.detail());
         }
         f.add(Fact.text("DATA_QUALITY", "CALCULATION", "Data warnings in the last year", recent.isEmpty() ? "None" : String.join(" | ", recent), at, "PriceSeriesValidator"));
+    }
+
+    /**
+     * How far the user's own portfolio data can be trusted: the deterministic data-quality score, what
+     * verifies it, and whether this holding was confirmed by an institution. The model must not state
+     * a position or return as certain when this says it is unverified.
+     */
+    private void dataProvenanceFacts(Long userId, String symbolOrCode, List<Fact> f) {
+        if (dataQuality == null) return;
+        try {
+            var h = dataQuality.health(userId, false);
+            String at = LocalDate.now(IST).toString();
+            if (h.scorePercent() == null) {
+                f.add(Fact.text("PORTFOLIO", "PORTFOLIO", "Portfolio data quality", "No verifiable ledger yet", at, "Wealth-OS data platform"));
+                return;
+            }
+            f.add(Fact.of("PORTFOLIO", "CALCULATION", "Portfolio data quality (share of transactions verified by an institution)",
+                h.scorePercent(), "%", at, "Wealth-OS data platform"));
+            f.add(Fact.text("PORTFOLIO", "PORTFOLIO", "Verification sources", h.hasAuthoritativeSource()
+                ? "An institution source (account aggregator, broker, depository or statement) is connected"
+                : "No institution source is connected: this portfolio is built from emails and manual entries and is unverified",
+                at, "Wealth-OS data platform"));
+            var match = h.holdings().stream().filter(x -> symbolOrCode != null && (symbolOrCode.equalsIgnoreCase(x.symbol())
+                || symbolOrCode.equalsIgnoreCase(x.isin()))).findFirst().orElse(null);
+            if (match != null) {
+                f.add(Fact.text("PORTFOLIO", "PORTFOLIO", "This holding's verification",
+                    match.state() + (match.source() != null ? " (" + match.source() + ")" : "")
+                        + (match.lastVerifiedAt() != null ? ", last verified " + match.lastVerifiedAt().toLocalDate() : ", never verified by an institution")
+                        + (match.reportedQuantity() != null && match.calculatedQuantity() != null
+                            && match.reportedQuantity().compareTo(match.calculatedQuantity()) != 0
+                            ? "; institution reports " + match.reportedQuantity().toPlainString() + " units, records show "
+                                + match.calculatedQuantity().toPlainString() : ""),
+                    at, "Wealth-OS data platform"));
+            }
+            for (String w : h.warnings()) f.add(Fact.text("PORTFOLIO", "PORTFOLIO", "Data warning", w, at, "Wealth-OS data platform"));
+        } catch (Exception e) {
+            log.debug("Data-quality context unavailable: {}", e.getMessage());
+        }
     }
 
     private void portfolioFacts(Long userId, String sym, String base, String sector, List<Fact> f) {

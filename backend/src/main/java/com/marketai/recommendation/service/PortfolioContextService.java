@@ -56,6 +56,10 @@ public class PortfolioContextService {
     private final com.marketai.card.service.CardReconciliationService cardReconciliationService;
     private final com.marketai.portfolio.repository.TransactionRepository transactionRepository;
 
+    /** Optional: when the canonical ledger has data, its quality warnings are declared as gaps. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.marketai.dataplatform.service.DataQualityService dataQualityService;
+
     /** The holding's XIRR from its own ledger — the same figure the portfolio screens show. */
     @Transactional(readOnly = true)
     public BigDecimal holdingXirr(Holding h) {
@@ -295,6 +299,7 @@ public class PortfolioContextService {
                 mfCount, mfCount == 1 ? "" : "s"));
         }
 
+        addLedgerQualityGaps(userId, gaps);
         String dataQuality = (gaps.isEmpty() ? DataQuality.FULL : DataQuality.PARTIAL).wire();
 
         return PortfolioContext.builder()
@@ -317,6 +322,24 @@ public class PortfolioContextService {
             .holdingsAtCost(unpriced).valueAtCost(scale(unpricedValue))
             .holdingsStale(stale).valueStale(scale(staleValue))
             .build();
+    }
+
+    /** Declares what the canonical ledger says is unverified, so advice never treats it as confirmed. */
+    private void addLedgerQualityGaps(Long userId, List<String> gaps) {
+        if (dataQualityService == null) return;
+        try {
+            var h = dataQualityService.health(userId, false);
+            if (h.scorePercent() == null) return;   // no canonical ledger for this user: nothing to declare
+            if (!h.hasAuthoritativeSource()) {
+                gaps.add("No bank, broker or account-aggregator source is connected, so holdings and returns are built from emails and manual entries and are not verified.");
+            } else if (h.scorePercent() < 100.0) {
+                gaps.add(String.format("%.0f%% of recorded transactions are verified by an institution; the rest are unconfirmed, pending or in conflict.", h.scorePercent()));
+            }
+            if (h.missing() > 0) gaps.add(h.missing() + " transaction(s) reported by an institution were missing from your records and await review.");
+            if (h.holdingMismatches() > 0) gaps.add(h.holdingMismatches() + " holding(s) differ from the institution's reported balance, so quantities for them may be wrong.");
+        } catch (Exception e) {
+            log.debug("Ledger data quality unavailable: {}", e.getMessage());
+        }
     }
 
     public static boolean isMf(Holding h) {
