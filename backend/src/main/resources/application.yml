@@ -176,6 +176,8 @@ app:
 
   otp:
     from: ${MAIL_FROM:MarketAI <no-reply@marketai.local>}
+    # LOCAL DEV ONLY. true = with no MAIL_HOST set, log the sign-up code instead of failing. Never enable on a hosted copy.
+    dev-log-code: ${OTP_DEV_LOG_CODE:false}
     expiry-minutes: 10
     resend-cooldown-seconds: 45
     max-attempts: 5

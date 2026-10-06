@@ -67,6 +67,88 @@ npm run dev
 # Starts at http://localhost:5173
 ```
 
+## Secrets and production deployment
+
+Plaintext secrets (`.env`, `deploy/.env`, `backend/gmail.env`) are git-ignored and never committed.
+The only secret file in git is the encrypted bundle `config/secrets.tar.gpg` (AES-256, GnuPG).
+At deploy time the bundle is decrypted automatically into `.tmp-secrets/`, handed to Docker, and
+deleted again. Nothing is baked into an image layer.
+
+### One-time local setup: encrypt your secrets
+
+```bash
+# fill in the three files first (deploy/init-secrets.sh generates most of deploy/.env)
+export DEPLOY_SECRET_KEY="$(openssl rand -base64 32)"   # save this in a password manager NOW
+./scripts/secrets.sh encrypt                            # writes config/secrets.tar.gpg
+git add config/secrets.tar.gpg && git commit -m "Update encrypted secrets" && git push
+```
+
+If `DEPLOY_SECRET_KEY` is not set, `encrypt` asks for a passphrase on the terminal (twice, hidden).
+Commands: `encrypt`, `decrypt-auto` (needs `DEPLOY_SECRET_KEY`, never prompts), `clean`, and
+`run CMD...` (decrypts, runs CMD with the variables exported, cleans up; handy for local dev,
+e.g. `./scripts/secrets.sh run sh -c 'cd backend && mvn spring-boot:run'`).
+
+### Set `DEPLOY_SECRET_KEY` where the deploy runs
+
+* **GitHub Actions (recommended):** repo Settings → Secrets and variables → Actions → add
+  `DEPLOY_SECRET_KEY`, `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS`, `SSH_HOST`, `SSH_USER` as secrets and
+  `DEPLOY_PATH` (the checkout directory on the server) as a variable, ideally in a protected
+  `production` environment. `.github/workflows/deploy.yml` sends the key to the server over the SSH
+  channel's stdin; it is never echoed, written to disk or put on a command line.
+* **Manually on the server:** `export DEPLOY_SECRET_KEY=...` in the session (or load it from your
+  process manager's secret store), then run the deploy command. Do not put it in a file in the repo.
+
+### Deploy with one command
+
+```bash
+DEPLOY_SECRET_KEY='...' ./deploy.sh
+```
+
+`deploy.sh` runs `git pull --ff-only`, `scripts/secrets.sh decrypt-auto`, then
+`docker compose -f deploy/docker-compose.prod.yml --env-file .tmp-secrets/deploy.env up -d --build --remove-orphans`,
+and removes `.tmp-secrets/` on exit, success or failure (including Ctrl+C).
+
+### Run it locally exactly like production
+
+Local and production use the same compose file, the same encrypted secrets and the same
+`deploy.sh`, so there is nothing to keep in sync. The only value that legitimately differs is the
+public hostname, which you pass in the environment (a shell value overrides the file):
+
+```bash
+DEPLOY_SECRET_KEY='...' DOMAIN=localhost SKIP_PULL=1 ./deploy.sh      # local
+DEPLOY_SECRET_KEY='...' ./deploy.sh                                   # production (DOMAIN in deploy/.env)
+```
+
+Keep the production `DOMAIN` in `deploy/.env`. Everything else (database, Redis, JWT and encryption
+keys, mail, Gemini, Gmail OAuth, sign-up allow-list) comes from the same files in both places.
+
+### Rotate a secret or the key
+
+1. Edit the plaintext file(s) locally (restore them first with `scripts/secrets.sh run`-style
+   decrypt if you only have the bundle: `DEPLOY_SECRET_KEY=... ./scripts/secrets.sh decrypt-auto`,
+   then copy from `.tmp-secrets/` to `.env`, `deploy/.env`, `backend/gmail.env`, and `clean`).
+2. To change the **passphrase**, set a new `DEPLOY_SECRET_KEY` and run `encrypt` again; update the
+   GitHub secret. The old passphrase still opens older commits of the bundle, so rotate any secret
+   that mattered (database/Redis passwords, JWT secret, API keys) at the source too.
+3. Commit the new `config/secrets.tar.gpg` and deploy.
+
+### Recovery and key loss
+
+**There is no recovery for a lost `DEPLOY_SECRET_KEY`.** The bundle cannot be decrypted without
+it. Keep it in a password manager plus one offline copy. If it is lost, recreate the secrets from
+their sources (new database/Redis passwords, new JWT and encryption keys, new API keys) and encrypt
+a new bundle. Note: losing `PDF_PASSWORD_ENC_KEY` (not just the passphrase) makes saved statement
+passwords unreadable, and changing `JWT_SECRET` signs everyone out.
+
+### One-time server setup
+
+1. Install Docker (with the compose plugin) and GnuPG (`apt-get install gnupg`), then clone the repo
+   to the deploy path and make sure `git pull` works there (read-only deploy key).
+2. Create a dedicated SSH key pair for CI, add the public key to the server user's
+   `authorized_keys`, and store the private key and `ssh-keyscan <host>` output in GitHub secrets.
+3. Add the GitHub secrets and variable listed above.
+4. Run `DEPLOY_SECRET_KEY=... ./deploy.sh` once by hand to confirm it works.
+
 ## Docker Deployment
 
 ```bash

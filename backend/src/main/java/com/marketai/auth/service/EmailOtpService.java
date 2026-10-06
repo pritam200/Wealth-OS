@@ -51,6 +51,11 @@ public class EmailOtpService {
     @Value("${app.otp.from:MarketAI <no-reply@marketai.local>}")
     private String fromAddress;
 
+    /** Local development only, off unless explicitly enabled: with no mail relay configured, print the
+     *  code to the server log instead of failing, so sign-up can be tried without SMTP. */
+    @Value("${app.otp.dev-log-code:false}")
+    private boolean devLogCode;
+
     @Value("${app.otp.expiry-minutes:10}")
     private long expiryMinutes;
 
@@ -145,6 +150,10 @@ public class EmailOtpService {
 
     private void sendCodeEmail(String email, String code) {
         JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
+        if (mailSender == null && devLogCode) {
+            log.warn("DEV ONLY (app.otp.dev-log-code): no mail relay is configured, so the sign-up code for {} is {}", email, code);
+            return;
+        }
         if (mailSender == null) {
             log.error("Cannot send OTP to {} — spring.mail.host is not configured (set MAIL_HOST/MAIL_USERNAME/MAIL_PASSWORD).", email);
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,

@@ -1,3 +1,5 @@
+> **Automated path:** after the secrets are encrypted into `config/secrets.tar.gpg`, deploys are one command, `DEPLOY_SECRET_KEY=... ./deploy.sh`; it decrypts to `.tmp-secrets/`, runs the compose command below with `--env-file .tmp-secrets/deploy.env`, and deletes the plaintext. The manual `--env-file deploy/.env` commands below still work.
+
 # Hosting on Oracle Cloud (free)
 
 One Oracle Cloud **Always Free** Ampere VM runs everything: Postgres, Redis, the backend, the
@@ -93,7 +95,7 @@ cd indian-markets-ai-platform
 ## 6. Configure
 
 ```bash
-./deploy/init-secrets.sh      # creates deploy/.env and generates DB/Redis/JWT/encryption secrets
+./deploy/init-secrets.sh      # creates deploy/.env (once; then encrypt it, see README "Secrets and production deployment") and generates DB/Redis/JWT/encryption secrets
 nano deploy/.env              # fill in the rest (see below)
 ```
 

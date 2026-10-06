@@ -9,19 +9,42 @@ target/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+.vite/
 node_modules/
 dist/
 
 # ── Secrets ───────────────────────────────────────────────────────────────
-# Never commit credentials. See docs/04-devops/ENVIRONMENT_VARIABLES.md for the
-# full list of variables this application expects to be supplied at runtime.
-gmail.env
+# Never commit plaintext credentials. The ONLY secret file that is committed is the encrypted
+# bundle config/secrets.tar.gpg (see scripts/secrets.sh and the README).
 .env
-.env.local
+.env.*
+*.env
+*.env.*
+gmail.env
+*.pem
+*.key
 *.p12
-!backend/tools/*.sh
-credentials.json
+*.p8
+*.pfx
+# Password / credential dumps by extension only: a bare *password* pattern would also hide real
+# source files such as PasswordCipher.java.
+*password*.txt
+*password*.csv
+*password*.json
+*credential*.txt
+*credential*.csv
+*credential*.json
 token.json
+# Templates carry no values, so they stay tracked.
+!.env.example
+!**/.env.example
+!**/*.env.example
+# Where secrets are decrypted to at deploy time. Removed again when the deploy ends.
+.tmp-secrets/
+config/decrypted/
+!backend/tools/*.sh
+# The encrypted bundle itself is meant to be committed.
+!config/secrets.tar.gpg
 
 # ── IDE ───────────────────────────────────────────────────────────────────
 # Editor state is per-developer. backend/.idea/compiler.xml in particular records
