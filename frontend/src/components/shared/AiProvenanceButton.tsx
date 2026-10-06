@@ -79,7 +79,7 @@ export function AiProvenanceButton({ referenceId, record }: { referenceId?: stri
         aria-label={record ? 'View source' : 'Why did the AI do this?'}
         title={record ? 'View source' : 'Why did the AI do this?'}
         onClick={onOpen}
-        className="btn-icon text-violet-400 hover:text-violet-300 p-0.5"
+        className="btn-icon text-teal-400 hover:text-teal-300 p-0.5"
       >
         <Sparkles size={11} />
       </button>
@@ -90,7 +90,7 @@ export function AiProvenanceButton({ referenceId, record }: { referenceId?: stri
                onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-surface-border sticky top-0 bg-surface">
               <div className="flex items-center gap-2">
-                <Sparkles size={14} className="text-violet-400" />
+                <Sparkles size={14} className="text-teal-400" />
                 <h3 className="text-ink font-bold text-sm">{record ? 'Source' : 'Why the AI did this'}</h3>
               </div>
               <button aria-label="Close" onClick={onClose} className="btn-icon text-gray-500 hover:text-ink"><X size={16} /></button>
@@ -135,7 +135,7 @@ export function AiProvenanceButton({ referenceId, record }: { referenceId?: stri
                   )}
                   {source.conflictDetail && <p className="text-bear">{source.conflictDetail}</p>}
                   {source.gmailLink && (
-                    <a href={source.gmailLink} target="_blank" rel="noopener noreferrer" className="text-violet-400 underline">Open the email in Gmail</a>
+                    <a href={source.gmailLink} target="_blank" rel="noopener noreferrer" className="text-teal-400 underline">Open the email in Gmail</a>
                   )}
                 </div>
               )}

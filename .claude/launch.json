@@ -31,6 +31,15 @@
         "--strictPort"
       ],
       "port": 5188
+    },
+    {
+      "name": "frontend-green-check",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "cd frontend && npx vite --port 5190 --strictPort"
+      ],
+      "port": 5190
     }
   ]
 }

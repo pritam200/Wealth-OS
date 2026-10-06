@@ -91,6 +91,7 @@ public class NewsService {
             String raw = baos.toString("UTF-8");
             // Remove DOCTYPE declarations that break the XML parser
             raw = raw.replaceFirst("(?is)<!DOCTYPE[^>]*>", "");
+            raw = escapeBareAmpersands(raw);
             // Remove BOM
             if (raw.startsWith("﻿")) raw = raw.substring(1);
 
@@ -199,5 +200,30 @@ public class NewsService {
         long count = 0;
         for (String kw : keywords) if (text.contains(kw)) count++;
         return count;
+    }
+
+    private static final java.util.regex.Pattern BARE_AMP =
+        java.util.regex.Pattern.compile("&(?!(?:amp|lt|gt|quot|apos|#\\d+|#[xX][0-9a-fA-F]+);)");
+
+    /**
+     * Some feeds put a raw '&' in titles and links ("S&P", "?a=1&D=2"), which is not well-formed XML
+     * and made the whole feed fail to parse. Bare ampersands are escaped; CDATA sections are
+     * left exactly as written because inside them '&' is already literal.
+     */
+    public static String escapeBareAmpersands(String xml) {
+        StringBuilder out = new StringBuilder(xml.length() + 16);
+        int pos = 0;
+        while (pos < xml.length()) {
+            int start = xml.indexOf("<![CDATA[", pos);
+            int end = start < 0 ? -1 : xml.indexOf("]]>", start);
+            if (start < 0 || end < 0) {
+                out.append(BARE_AMP.matcher(xml.substring(pos)).replaceAll("&amp;"));
+                break;
+            }
+            out.append(BARE_AMP.matcher(xml.substring(pos, start)).replaceAll("&amp;"));
+            out.append(xml, start, end + 3);
+            pos = end + 3;
+        }
+        return out.toString();
     }
 }

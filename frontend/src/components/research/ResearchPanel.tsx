@@ -17,7 +17,7 @@ const VIEW_TONE: Record<string, string> = {
 
 const BASIS_TONE: Record<string, string> = {
   FILING: 'text-emerald-300 border-emerald-500/40', DATA: 'text-sky-300 border-sky-500/40',
-  CALCULATION: 'text-sky-300 border-sky-500/30', MODEL: 'text-violet-300 border-violet-500/40',
+  CALCULATION: 'text-sky-300 border-sky-500/30', MODEL: 'text-teal-300 border-teal-500/40',
   PORTFOLIO: 'text-teal-300 border-teal-500/40', NEWS: 'text-gray-300 border-gray-500/40',
   LLM_INTERPRETATION: 'text-amber-300 border-amber-500/40 border-dashed',
 };

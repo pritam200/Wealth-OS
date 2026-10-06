@@ -43,7 +43,9 @@ public class EmailReviewItem {
     /** Which extracted item within the email this row represents — 0 when the email yields a
      *  single item. Together with (user_id, gmail_message_id) this is the uniqueness key, so a
      *  multi-item email gets one row per item instead of the last item silently winning. */
-    @Column(name = "item_index", nullable = false)
+    // The default is what lets Hibernate's ddl-auto=update add this NOT NULL column to a table that
+    // already has rows; without it the ALTER fails and every query on the table errors.
+    @Column(name = "item_index", nullable = false, columnDefinition = "integer default 0")
     @Builder.Default
     private int itemIndex = 0;
 

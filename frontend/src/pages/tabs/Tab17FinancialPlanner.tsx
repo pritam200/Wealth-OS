@@ -41,10 +41,10 @@ const STATUS_TONE_ON_HERO: Record<PlanStatus, string> = {
 interface Tone { badge: string; bar: string; text: string; soft: string; edge: string; Icon: any }
 
 const TONES: Record<string, Tone> = {
-  indigo:  { badge: 'bg-brand-gradient',  bar: 'bg-brand-gradient',  text: 'text-brand-light', soft: 'bg-brand/10',        edge: '#6366F1', Icon: HomeIcon },
+  indigo:  { badge: 'bg-brand-gradient',  bar: 'bg-brand-gradient',  text: 'text-brand-light', soft: 'bg-brand/10',        edge: '#22C55E', Icon: HomeIcon },
   emerald: { badge: 'bg-bull-gradient',   bar: 'bg-bull-gradient',   text: 'text-bull',        soft: 'bg-bull/10',         edge: '#10B981', Icon: ShoppingCart },
   cyan:    { badge: 'bg-accent-gradient', bar: 'bg-accent-gradient', text: 'text-accent',      soft: 'bg-accent/10',       edge: '#06B6D4', Icon: Fuel },
-  violet:  { badge: 'bg-violet-gradient', bar: 'bg-violet-gradient', text: 'text-brand-pink',  soft: 'bg-brand-pink/10',   edge: '#A855F7', Icon: Sofa },
+  violet:  { badge: 'bg-teal-gradient', bar: 'bg-teal-gradient', text: 'text-brand-pink',  soft: 'bg-brand-pink/10',   edge: '#34D399', Icon: Sofa },
   amber:   { badge: 'bg-gold-gradient',   bar: 'bg-gold-gradient',   text: 'text-gold',        soft: 'bg-gold/10',         edge: '#F59E0B', Icon: HeartPulse },
   // Savings sections deliberately avoid the bear/rose family: a travel fund sitting at 100%
   // of its planned contribution is good news, and red would read as an overspend alarm.
@@ -862,7 +862,7 @@ function MonthEndReview({ year, month, refreshToken }: { year: number; month: nu
                 </tr>
               );
             })}
-            <tr className="border-t-2 font-bold bg-brand/5" style={{ borderColor: 'rgba(99,102,241,0.3)' }}>
+            <tr className="border-t-2 font-bold bg-brand/5" style={{ borderColor: 'rgba(34,197,94,0.3)' }}>
               <td className="py-2.5 px-3 text-ink">Total Monthly Limit</td>
               <td className="py-2.5 px-3 text-right font-mono text-ink">{maskText(fmtINR(plan.monthlyLimit))}</td>
               <td className="py-2.5 px-3 text-right font-mono text-ink">{maskText(fmtINR(plan.actualTotal))}</td>

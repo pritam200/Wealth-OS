@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useState, lazy, Suspense } from 'react';
 import { LayoutDashboard, TrendingUp, Activity, Receipt, Target, AlertCircle, Settings as SettingsIcon } from 'lucide-react';
 import { LoginPage } from './pages/auth/LoginPage';
@@ -236,7 +236,9 @@ function TabContent({ tab, onNavigate }: { tab: number; onNavigate: (tabId: numb
 function AppShell() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState(1); // Markets (Trends) is the home page
+  // Markets (Trends) is the home page, unless the caller (e.g. first-time onboarding) asked for a tab.
+  const openTab = (useLocation().state as { openTab?: number } | null)?.openTab;
+  const [activeTab, setActiveTab] = useState(typeof openTab === 'number' ? openTab : 1);
   const activeSection = sectionOf(activeTab);
   const marketOpen = useMarketStatus();
 

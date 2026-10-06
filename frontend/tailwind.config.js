@@ -29,11 +29,11 @@ export default {
         // "light" here means the variant used for text/icons, which needs MORE contrast on a
         // white background, not less.
         brand: {
-          DEFAULT: '#4F46E5',
-          light:   '#4338CA',
-          dark:    '#3730A3',
-          pink:    '#7C3AED',   // violet partner, used in gradients and secondary accents
-          glow:    'rgba(79,70,229,0.22)',
+          DEFAULT: '#15803D',
+          light:   '#166534',
+          dark:    '#14532D',
+          pink:    '#059669',   // violet partner, used in gradients and secondary accents
+          glow:    'rgba(21,128,61,0.22)',
         },
 
         // Semantic accents. The base value of each is the TEXT-SAFE tone (>=4.5:1 on white);
@@ -75,30 +75,30 @@ export default {
         mono: ['JetBrains Mono', 'Consolas', 'monospace'],
       },
       backgroundImage: {
-        'brand-gradient':      'linear-gradient(135deg, #6366F1 0%, #7C3AED 55%, #A855F7 100%)',
-        'brand-gradient-soft': 'linear-gradient(135deg, rgba(99,102,241,0.14) 0%, rgba(168,85,247,0.08) 100%)',
+        'brand-gradient':      'linear-gradient(135deg, #22C55E 0%, #059669 55%, #34D399 100%)',
+        'brand-gradient-soft': 'linear-gradient(135deg, rgba(34,197,94,0.14) 0%, rgba(52,211,153,0.08) 100%)',
         // The page mesh: three low-alpha colour blooms, applied to body in index.css.
-        'mesh-glow': 'radial-gradient(900px 500px at 8% -8%, rgba(99,102,241,0.16), transparent 60%), radial-gradient(760px 460px at 98% 4%, rgba(168,85,247,0.13), transparent 62%), radial-gradient(820px 520px at 46% 108%, rgba(6,182,212,0.11), transparent 60%)',
+        'mesh-glow': 'radial-gradient(900px 500px at 8% -8%, rgba(34,197,94,0.16), transparent 60%), radial-gradient(760px 460px at 98% 4%, rgba(52,211,153,0.13), transparent 62%), radial-gradient(820px 520px at 46% 108%, rgba(16,185,129,0.11), transparent 60%)',
         'bull-gradient':   'linear-gradient(135deg, #10B981 0%, #047857 100%)',
         'bear-gradient':   'linear-gradient(135deg, #FB7185 0%, #E11D48 100%)',
         'gold-gradient':   'linear-gradient(135deg, #FBBF24 0%, #D97706 100%)',
         'accent-gradient': 'linear-gradient(135deg, #22D3EE 0%, #0E7490 100%)',
         'teal-gradient':   'linear-gradient(135deg, #2DD4BF 0%, #0D9488 100%)',
-        'violet-gradient': 'linear-gradient(135deg, #C084FC 0%, #7C3AED 100%)',
+        'violet-gradient': 'linear-gradient(135deg, #6EE7B7 0%, #059669 100%)',
         // Faint top-edge sheen on cards, so a white panel isn't a dead rectangle.
-        'card-sheen': 'linear-gradient(180deg, rgba(99,102,241,0.05) 0%, rgba(255,255,255,0) 46%)',
+        'card-sheen': 'linear-gradient(180deg, rgba(34,197,94,0.05) 0%, rgba(255,255,255,0) 46%)',
       },
       borderRadius: {
         xl2: '18px',
       },
       boxShadow: {
-        card:  '0 1px 2px rgba(16,22,53,0.05), 0 10px 26px -18px rgba(79,70,229,0.30)',
-        panel: '0 10px 34px rgba(16,22,53,0.11), 0 2px 8px rgba(79,70,229,0.07)',
-        glow:  '0 6px 20px -6px rgba(79,70,229,0.55)',
+        card:  '0 1px 2px rgba(12,38,24,0.05), 0 10px 26px -18px rgba(21,128,61,0.30)',
+        panel: '0 10px 34px rgba(12,38,24,0.11), 0 2px 8px rgba(21,128,61,0.07)',
+        glow:  '0 6px 20px -6px rgba(21,128,61,0.55)',
         'glow-bull': '0 6px 18px -6px rgba(4,120,87,0.50)',
         'glow-bear': '0 6px 18px -6px rgba(225,29,72,0.50)',
         'glow-gold': '0 6px 18px -6px rgba(217,119,6,0.50)',
-        lift:  '0 10px 28px -10px rgba(79,70,229,0.35), 0 0 0 1px rgba(226,231,243,0.9)',
+        lift:  '0 10px 28px -10px rgba(21,128,61,0.35), 0 0 0 1px rgba(226,231,243,0.9)',
       },
       transitionTimingFunction: {
         snap: 'cubic-bezier(0.16, 1, 0.3, 1)',

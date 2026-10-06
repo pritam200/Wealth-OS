@@ -40,7 +40,7 @@ export const CHART_SERIES = [
   '#2563EB', // blue
   '#047857', // emerald
   '#B45309', // amber
-  '#7C3AED', // violet
+  '#059669', // violet
   '#DC2626', // red
   '#0E7490', // teal
   '#A21CAF', // fuchsia

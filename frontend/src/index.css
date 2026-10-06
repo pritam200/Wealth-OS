@@ -9,23 +9,23 @@
      tailwind.config.js wrap them as `rgb(var(--x) / <alpha-value>)` so opacity modifiers
      (`bg-surface/50`) keep working on a CSS-variable colour. */
   :root {
-    --surface:        244 246 252;
+    --surface:        243 249 245;
     --surface-card:    255 255 255;
     --surface-panel:   255 255 255;
-    --surface-border:  226 231 243;
-    --surface-hover:   238 242 254;
-    --surface-muted:   241 244 253;
-    --ink:             16 22 53;
+    --surface-border:  211 230 217;
+    --surface-hover:   230 244 235;
+    --surface-muted:   236 246 240;
+    --ink:             12 38 24;
 
-    --gray-100: 16 22 53;
-    --gray-200: 30 38 71;
-    --gray-300: 51 60 99;
-    --gray-400: 74 84 120;
-    --gray-500: 92 102 137;
-    --gray-600: 102 112 143;
-    --gray-700: 107 117 148;
-    --gray-800: 226 231 243;
-    --gray-900: 238 242 254;
+    --gray-100: 12 38 24;
+    --gray-200: 22 52 36;
+    --gray-300: 40 70 54;
+    --gray-400: 62 92 76;
+    --gray-500: 82 112 96;
+    --gray-600: 94 120 105;
+    --gray-700: 100 126 110;
+    --gray-800: 211 230 217;
+    --gray-900: 230 244 235;
   }
 
   /* Dark palette — toggled via the `dark` class on <html> (see themeStore.ts). Same
@@ -35,23 +35,23 @@
      already chosen to hold contrast on a light surface AND read fine as saturated accents
      on a dark one, so there's no separate dark variant for those. */
   .dark {
-    --surface:        11 15 31;
-    --surface-card:    19 24 41;
-    --surface-panel:   19 24 41;
-    --surface-border:  42 51 82;
-    --surface-hover:   28 35 64;
-    --surface-muted:   23 28 52;
-    --ink:             238 241 250;
+    --surface:        8 20 14;
+    --surface-card:    14 28 21;
+    --surface-panel:   14 28 21;
+    --surface-border:  31 62 46;
+    --surface-hover:   22 46 34;
+    --surface-muted:   18 38 28;
+    --ink:             236 249 241;
 
-    --gray-100: 243 245 252;
-    --gray-200: 221 225 240;
-    --gray-300: 185 192 222;
-    --gray-400: 147 155 192;
-    --gray-500: 122 130 168;
-    --gray-600: 102 111 146;
-    --gray-700: 86 94 128;
-    --gray-800: 42 51 82;
-    --gray-900: 28 35 64;
+    --gray-100: 240 250 244;
+    --gray-200: 218 236 225;
+    --gray-300: 180 205 190;
+    --gray-400: 142 172 154;
+    --gray-500: 118 148 130;
+    --gray-600: 98 126 108;
+    --gray-700: 82 108 92;
+    --gray-800: 31 62 46;
+    --gray-900: 22 46 34;
   }
 
   * { box-sizing: border-box; }
@@ -72,12 +72,12 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: rgb(var(--gray-800)); border-radius: 9999px; }
   ::-webkit-scrollbar-thumb:hover { @apply bg-brand; }
-  ::selection { background: rgba(124,58,237,0.18); }
+  ::selection { background: rgba(5,150,105,0.18); }
 }
 
 @layer components {
   /* ── Panels & Cards ──
-     White panel, hairline border, a faint indigo sheen on the top edge and a soft coloured
+     White panel, hairline border, a faint green sheen on the top edge and a soft coloured
      drop shadow. The sheen is kept under 5% alpha and fades out by ~46% height, so dense
      numeric content still sits on plain white — it reads as depth, not as a colour cast. */
   .card {
@@ -87,23 +87,23 @@
     box-shadow: theme('boxShadow.card');
   }
   .card:hover {
-    border-color: rgba(99,102,241,0.34);
-    box-shadow: 0 14px 30px -18px rgba(79,70,229,0.45), 0 1px 2px rgba(16,22,53,0.05);
+    border-color: rgba(34,197,94,0.34);
+    box-shadow: 0 14px 30px -18px rgba(21,128,61,0.45), 0 1px 2px rgba(12,38,24,0.05);
   }
 
   /* A "featured" panel: same family as .card, one step more lift and a brand-tinted edge. */
   .card-elevated {
     @apply relative p-5 bg-surface-card border;
-    border-color: rgba(99,102,241,0.22);
+    border-color: rgba(34,197,94,0.22);
     border-radius: 20px;
     background-image: theme('backgroundImage.card-sheen');
-    box-shadow: 0 18px 40px -24px rgba(79,70,229,0.50), 0 1px 2px rgba(16,22,53,0.05);
+    box-shadow: 0 18px 40px -24px rgba(21,128,61,0.50), 0 1px 2px rgba(12,38,24,0.05);
   }
   /* Inner sub-surface. Tinted rather than grey, so nested blocks read as part of the
      accent family instead of as dead filler. */
   .card-flat {
     @apply bg-surface-hover rounded-xl p-3 border;
-    border-color: rgba(99,102,241,0.12);
+    border-color: rgba(34,197,94,0.12);
   }
 
   /* Full-page canvas. Any element that fills the viewport with an opaque background would
@@ -145,19 +145,19 @@
   .icon-badge-neutral{ @apply icon-badge bg-gold-gradient;   box-shadow: theme('boxShadow.glow-gold'); }
   .icon-badge-gold   { @apply icon-badge bg-gold-gradient;   box-shadow: theme('boxShadow.glow-gold'); }
   .icon-badge-accent { @apply icon-badge bg-accent-gradient; box-shadow: 0 6px 18px -6px rgba(14,116,144,0.5); }
-  .icon-badge-violet { @apply icon-badge bg-violet-gradient; box-shadow: 0 6px 18px -6px rgba(124,58,237,0.5); }
+  .icon-badge-violet { @apply icon-badge bg-violet-gradient; box-shadow: 0 6px 18px -6px rgba(5,150,105,0.5); }
   .icon-badge-sm { width: 22px; height: 22px; @apply rounded-lg; }
 
   /* ── KPI tile ── */
   .kpi-tile {
     @apply flex items-center gap-2.5 rounded-xl p-2.5 border transition-all duration-200 ease-snap;
     background-image: theme('backgroundImage.brand-gradient-soft');
-    border-color: rgba(99,102,241,0.16);
+    border-color: rgba(34,197,94,0.16);
   }
   .kpi-tile:hover {
-    border-color: rgba(99,102,241,0.40);
+    border-color: rgba(34,197,94,0.40);
     transform: translateY(-1px);
-    box-shadow: 0 10px 22px -14px rgba(79,70,229,0.5);
+    box-shadow: 0 10px 22px -14px rgba(21,128,61,0.5);
   }
 
   /* ── Buttons ── */
@@ -171,10 +171,10 @@
   .btn-primary:disabled { @apply opacity-60 cursor-not-allowed; box-shadow: none; transform: none; }
   .btn-secondary {
     @apply bg-surface-hover border text-gray-200 px-3.5 py-2 text-sm font-medium transition-all cursor-pointer inline-flex items-center justify-center gap-1.5;
-    border-color: rgba(99,102,241,0.20);
+    border-color: rgba(34,197,94,0.20);
     border-radius: 10px;
   }
-  .btn-secondary:hover { border-color: rgba(99,102,241,0.55); @apply text-brand-light; }
+  .btn-secondary:hover { border-color: rgba(34,197,94,0.55); @apply text-brand-light; }
   .btn-ghost {
     @apply text-gray-400 hover:text-brand-light hover:bg-brand/10 px-3 py-1.5 text-sm transition-colors cursor-pointer inline-flex items-center gap-1.5;
     border-radius: 9px;
@@ -205,17 +205,17 @@
   /* ── Typography ── */
   .stat-label   { @apply text-2xs text-gray-500 uppercase tracking-wider font-semibold; }
   .stat-value   { @apply text-2xl font-bold text-ink font-mono tabular-nums; }
-  /* Gradient-clipped headline figure. Both gradient stops are dark enough (#4F46E5 →
-     #7C3AED) that the thin strokes of tabular digits still hold contrast on white —
+  /* Gradient-clipped headline figure. Both gradient stops are dark enough (#15803D →
+     #059669) that the thin strokes of tabular digits still hold contrast on white —
      which is why this is reserved for large type and never used for body numbers. */
   .stat-value-gradient {
     @apply text-2xl font-extrabold font-mono tabular-nums bg-clip-text text-transparent;
-    background-image: linear-gradient(120deg, #4F46E5 0%, #7C3AED 100%);
+    background-image: linear-gradient(120deg, #15803D 0%, #059669 100%);
   }
   .stat-value-hero { @apply text-4xl font-extrabold font-mono tabular-nums text-ink tracking-tight; }
   .text-gradient-brand {
     @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(120deg, #4F46E5 0%, #7C3AED 100%);
+    background-image: linear-gradient(120deg, #15803D 0%, #059669 100%);
   }
   .num          { @apply font-mono tabular-nums; }
   .value-bull   { @apply text-bull font-semibold font-mono; }
@@ -239,19 +239,19 @@
   }
   .input-field:focus {
     @apply bg-surface-card;
-    border-color: rgba(99,102,241,0.65);
-    box-shadow: 0 0 0 3px rgba(99,102,241,0.18);
+    border-color: rgba(34,197,94,0.65);
+    box-shadow: 0 0 0 3px rgba(34,197,94,0.18);
   }
 
   /* ── Table ── */
   .data-table { @apply w-full text-sm border-collapse; }
-  .data-table thead tr { @apply border-b; border-color: rgba(99,102,241,0.22); }
+  .data-table thead tr { @apply border-b; border-color: rgba(34,197,94,0.22); }
   .data-table thead th { @apply text-2xs text-gray-500 uppercase tracking-wider font-semibold pb-2.5 px-3 align-middle whitespace-nowrap; }
   .data-table tbody tr {
     @apply border-b border-surface-border/40 transition-all cursor-pointer;
     box-shadow: inset 3px 0 0 0 transparent;
   }
-  .data-table tbody tr:hover { @apply bg-surface-hover; box-shadow: inset 3px 0 0 0 #6366F1; }
+  .data-table tbody tr:hover { @apply bg-surface-hover; box-shadow: inset 3px 0 0 0 #22C55E; }
   .data-table tbody td { @apply py-2.5 px-3 align-middle; }
   .data-table thead th:first-child, .data-table tbody td:first-child { @apply pl-1; }
   .data-table thead th:last-child, .data-table tbody td:last-child { @apply pr-1; }

@@ -60,6 +60,6 @@ export function fundCategory(symbol: string): string {
 
 export const PROVIDER_COLORS: Record<string, string> = {
   'HDFC': '#e8a020', 'SBI': '#2563eb', 'ICICI Prudential': '#f03e3e',
-  'Nippon India': '#00b8d9', 'Axis': '#8b5cf6', 'Kotak': '#00c47a', 'UTI': '#f59e0b',
+  'Nippon India': '#00b8d9', 'Axis': '#10B981', 'Kotak': '#00c47a', 'UTI': '#f59e0b',
 };
 export function providerColor(p: string): string { return PROVIDER_COLORS[p] ?? '#6b7280'; }

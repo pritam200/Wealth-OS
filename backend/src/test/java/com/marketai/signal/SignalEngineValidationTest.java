@@ -74,4 +74,36 @@ class SignalEngineValidationTest {
     void insufficient() {
         assertThat(run(Bars.randomWalk(30, 0.015, 2, END), END).getSignal()).isEqualTo(SignalPayload.Type.INSUFFICIENT_DATA);
     }
+
+    private static List<PriceHistory> trending(int n, long seed) {
+        java.util.Random r = new java.util.Random(seed);
+        var dates = Bars.weekdaysEndingOn(END, n);
+        List<PriceHistory> out = new java.util.ArrayList<>();
+        double c = 1000, drift = 0;
+        for (int i = 0; i < n; i++) {
+            if (i % 60 == 0) drift = (r.nextBoolean() ? 1 : -1) * 0.0025;   // persistent up/down regimes
+            double prev = c;
+            c = prev * Math.exp(drift + 0.01 * r.nextGaussian());
+            out.add(Bars.bar(dates.get(i), prev, Math.max(prev, c) * 1.003, Math.min(prev, c) * 0.997, c, 100000 + r.nextInt(50000)));
+        }
+        return out;
+    }
+
+    @Test
+    @DisplayName("Calls are counted once per 20-session window, so a stock with a real, persistent edge can reach a validated signal")
+    void realEdgeCanValidate() {
+        int shown = 0;
+        for (long seed = 1; seed <= 12; seed++) {
+            SignalPayload p = run(trending(2400, seed), END);
+            var v = p.getValidation();
+            // independent calls: never more than one per 20 sessions of replayed history
+            assertThat(v.getBuyCalls()).isLessThanOrEqualTo(v.getObservations() / 20 + 1);
+            assertThat(v.getSellCalls()).isLessThanOrEqualTo(v.getObservations() / 20 + 1);
+            if (p.getSignal() == SignalPayload.Type.BUY || p.getSignal() == SignalPayload.Type.SELL) {
+                shown++;
+                assertThat(v.isCurrentCallValidated()).isTrue();
+            }
+        }
+        assertThat(shown).as("at least one trending series should validate; before the fix none ever could").isGreaterThanOrEqualTo(1);
+    }
 }

@@ -375,7 +375,7 @@ export function NetWorthBar({ wealth, emi = 0 }: { wealth: PortfolioContext | nu
   const loans = wealth.totalLiabilities ?? loanOnly;
   const pieData  = [
     stockOnly > 0     ? { name: 'Stocks',        value: stockOnly,     fill: '#3B82F6' } : null,
-    mfCurrent > 0     ? { name: 'Mutual Funds',  value: mfCurrent,     fill: '#8B5CF6' } : null,
+    mfCurrent > 0     ? { name: 'Mutual Funds',  value: mfCurrent,     fill: '#10B981' } : null,
     fdVal > 0         ? { name: 'FD',            value: fdVal,         fill: '#10B981' } : null,
     rdVal > 0         ? { name: 'RD',            value: rdVal,         fill: '#F59E0B' } : null,
     epfVal > 0        ? { name: 'EPF',           value: epfVal,        fill: '#0EA5E9' } : null,

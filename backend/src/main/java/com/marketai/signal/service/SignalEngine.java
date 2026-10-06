@@ -212,6 +212,10 @@ public class SignalEngine {
     SignalPayload.Validation validate(List<PriceHistory> bars, SignalPayload.Type current) {
         int h = VALIDATION_HORIZON;
         int buys = 0, buyUp = 0, sells = 0, sellDown = 0, obs = 0, ups = 0;
+        // A call made on consecutive days looks at nearly the same {h}-session window, so counting
+        // each day would be counting one outcome many times. Calls are counted only when the last
+        // counted call of that kind is at least h sessions behind, which makes them independent.
+        int lastBuy = Integer.MIN_VALUE / 2, lastSell = Integer.MIN_VALUE / 2;
         double rBuy = 0, rSell = 0, rAll = 0;
         for (int t = RULE_WINDOW - 1; t + h < bars.size(); t++) {
             Evaluation e = evaluate(bars.subList(t - RULE_WINDOW + 1, t + 1), structureAnalyzer);
@@ -219,20 +223,20 @@ public class SignalEngine {
             obs++;
             rAll += ret;
             if (ret > 0) ups++;
-            if (e.type() == SignalPayload.Type.BUY) { buys++; rBuy += ret; if (ret > 0) buyUp++; }
-            else if (e.type() == SignalPayload.Type.SELL) { sells++; rSell += ret; if (ret < 0) sellDown++; }
+            if (e.type() == SignalPayload.Type.BUY && t - lastBuy >= h) { lastBuy = t; buys++; rBuy += ret; if (ret > 0) buyUp++; }
+            else if (e.type() == SignalPayload.Type.SELL && t - lastSell >= h) { lastSell = t; sells++; rSell += ret; if (ret < 0) sellDown++; }
         }
         double base = obs > 0 ? (double) ups / obs : 0.5;
         Double buyHit = buys > 0 ? (double) buyUp / buys : null, sellHit = sells > 0 ? (double) sellDown / sells : null;
-        Double buyLo = buyHit != null ? Stats.wilson(buyHit, Math.max(1, buys / h), 1.96)[0] : null;
-        Double sellLo = sellHit != null ? Stats.wilson(sellHit, Math.max(1, sells / h), 1.96)[0] : null;
+        Double buyLo = buyHit != null ? Stats.wilson(buyHit, Math.max(1, buys), 1.96)[0] : null;
+        Double sellLo = sellHit != null ? Stats.wilson(sellHit, Math.max(1, sells), 1.96)[0] : null;
         boolean validated = switch (current) {
-            case BUY -> buys / h >= MIN_INDEPENDENT_CALLS && buyLo != null && buyLo > base;
-            case SELL -> sells / h >= MIN_INDEPENDENT_CALLS && sellLo != null && sellLo > 1 - base;
+            case BUY -> buys >= MIN_INDEPENDENT_CALLS && buyLo != null && buyLo > base;
+            case SELL -> sells >= MIN_INDEPENDENT_CALLS && sellLo != null && sellLo > 1 - base;
             default -> false;
         };
         String summary = obs == 0 ? "Not enough history to replay the rule."
-                : String.format("Over %d past sessions: BUY %d× (%s ended higher after %d sessions), SELL %d× (%s ended lower); base rate %.0f%% higher.",
+                : String.format("Over %d past sessions: %d independent BUY calls (%s ended higher after %d sessions), %d independent SELL calls (%s ended lower); base rate %.0f%% higher.",
                     obs, buys, pct(buyHit), h, sells, pct(sellHit), base * 100);
         return SignalPayload.Validation.builder()
                 .horizonSessions(h).observations(obs).buyCalls(buys).sellCalls(sells)

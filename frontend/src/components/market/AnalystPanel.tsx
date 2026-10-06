@@ -86,8 +86,8 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
       {/* Next action — the actual answer to "why BUY/HOLD/SELL/BOOK PROFIT", not just the rating */}
       {a.nextAction && !insufficient && (
         <div className="rounded-xl p-3 border" style={{
-          borderColor: 'rgba(99,102,241,0.25)',
-          backgroundImage: 'linear-gradient(135deg, rgba(99,102,241,0.10), rgba(168,85,247,0.05))',
+          borderColor: 'rgba(34,197,94,0.25)',
+          backgroundImage: 'linear-gradient(135deg, rgba(34,197,94,0.10), rgba(52,211,153,0.05))',
         }}>
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
             <ArrowRight size={13} className="text-brand-light shrink-0" />
@@ -219,7 +219,7 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
       )}
 
       {/* Research view — from the one research engine (full research is on the stock page). */}
-      <div className="rounded-xl border p-3" style={{ borderColor: 'rgba(124,58,237,0.30)' }}>
+      <div className="rounded-xl border p-3" style={{ borderColor: 'rgba(5,150,105,0.30)' }}>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="icon-badge icon-badge-sm icon-badge-violet"><Sparkles size={11} /></div>
           <span className="text-xs font-bold text-ink">Research view</span>
