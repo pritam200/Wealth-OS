@@ -47,6 +47,7 @@ export const portfolioApi = {
   addHolding: (portfolioId: number, data: {
     symbol: string; name: string; quantity: number;
     price: number; transactionDate: string; charges?: number;
+    folio?: string; broker?: string; isin?: string;
   }) => apiClient.post(`/api/portfolios/${portfolioId}/holdings`, data),
 
   removeHolding: (portfolioId: number, holdingId: number) =>

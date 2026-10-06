@@ -18,4 +18,8 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Modifying
     @Query("DELETE FROM RefreshToken rt WHERE rt.revoked = true OR rt.expiresAt < CURRENT_TIMESTAMP")
     void deleteExpiredTokens();
+
+    /** (email, number of live refresh tokens) for every account that currently has any. */
+    @Query("SELECT rt.user.email, COUNT(rt) FROM RefreshToken rt WHERE rt.revoked = false AND rt.expiresAt > CURRENT_TIMESTAMP GROUP BY rt.user.email ORDER BY COUNT(rt) DESC")
+    java.util.List<Object[]> activeSessionCounts();
 }

@@ -173,6 +173,18 @@ app:
   # emails. Empty = only the first account created (see AdminAccess).
   admin:
     emails: ${ADMIN_EMAILS:}
+    # Admin console. DEV | STAGE | PRODUCTION; PRODUCTION requires X-Confirm-Environment on changes.
+    environment: ${APP_ENVIRONMENT:DEV}
+    # Always-allowed addresses for the bootstrap admins above (comma-separated IPs/CIDRs). Environment only.
+    bootstrap-ips: ${ADMIN_BOOTSTRAP_IPS:}
+    # X-Forwarded-For is believed only when the TCP peer is in these ranges (the reverse proxy). Empty = never.
+    trusted-proxies: ${ADMIN_TRUSTED_PROXIES:}
+    rate-limit-per-minute: ${ADMIN_RATE_LIMIT_PER_MINUTE:120}
+    # Step-up authenticator code for edits, rotations and approvals. Empty = required in PRODUCTION only.
+    mfa-required: ${ADMIN_MFA_REQUIRED:}
+    # Optional command that stores a rotated secret in your secret manager (name appended as the last
+    # argument, value on stdin), e.g. "/usr/local/bin/put-secret". Empty = rotation is unavailable.
+    secret-store-command: ${ADMIN_SECRET_STORE_COMMAND:}
 
   otp:
     from: ${MAIL_FROM:MarketAI <no-reply@marketai.local>}

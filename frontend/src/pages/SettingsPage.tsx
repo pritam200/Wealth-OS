@@ -3,6 +3,8 @@ import { Settings as SettingsIcon, ShieldCheck, AlertCircle, Trash2 } from 'luci
 import { identityApi } from '../api/identity';
 import { llmConfigApi } from '../api/llmConfig';
 import { LlmConfigurationPanel } from '../components/settings/LlmConfigurationPanel';
+import { authApi } from '../api/auth';
+import { useAuthStore } from '../store/authStore';
 import type { FinancialIdentityStatus } from '../api/identity';
 
 const PAN_FORMAT = /^[A-Za-z]{5}[0-9]{4}[A-Za-z]$/;
@@ -132,6 +134,54 @@ function FinancialIdentityCard() {
   );
 }
 
+function DeleteAccountCard() {
+  const logout = useAuthStore(s => s.logout);
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState('');
+  const [confirmText, setConfirmText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const remove = async () => {
+    setBusy(true); setError(null);
+    try {
+      await authApi.deleteAccount(password);
+      logout();
+    } catch (err: any) {
+      setError(err.response?.data?.message ?? 'Could not delete the account — please try again');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card p-5 space-y-3 border border-bear/30">
+      <div className="flex items-center gap-2 text-bear font-semibold text-sm"><Trash2 size={14} /> Delete account</div>
+      <p className="text-xs text-gray-500">
+        Permanently deletes your account and everything in it: holdings, transactions, connected mailboxes,
+        saved PAN and every report. This cannot be undone. Download anything you need first.
+      </p>
+      {!open ? (
+        <button onClick={() => setOpen(true)} className="btn-ghost text-xs px-3 py-1.5 text-bear hover:text-bear">Delete my account…</button>
+      ) : (
+        <div className="space-y-2 max-w-sm">
+          <input type="password" autoComplete="current-password" placeholder="Your password" value={password}
+            onChange={e => setPassword(e.target.value)} className="input w-full" />
+          <input placeholder='Type DELETE to confirm' value={confirmText}
+            onChange={e => setConfirmText(e.target.value)} className="input w-full" />
+          {error && <p className="text-xs text-bear flex items-center gap-1"><AlertCircle size={12} /> {error}</p>}
+          <div className="flex gap-2">
+            <button onClick={remove} disabled={busy || !password || confirmText !== 'DELETE'}
+              className="btn-primary text-xs px-3 py-1.5 bg-bear disabled:opacity-40">
+              {busy ? 'Deleting…' : 'Permanently delete'}
+            </button>
+            <button onClick={() => { setOpen(false); setPassword(''); setConfirmText(''); setError(null); }} className="btn-ghost text-xs px-3 py-1.5">Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type SettingsTab = 'account' | 'llm';
 
 export function SettingsPage() {
@@ -166,7 +216,7 @@ export function SettingsPage() {
         </div>
       )}
 
-      {tab === 'llm' && canConfigureLlm ? <LlmConfigurationPanel /> : <FinancialIdentityCard />}
+      {tab === 'llm' && canConfigureLlm ? <LlmConfigurationPanel /> : <><FinancialIdentityCard /><DeleteAccountCard /></>}
     </div>
   );
 }

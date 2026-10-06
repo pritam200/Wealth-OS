@@ -28,6 +28,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final com.marketai.admin.security.AdminAccessFilter adminAccessFilter;
     private final UserDetailsService userDetailsService;
 
     @Autowired
@@ -56,13 +57,16 @@ public class SecurityConfig {
                                 "/swagger-ui.html",
                                 "/actuator/health"
                         ).permitAll()
-                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        // Authenticated only: AdminAccessFilter (IP allowlist, email allowlist, role,
+                        // lockdown) and each admin endpoint decide who may actually do what.
+                        .requestMatchers("/api/admin/**").authenticated()
                         .anyRequest().authenticated()
                 )
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authenticationProvider(authenticationProvider())
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(adminAccessFilter, JwtAuthFilter.class)
                 .build();
     }
 

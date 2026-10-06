@@ -37,6 +37,8 @@ const DashboardPage         = lazy(() => import('./pages/DashboardPage').then(m 
 const DataSyncPage          = lazy(() => import('./pages/DataSyncPage').then(m => ({ default: m.DataSyncPage })));
 const DataPlatformPage = lazy(() => import('./pages/DataPlatformPage').then(m => ({ default: m.DataPlatformPage })));
 const ReconciliationCenterPage = lazy(() => import('./pages/ReconciliationCenterPage').then(m => ({ default: m.ReconciliationCenterPage })));
+const AdminConsolePage      = lazy(() => import('./pages/AdminConsolePage').then(m => ({ default: m.AdminConsolePage })));
+const AdminLoginPage        = lazy(() => import('./pages/auth/AdminLoginPage').then(m => ({ default: m.AdminLoginPage })));
 const SettingsPage          = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 const StockPage             = lazy(() => import('./pages/StockPage').then(m => ({ default: m.StockPage })));
 const ReviewQueue           = lazy(() => import('./components/ReviewQueue').then(m => ({ default: m.ReviewQueue })));
@@ -278,9 +280,9 @@ function AppShell() {
   );
 }
 
-function PrivateRoute({ children }: { children: React.ReactNode }) {
+function PrivateRoute({ children, to = '/login' }: { children: React.ReactNode; to?: string }) {
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+  return isAuthenticated ? <>{children}</> : <Navigate to={to} replace />;
 }
 
 export default function App() {
@@ -289,6 +291,8 @@ export default function App() {
       <Routes>
         <Route path="/login"    element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/admin/login" element={<Suspense fallback={null}><AdminLoginPage /></Suspense>} />
+        <Route path="/admin" element={<PrivateRoute to="/admin/login"><Suspense fallback={null}><AdminConsolePage /></Suspense></PrivateRoute>} />
         <Route path="/stock/:symbol" element={
           <PrivateRoute>
             <div className="min-h-screen app-canvas p-6">

@@ -27,6 +27,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final EmailOtpService emailOtpService;
+    private final com.marketai.auth.service.AccountDeletionService accountDeletion;
 
     @PostMapping("/register/otp/request")
     @Operation(summary = "Send a 6-digit verification code to an email address before registering")
@@ -58,6 +59,16 @@ public class AuthController {
     @Operation(summary = "Refresh access token")
     public ResponseEntity<AuthResponse> refresh(@Valid @RequestBody RefreshTokenRequest request) {
         return ResponseEntity.ok(authService.refreshToken(request));
+    }
+
+    public record DeleteAccountRequest(String password) {}
+
+    @DeleteMapping("/account")
+    @Operation(summary = "Permanently delete the signed-in account and all its data")
+    public ResponseEntity<Void> deleteAccount(@AuthenticationPrincipal UserDetails userDetails,
+                                              @RequestBody DeleteAccountRequest body) {
+        accountDeletion.delete(userDetails.getUsername(), body.password());
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/logout")

@@ -8,6 +8,9 @@ export const authApi = {
   login: (email: string, password: string) =>
     apiClient.post<AuthResponse>('/api/auth/login', { email, password }),
 
+  deleteAccount: (password: string) =>
+    apiClient.delete('/api/auth/account', { data: { password } }),
+
   logout: () => apiClient.post('/api/auth/logout'),
 
   requestRegistrationOtp: (email: string) =>

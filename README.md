@@ -122,6 +122,21 @@ DEPLOY_SECRET_KEY='...' ./deploy.sh                                   # producti
 Keep the production `DOMAIN` in `deploy/.env`. Everything else (database, Redis, JWT and encryption
 keys, mail, Gemini, Gmail OAuth, sign-up allow-list) comes from the same files in both places.
 
+### Postgres is local
+
+PostgreSQL is **not** run by Docker. The database is the server on the host machine, and the
+compose stack has no `postgres` service or data volume. In Docker the backend reaches it at
+`host.docker.internal` (mapped to the host gateway); run directly (`mvn spring-boot:run`) it uses
+`localhost`. Same database, same `DB_NAME`/`DB_USER`/`DB_PASSWORD` from `deploy/.env` either way.
+
+One-time host setup (the container connects from the Docker bridge network, not from localhost):
+
+1. `postgresql.conf`: `listen_addresses = 'localhost,172.17.0.1'` (the Docker bridge address), not `*`.
+2. `pg_hba.conf`: `host marketai_db marketai 172.16.0.0/12 scram-sha-256`.
+3. Keep port 5432 closed to the internet in the firewall, so it stays reachable only from the host
+   and the Docker network. Create the schema once with `database/schema.sql`; Hibernate updates it after.
+4. Backups: `deploy/backup.sh` runs `pg_dump` against the local server.
+
 ### Rotate a secret or the key
 
 1. Edit the plaintext file(s) locally (restore them first with `scripts/secrets.sh run`-style

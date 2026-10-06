@@ -9,8 +9,9 @@ mkdir -p backups
 chmod 700 backups
 file="backups/marketai-$(date +%Y%m%d-%H%M).sql.gz"
 
-docker compose -f docker-compose.prod.yml exec -T postgres \
-  pg_dump -U "$DB_USER" -d "$DB_NAME" --clean --if-exists | gzip > "$file"
+# Postgres is the local server on this machine, not a container, so dump it directly.
+PGPASSWORD="$DB_PASSWORD" pg_dump -h "${BACKUP_DB_HOST:-localhost}" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" \
+  --clean --if-exists | gzip > "$file"
 
 # A dump that is suspiciously small is a failed dump, not a backup.
 if [ "$(stat -c %s "$file")" -lt 1024 ]; then

@@ -102,6 +102,9 @@ export function LoginPage() {
               <Link to="/register" className="text-brand hover:text-brand-light">Register</Link>
             </p>
           </div>
+          <p className="mt-4 text-center text-xs">
+            <Link to="/admin/login" className="text-gray-600 hover:text-gray-400">Admin sign in</Link>
+          </p>
         </div>
       </div>
     </div>

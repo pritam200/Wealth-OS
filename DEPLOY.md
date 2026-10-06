@@ -1,3 +1,5 @@
+> **Postgres is local only.** It is not a container in this stack: the backend connects to the PostgreSQL server on the host machine (`host.docker.internal`). See the README section "Postgres is local" for the one-time host settings.
+
 > **Automated path:** after the secrets are encrypted into `config/secrets.tar.gpg`, deploys are one command, `DEPLOY_SECRET_KEY=... ./deploy.sh`; it decrypts to `.tmp-secrets/`, runs the compose command below with `--env-file .tmp-secrets/deploy.env`, and deletes the plaintext. The manual `--env-file deploy/.env` commands below still work.
 
 # Hosting on Oracle Cloud (free)
@@ -167,7 +169,7 @@ scp 'ubuntu@<public-ip>:indian-markets-ai-platform/deploy/backups/*.sql.gz' ~/ma
 
 ```bash
 gunzip -c deploy/backups/marketai-YYYYMMDD-HHMM.sql.gz | \
-  docker compose -f deploy/docker-compose.prod.yml exec -T postgres psql -U marketai -d marketai_db
+  PGPASSWORD=... psql -h localhost -U marketai -d marketai_db
 ```
 
 ## 10. First use
