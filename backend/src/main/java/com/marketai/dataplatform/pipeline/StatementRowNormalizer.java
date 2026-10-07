@@ -24,6 +24,28 @@ public class StatementRowNormalizer implements RecordNormalizer {
 
     @Override public boolean supports(String schemaVersion) { return SCHEMA.equals(schemaVersion); }
 
+    /** A HOLDING-kind row: {@code institution, accountId, assetClass, isin/symbol/name, quantity, price, value, asOf}. */
+    @Override
+    public List<NormalizedHolding> holdings(RawRecord raw, SourceType sourceType, String provider) {
+        JsonNode n;
+        try { n = mapper.readTree(raw.payload()); }
+        catch (Exception e) { throw new IllegalArgumentException("payload is not valid JSON"); }
+        AssetClass cls = Parse.assetClass(Parse.text(n, "assetClass"), AssetClass.OTHER);
+        AccountType at = switch (cls) {
+            case MUTUAL_FUND -> AccountType.MF_FOLIO;
+            case STOCK, ETF, US_STOCK -> AccountType.DEMAT;
+            default -> AccountType.OTHER;
+        };
+        return List.of(NormalizedHolding.builder()
+            .account(new AccountRef(Parse.text(n, "institution"), Parse.text(n, "accountId"), at))
+            .asset(new AssetRef(cls, Parse.text(n, "symbol"), Parse.text(n, "isin"), Parse.text(n, "name"), null))
+            .quantity(Parse.decimal(n, "quantity"))
+            .currentPrice(Parse.decimal(n, "price"))
+            .currentValue(Parse.decimal(n, "value"))
+            .asOfDate(Parse.date(n, "asOf"))
+            .sourceType(sourceType).sourceProvider(provider).build());
+    }
+
     @Override
     public List<NormalizedTransaction> transactions(RawRecord raw, SourceType sourceType, String provider) {
         JsonNode n;

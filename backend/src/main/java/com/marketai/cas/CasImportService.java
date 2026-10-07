@@ -42,12 +42,22 @@ public class CasImportService {
     public record Summary(LocalDate periodFrom, LocalDate periodTo, int schemes, int rows, int created, int duplicated,
                           int rejected, List<SchemeSummary> holdings, List<String> warnings) {}
 
+    /** Which kind of CAS a PDF is, so the caller can refuse one uploaded under the wrong section. */
+    public enum Kind { MUTUAL_FUND, DEMAT }
+
     public Summary importPdf(Long userId, byte[] pdf, String password, String institutionLabel) {
+        return importPdf(userId, pdf, password, institutionLabel, null);
+    }
+
+    /** {@code expected}: when set, a CAS of the other kind is refused with a pointer to the right section. */
+    public Summary importPdf(Long userId, byte[] pdf, String password, String institutionLabel, Kind expected) {
         String text = extractText(pdf, password);
-        String head = text.length() > 4000 ? text.substring(0, 4000) : text;
-        if (head.toUpperCase(Locale.ROOT).contains("NSDL") || head.toUpperCase(Locale.ROOT).contains("CDSL")) {
-            throw bad("This looks like a demat (NSDL/CDSL) statement. Only the mutual-fund CAS from CAMS/KFintech is supported here for now.");
-        }
+        Kind kind = DematCasParser.looksLikeDemat(text) ? Kind.DEMAT : Kind.MUTUAL_FUND;
+        if (expected == Kind.MUTUAL_FUND && kind == Kind.DEMAT)
+            throw bad("This is a demat (NSDL/CDSL) statement. Upload it under Stocks & demat holdings.");
+        if (expected == Kind.DEMAT && kind == Kind.MUTUAL_FUND)
+            throw bad("This is a mutual-fund (CAMS/KFintech) statement. Upload it under Mutual funds.");
+        if (kind == Kind.DEMAT) return importDemat(userId, text, institutionLabel);
         CasParser.Result parsed = CasParser.parse(text);
         if (parsed.schemes.isEmpty()) {
             throw bad("No mutual-fund schemes were found. Use the detailed CAS (with every transaction) from CAMS/KFintech.");
@@ -86,17 +96,87 @@ public class CasImportService {
                 records.add(new RawRecord(RecordKind.TRANSACTION, s.folio, "cas:" + h + ":" + occ, json, StatementRowNormalizer.SCHEMA));
             }
         }
+        // What the statement says each scheme holds at its end: reconciled against the ledger the
+        // transactions above build, so a missing transaction shows up as a holding mismatch.
+        for (CasParser.Scheme s : parsed.schemes) {
+            if (s.closingUnits == null || s.closingUnits.signum() < 0) continue;
+            LocalDate asOf = s.navDate != null ? s.navDate : parsed.periodTo;
+            if (asOf == null) continue;
+            ObjectNode n = mapper.createObjectNode();
+            n.put("institution", s.amc != null ? s.amc : institutionLabel);
+            if (s.folio != null) n.put("accountId", s.folio);
+            n.put("assetClass", "MUTUAL_FUND");
+            n.put("name", s.name);
+            n.put("isin", s.isin);
+            n.put("quantity", s.closingUnits.toPlainString());
+            if (s.closingNav != null) {
+                n.put("price", s.closingNav.toPlainString());
+                n.put("value", s.closingUnits.multiply(s.closingNav).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
+            }
+            n.put("asOf", asOf.toString());
+            records.add(holdingRecord(n, s.folio));
+        }
         if (!parsed.unparsed.isEmpty()) {
             warnings.add(parsed.unparsed.size() + " line(s) looked like transactions but couldn't be read, e.g. \""
                 + parsed.unparsed.get(0) + "\". They were not imported.");
         }
-        if (records.isEmpty()) throw bad("The statement lists your schemes but no transactions in it could be read.");
+        if (records.size() == holdingCount(parsed)) throw bad("The statement lists your schemes but no transactions in it could be read.");
 
         IngestionPipeline.Result res = pipeline.ingest(new IngestionPipeline.Request(userId, null, null, SourceType.CAS,
             "cas-import", ProviderMode.LIVE, records, null));
         if (res.rejected > 0 && !res.errors.isEmpty()) warnings.add(res.errors.get(0));
-        return new Summary(parsed.periodFrom, parsed.periodTo, parsed.schemes.size(), records.size(),
+        return new Summary(parsed.periodFrom, parsed.periodTo, parsed.schemes.size(), records.size() - holdingCount(parsed),
             res.created, res.duplicated + res.updated, res.rejected, holdings, warnings);
+    }
+
+    private static int holdingCount(CasParser.Result parsed) {
+        int c = 0;
+        for (CasParser.Scheme s : parsed.schemes)
+            if (s.closingUnits != null && s.closingUnits.signum() >= 0 && (s.navDate != null || parsed.periodTo != null)) c++;
+        return c;
+    }
+
+    private RawRecord holdingRecord(ObjectNode n, String account) {
+        String json;
+        try { json = mapper.writeValueAsString(n); } catch (Exception e) { throw new IllegalStateException(e); }
+        return new RawRecord(RecordKind.HOLDING, account, "cas-holding:" + RawDataStore.sha256(json), json, StatementRowNormalizer.SCHEMA);
+    }
+
+    private Summary importDemat(Long userId, String text, String institutionLabel) {
+        DematCasParser.Result parsed = DematCasParser.parse(text);
+        if (parsed.holdings.isEmpty())
+            throw bad("No holdings were found in this demat statement. Use the monthly NSDL/CDSL CAS that lists your securities.");
+        if (parsed.asOf == null)
+            throw bad("Couldn't find the statement date in this file, so the holdings can't be dated.");
+
+        List<RawRecord> records = new ArrayList<>();
+        List<SchemeSummary> holdings = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+        for (DematCasParser.Holding h : parsed.holdings) {
+            ObjectNode n = mapper.createObjectNode();
+            n.put("institution", institutionLabel);
+            n.put("accountId", h.account);
+            n.put("assetClass", h.isin.startsWith("INF") ? "MUTUAL_FUND" : "STOCK");
+            n.put("name", h.name);
+            n.put("isin", h.isin);
+            n.put("quantity", h.quantity.toPlainString());
+            if (h.price != null) n.put("price", h.price.toPlainString());
+            n.put("value", h.value.toPlainString());
+            n.put("asOf", parsed.asOf.toString());
+            records.add(holdingRecord(n, h.account));
+            holdings.add(new SchemeSummary(h.account, h.account, h.name, h.isin, h.quantity, 0, h.valueChecks));
+            if (!h.valueChecks)
+                warnings.add(h.name + ": quantity \u00d7 price doesn't match the printed value, so a column may have been misread.");
+        }
+        if (!parsed.unparsed.isEmpty())
+            warnings.add(parsed.unparsed.size() + " security line(s) couldn't be read, e.g. \"" + parsed.unparsed.get(0) + "\". They were not imported.");
+        warnings.add("A demat statement shows what you hold, not what you paid. Add buy prices from your broker's export if you want returns.");
+
+        IngestionPipeline.Result res = pipeline.ingest(new IngestionPipeline.Request(userId, null, null, SourceType.CAS,
+            "cas-import", ProviderMode.LIVE, records, null));
+        if (res.rejected > 0 && !res.errors.isEmpty()) warnings.add(res.errors.get(0));
+        return new Summary(parsed.asOf, parsed.asOf, holdings.size(), records.size(), res.created,
+            res.duplicated + res.updated, res.rejected, holdings, warnings);
     }
 
     private static String extractText(byte[] pdf, String password) {

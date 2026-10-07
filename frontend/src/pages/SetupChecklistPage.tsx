@@ -103,7 +103,7 @@ function SourceRow({ s, onChanged, onRemoved }: { s: SourceView; onChanged: (s: 
           {s.lastImportNote && <div className="text-2xs text-gray-600">Last import: {s.lastImportNote}</div>}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {s.kind === 'MUTUAL_FUNDS' && (
+          {(s.kind === 'MUTUAL_FUNDS' || s.kind === 'STOCKS') && (
             <label className={`btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 cursor-pointer ${busy ? 'opacity-60 pointer-events-none' : ''}`}>
               {busy ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} Upload CAS (PDF)
               <input type="file" accept=".pdf" className="hidden"
@@ -122,7 +122,7 @@ function SourceRow({ s, onChanged, onRemoved }: { s: SourceView; onChanged: (s: 
         </div>
       </div>
 
-      {s.kind === 'MUTUAL_FUNDS' && (
+      {(s.kind === 'MUTUAL_FUNDS' || s.kind === 'STOCKS') && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-2xs text-gray-500">CAS password</span>
           <input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)}
@@ -134,7 +134,7 @@ function SourceRow({ s, onChanged, onRemoved }: { s: SourceView; onChanged: (s: 
       {cas && (
         <div className="rounded-lg bg-surface-hover/60 p-3 text-xs space-y-1.5">
           <div className="text-bull flex items-center gap-1.5">
-            <CheckCircle2 size={12} /> Read {cas.schemes} schemes ({cas.rows} transactions): {cas.created} new, {cas.duplicated} already present
+            <CheckCircle2 size={12} /> Read {cas.schemes} {s.kind === 'STOCKS' ? 'holdings' : 'schemes'} ({cas.rows} {s.kind === 'STOCKS' ? 'records' : 'transactions'}): {cas.created} new, {cas.duplicated} already present
             {cas.rejected > 0 && <span className="text-bear">, {cas.rejected} rejected</span>}
             {cas.periodTo && <> · statement through {fmtDate(cas.periodTo)}</>}
           </div>

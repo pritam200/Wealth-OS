@@ -148,19 +148,20 @@ public class OnboardingService {
     @Transactional
     public CasResult importCas(Long userId, Long id, MultipartFile file, String password) throws IOException {
         ImportSource s = owned(userId, id);
-        if (s.getKind() != SourceKind.MUTUAL_FUNDS)
-            throw bad("A CAS PDF imports into the Mutual funds section.");
+        if (s.getKind() != SourceKind.MUTUAL_FUNDS && s.getKind() != SourceKind.STOCKS)
+            throw bad("A CAS PDF imports into the Mutual funds or Stocks section.");
         if (file == null || file.isEmpty()) throw bad("The file is empty.");
         if (file.getSize() > 15_000_000) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "The file is too large (limit 15 MB).");
         String name = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase(Locale.ROOT);
         if (!name.endsWith(".pdf")) throw bad("Upload the CAS as a PDF.");
 
-        CasImportService.Summary summary = casImport.importPdf(userId, file.getBytes(), password, s.getName());
+        CasImportService.Summary summary = casImport.importPdf(userId, file.getBytes(), password, s.getName(),
+            s.getKind() == SourceKind.STOCKS ? CasImportService.Kind.DEMAT : CasImportService.Kind.MUTUAL_FUND);
         if (summary.periodTo() != null && (s.getSyncedThrough() == null || summary.periodTo().isAfter(s.getSyncedThrough()))) {
             s.setSyncedThrough(summary.periodTo());
         }
         s.setLastImportAt(LocalDateTime.now());
-        s.setLastImportNote("CAS: " + summary.schemes() + " schemes, " + summary.created() + " new, "
+ s.setLastImportNote("CAS: " + summary.schemes() + (s.getKind() == SourceKind.STOCKS ? " holdings, " : " schemes, ") + summary.created() + " new, "
             + summary.duplicated() + " already present");
         return new CasResult(view(sources.save(s), LocalDate.now(IST)), summary);
     }
@@ -192,8 +193,9 @@ public class OnboardingService {
     static List<Guide> guides() {
         return List.of(
             new Guide("STOCKS", SourceKind.STOCKS.label(),
-                "Your broker's holdings or trade-history export, one file per broker.",
-                List.of("Open the broker's web portal (e.g. Zerodha Console, Groww, Upstox).",
+                "Your NSDL/CDSL demat statement shows every holding across all brokers; your broker's export adds buy prices.",
+                List.of("Positions across all brokers: NSDL/CDSL send a monthly demat CAS by email, or request one at nsdl.co.in / cdslindia.com (e-CAS) with your PAN. Upload the PDF below, with its password, against any broker here.",
+                    "Cost basis per broker: open the broker's web portal (e.g. Zerodha Console, Groww, Upstox).",
                     "Go to Reports / Holdings or Tradebook and download the CSV or Excel file.",
                     "Add the broker below, then upload the file against it.",
                     "For a trade history, pick the full financial year(s) you want, and tick 'complete statement' so gaps are flagged."),

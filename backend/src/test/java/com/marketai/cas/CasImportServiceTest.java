@@ -72,6 +72,25 @@ class CasImportServiceTest {
     }
 
     @Test
+    void mutualFundCasAlsoReportsClosingBalancesAsHoldings() throws Exception {
+        IngestionPipeline.Result res = new IngestionPipeline.Result();
+        when(pipeline.ingest(any())).thenReturn(res);
+        service.importPdf(1L, pdf(null), null, "My MF");
+        ArgumentCaptor<IngestionPipeline.Request> req = ArgumentCaptor.forClass(IngestionPipeline.Request.class);
+        verify(pipeline).ingest(req.capture());
+        var holdings = req.getValue().records().stream().filter(r -> r.kind() == com.marketai.dataplatform.domain.RecordKind.HOLDING).toList();
+        assertThat(holdings).hasSize(2);
+        assertThat(holdings.get(0).payload()).contains("\"quantity\":\"40.123\"").contains("\"asOf\":\"2022-12-31\"");
+    }
+
+    @Test
+    void aCasUploadedUnderTheWrongSectionIsRefused() throws Exception {
+        assertThatThrownBy(() -> service.importPdf(1L, pdf(null), null, "x", CasImportService.Kind.DEMAT))
+            .isInstanceOf(ResponseStatusException.class).hasMessageContaining("Upload it under Mutual funds");
+        verifyNoInteractions(pipeline);
+    }
+
+    @Test
     void wrongOrMissingPasswordGivesAClearError() throws Exception {
         byte[] locked = pdf("RIGHT");
         assertThatThrownBy(() -> service.importPdf(1L, locked, "WRONG", "x"))
