@@ -71,6 +71,9 @@ public class PlannerDtos {
         private BigDecimal actual;
         private BigDecimal remaining;
         private boolean linkedToSinkingFund;
+        /** Savings-fund categories only: everything saved into the fund so far (added minus used,
+         *  across all months up to and including this one) — null for ordinary categories. */
+        private BigDecimal accumulatedBalance;
         private List<PlanTransaction> transactions;
     }
 

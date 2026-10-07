@@ -164,12 +164,18 @@ public class PlannerService {
             BigDecimal planned = nz(cat.getPlannedAmount());
             BigDecimal actual;
             List<PlanTransaction> txns;
+            BigDecimal accumulated = null;
 
             if (cat.getLinkedSinkingFundName() != null) {
                 SinkingFund fund = fundsByName.get(cat.getLinkedSinkingFundName());
                 actual = fund == null ? BigDecimal.ZERO
                     : sinkingFundEntryRepository.findByFundIdAndYearMonth(fund.getId(), yearMonth)
                         .map(SinkingFundEntry::getAdded).orElse(BigDecimal.ZERO);
+                accumulated = fund == null ? BigDecimal.ZERO
+                    : sinkingFundEntryRepository.findByFundIdOrderByYearMonthAsc(fund.getId()).stream()
+                        .filter(e -> e.getYearMonth() != null && e.getYearMonth().compareTo(yearMonth) <= 0)
+                        .map(e -> nz(e.getAdded()).subtract(nz(e.getUsed())))
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
                 txns = List.of();
             } else {
                 List<Expense> matched = byKey.getOrDefault(cat.getKey(), List.of());
@@ -192,6 +198,7 @@ public class PlannerService {
                 .key(cat.getKey()).name(cat.getName()).groupName(cat.getGroupName())
                 .planned(planned).actual(actual).remaining(planned.subtract(actual))
                 .linkedToSinkingFund(cat.getLinkedSinkingFundName() != null)
+                .accumulatedBalance(accumulated)
                 .transactions(txns)
                 .build());
         }

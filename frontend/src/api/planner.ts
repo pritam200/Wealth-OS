@@ -21,6 +21,8 @@ export interface CategoryPlanLine {
   actual: number;
   remaining: number;
   linkedToSinkingFund: boolean;
+  /** Savings-fund categories: total saved so far (added − used); null otherwise. */
+  accumulatedBalance?: number | null;
   transactions: PlanTransaction[];
 }
 

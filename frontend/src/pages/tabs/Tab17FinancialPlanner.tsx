@@ -80,8 +80,33 @@ export function Tab17FinancialPlanner() {
   const [refreshToken, setRefreshToken] = useState(0);
   const bumpRefresh = () => setRefreshToken(t => t + 1);
 
+  // A new user's default plan (categories, limit, travel funds) is created on first read. The
+  // sections below each read it on mount, and concurrent first reads race to create it (and fail
+  // on the unique settings row, leaving the page blank) — so seed once, in order, before they mount.
+  const [ready, setReady] = useState(false);
+  const [initError, setInitError] = useState(false);
+  const init = useCallback(async () => {
+    setInitError(false);
+    try {
+      await plannerApi.getCategories();
+      await sinkingFundApi.list();
+      await plannerApi.getSettings();
+      setReady(true);
+    } catch { setInitError(true); }
+  }, []);
+  useEffect(() => { init(); }, [init]);
+
   const goPrev = () => { if (month === 1) { setMonth(12); setYear(y => y - 1); } else setMonth(m => m - 1); };
   const goNext = () => { if (month === 12) { setMonth(1); setYear(y => y + 1); } else setMonth(m => m + 1); };
+
+  if (!ready) {
+    return initError ? (
+      <div className="card text-xs text-bear flex items-center gap-2">
+        <AlertCircle size={14} /> Could not set up your household plan.
+        <button onClick={init} className="btn-secondary text-2xs px-2 py-1">Retry</button>
+      </div>
+    ) : <div className="h-40 rounded-3xl bg-surface-hover animate-pulse" />;
+  }
 
   return (
     <div className="space-y-6 animate-fade-rise">
@@ -385,13 +410,15 @@ function CategoryBoxGrid({ year, month, refreshToken }: { year: number; month: n
   const [plan, setPlan] = useState<MonthlyPlanResponse | null>(null);
   const [categoriesByKey, setCategoriesByKey] = useState<Record<string, CategoryResponse>>({});
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const [planRes, catRes] = await Promise.all([plannerApi.getPlan(year, month), plannerApi.getCategories()]);
       setPlan(planRes.data);
       setCategoriesByKey(Object.fromEntries(catRes.data.map(c => [c.key, c])));
-    } catch { /* ignore */ }
+      setLoadError(false);
+    } catch { setLoadError(true); }
   }, [year, month, refreshToken]);
 
   useEffect(() => { load(); }, [load]);
@@ -407,7 +434,14 @@ function CategoryBoxGrid({ year, month, refreshToken }: { year: number; month: n
     return Array.from(byGroup.entries());
   }, [plan]);
 
-  if (!plan) return null;
+  if (!plan) {
+    return loadError ? (
+      <div className="card text-xs text-bear flex items-center gap-2">
+        <AlertCircle size={14} /> Could not load your plan.
+        <button onClick={load} className="btn-secondary text-2xs px-2 py-1">Retry</button>
+      </div>
+    ) : null;
+  }
 
   return (
     <div className="space-y-5">
@@ -438,10 +472,99 @@ function CategoryBoxGrid({ year, month, refreshToken }: { year: number; month: n
                   onChanged={load}
                 />
               ))}
+              <AddCategoryTile groupName={groupName} onAdded={load} />
             </div>
           </div>
         );
       })}
+      <AddSectionBlock existingGroups={grouped.map(([g]) => g)} onAdded={load} />
+    </div>
+  );
+}
+
+/** "+ Add block" tile at the end of a section: adds a new category (box) to that section. */
+function AddCategoryTile({ groupName, onAdded }: { groupName: string; onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}
+        className="card border-dashed flex items-center justify-center gap-1.5 text-xs text-gray-500 hover:text-ink hover:border-brand/50 min-h-[7rem]">
+        <Plus size={14} /> Add block to {groupName}
+      </button>
+    );
+  }
+  return <NewCategoryForm groupName={groupName} onDone={() => setOpen(false)} onAdded={onAdded} />;
+}
+
+/** Starts a brand-new section: a section exists through its categories, so it's created with its first block. */
+function AddSectionBlock({ existingGroups, onAdded }: { existingGroups: string[]; onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [group, setGroup] = useState('');
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}
+        className="card border-dashed w-full flex items-center justify-center gap-1.5 text-xs text-gray-500 hover:text-ink hover:border-brand/50 py-4">
+        <Plus size={14} /> Add new section
+      </button>
+    );
+  }
+  const trimmed = group.trim();
+  const clash = existingGroups.some(g => g.toLowerCase() === trimmed.toLowerCase());
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <input className="input-field text-xs w-64" placeholder="New section name (e.g. Education)" autoFocus
+          value={group} onChange={e => setGroup(e.target.value)} />
+        <button className="btn-ghost text-2xs px-2 py-1" onClick={() => { setOpen(false); setGroup(''); }}>Cancel</button>
+        {clash && <span className="text-2xs text-gray-500">That section exists — use its "Add block" tile.</span>}
+      </div>
+      {trimmed && !clash && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          <NewCategoryForm groupName={trimmed} onDone={() => { setOpen(false); setGroup(''); }} onAdded={onAdded} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewCategoryForm({ groupName, onDone, onAdded }: { groupName: string; onDone: () => void; onAdded: () => void }) {
+  const [name, setName] = useState('');
+  const [planned, setPlanned] = useState('');
+  const [keywords, setKeywords] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    if (!name.trim()) { setError('Give the block a name'); return; }
+    const amount = planned.trim() === '' ? 0 : Number(planned);
+    if (!Number.isFinite(amount) || amount < 0) { setError('Planned amount must be a number'); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      await plannerApi.addCategory({ name: name.trim(), groupName, plannedAmount: amount, keywords: keywords.trim() || undefined });
+      onDone();
+      onAdded();
+    } catch (e: any) {
+      setError(e?.response?.status === 409 ? 'A block with that name already exists' : 'Could not add — please try again');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card space-y-2">
+      <div className="text-2xs text-gray-500">New block in <span className="font-semibold text-ink">{groupName}</span></div>
+      <input className="input-field text-xs w-full" placeholder="Name (e.g. Tuition fees)" autoFocus
+        value={name} onChange={e => setName(e.target.value)} />
+      <input className="input-field text-xs w-full" type="number" min={0} placeholder="Planned amount per month (₹)"
+        value={planned} onChange={e => setPlanned(e.target.value)} />
+      <input className="input-field text-xs w-full" placeholder="Keywords to auto-match (optional): school, tuition"
+        value={keywords} onChange={e => setKeywords(e.target.value)} />
+      {error && <div className="text-2xs text-bear">{error}</div>}
+      <div className="flex gap-2">
+        <button onClick={save} disabled={saving} className="btn-primary text-2xs px-2.5 py-1">{saving ? 'Adding…' : 'Add block'}</button>
+        <button onClick={onDone} className="btn-ghost text-2xs px-2.5 py-1">Cancel</button>
+      </div>
     </div>
   );
 }
@@ -505,10 +628,17 @@ function CategoryBox({ line, tone, expanded, onToggle, allCategories, categoryMe
         </div>
 
         <div className="grid grid-cols-3 gap-2">
-          <MiniStat label="Planned" value={maskText(fmtINR(line.planned))} />
+          <PlannedStat line={line} categoryId={categoryMeta?.id} onSaved={onChanged} />
           <MiniStat label="Actual" value={maskText(fmtINR(line.actual))} tone={over ? 'bear' : undefined} />
           <MiniStat label="Remaining" value={maskText(fmtINR(line.remaining))} tone={line.remaining < 0 ? 'bear' : 'bull'} />
         </div>
+
+        {line.linkedToSinkingFund && line.accumulatedBalance != null && (
+          <div className="mt-2.5 rounded-lg bg-brand-pink/10 px-2.5 py-1.5 flex items-center justify-between">
+            <span className="text-2xs text-gray-500 flex items-center gap-1"><PiggyBank size={11} className="text-brand-pink" /> Saved so far</span>
+            <span className="font-mono text-xs font-bold tabular-nums text-ink">{maskText(fmtINR(line.accumulatedBalance))}</span>
+          </div>
+        )}
 
         {line.linkedToSinkingFund && (
           <div className="mt-2.5 text-2xs text-gray-500 flex items-center gap-1">
@@ -570,6 +700,55 @@ function KeywordEditor({ category, onSaved }: { category: CategoryResponse; onSa
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** The planned figure for a category, editable in place — a new household starts from the
+ *  default template and sets its own numbers here. */
+function PlannedStat({ line, categoryId, onSaved }: { line: CategoryPlanLine; categoryId?: number; onSaved: () => void }) {
+  const maskText = useMaskedText();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(line.planned));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(false);
+
+  const save = async () => {
+    const n = Number(value);
+    if (categoryId == null || !Number.isFinite(n) || n < 0) { setError(true); return; }
+    setSaving(true);
+    setError(false);
+    try {
+      await plannerApi.updateCategory(categoryId, { plannedAmount: n });
+      setEditing(false);
+      onSaved();
+    } catch {
+      setError(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <button type="button" disabled={categoryId == null}
+        onClick={() => { setValue(String(line.planned)); setEditing(true); }}
+        title="Edit planned amount" className="text-left rounded-lg bg-surface-hover/70 px-2 py-1.5 hover:ring-1 hover:ring-brand/40">
+        <div className="text-2xs text-gray-600 flex items-center gap-1">Planned <Pencil size={9} /></div>
+        <div className="font-mono text-xs font-bold tabular-nums truncate text-ink">{maskText(fmtINR(line.planned))}</div>
+      </button>
+    );
+  }
+  return (
+    <div className="rounded-lg bg-surface-hover/70 px-2 py-1.5">
+      <div className="text-2xs text-gray-600">Planned (₹)</div>
+      <input autoFocus type="number" min={0} className={`input-field text-xs py-0.5 w-full ${error ? 'border-bear' : ''}`}
+        value={value} onChange={e => setValue(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false); }} />
+      <div className="flex gap-1 mt-1">
+        <button onClick={save} disabled={saving} className="btn-icon p-0.5" title="Save"><Check size={12} /></button>
+        <button onClick={() => { setEditing(false); setError(false); }} className="btn-icon p-0.5" title="Cancel"><X size={12} /></button>
+      </div>
     </div>
   );
 }
