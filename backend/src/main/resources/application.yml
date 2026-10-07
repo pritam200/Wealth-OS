@@ -9,6 +9,8 @@ spring:
 # overridden by environment variables; the prod document at the end of the file only tightens
 # what must differ in a hosted deployment.
 spring:
+  config:
+    import: optional:file:./neon.env[.properties],optional:file:./backend/neon.env[.properties],optional:file:./mail.env[.properties],optional:file:./backend/mail.env[.properties]
   # More than Spring's single default thread: the sync-lock heartbeat (every 30s) must not wait
   # behind a long nightly sweep, or a live sync's lock goes stale and a second sync takes it over.
   task:
@@ -16,7 +18,7 @@ spring:
       pool:
         size: ${SCHEDULER_POOL_SIZE:6}
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketai_db}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketai_db}?sslmode=${DB_SSLMODE:prefer}&channelBinding=${DB_CHANNEL_BINDING:prefer}
     username: ${DB_USER:marketai}
     password: ${DB_PASSWORD:marketai_pass}
     driver-class-name: org.postgresql.Driver
@@ -248,7 +250,7 @@ spring:
   # No local fallbacks: a hosted copy must be told where its database is and what the password
   # is, never silently use the development defaults.
   datasource:
-    url: jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME}
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME}?sslmode=${DB_SSLMODE:prefer}&channelBinding=${DB_CHANNEL_BINDING:prefer}
     username: ${DB_USER}
     password: ${DB_PASSWORD}
 

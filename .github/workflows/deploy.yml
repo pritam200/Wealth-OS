@@ -1,0 +1,50 @@
+name: Deploy
+
+# Deploys the main branch to the production server over SSH. The server runs ./deploy.sh, which
+# pulls, decrypts config/secrets.tar.gpg with DEPLOY_SECRET_KEY, starts the stack and deletes the
+# plaintext again. The key lives only in GitHub Actions Secrets; it is sent to the server on the
+# SSH channel's stdin, so it is never in a command line, a file, or the log.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - name: Prepare SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          DEPLOY_SECRET_KEY: ${{ secrets.DEPLOY_SECRET_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          # No `set -x`: nothing here may echo the key. The key goes in on stdin, and the remote
+          # shell reads it into an exported variable for ./deploy.sh only.
+          printf '%s\n' "$DEPLOY_SECRET_KEY" | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "IFS= read -r DEPLOY_SECRET_KEY; export DEPLOY_SECRET_KEY; cd '$DEPLOY_PATH' && ./deploy.sh"
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
