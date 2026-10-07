@@ -116,7 +116,7 @@ export function RegisterPage() {
   };
 
   if (showOnboarding) {
-    return <OnboardingModal userName={name} onFinish={(openTab) => navigate('/', { state: openTab ? { openTab } : undefined })} />;
+    return <OnboardingModal userName={name} onFinish={(openTab) => navigate('/', { state: { openTab: openTab ?? 24 } })} />;
   }
 
   return (

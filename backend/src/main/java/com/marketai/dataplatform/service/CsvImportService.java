@@ -31,7 +31,9 @@ public class CsvImportService {
     public record Options(String institution, String accountId, SourceType sourceType, AssetClass assetClass,
                           String provider, boolean completeStatement) {}
 
-    public record Summary(int rows, int created, int duplicated, int rejected, List<String> errors) {}
+    /** {@code earliest}/{@code latest}: the span of dates in the file (null when no row had a readable date). */
+    public record Summary(int rows, int created, int duplicated, int rejected, List<String> errors,
+                          LocalDate earliest, LocalDate latest) {}
 
     private static final Map<String, String[]> ALIASES = new LinkedHashMap<>();
     static {
@@ -97,7 +99,7 @@ public class CsvImportService {
         String provider = opt.provider() == null || opt.provider().isBlank() ? "csv-import" : opt.provider();
         IngestionPipeline.Result res = pipeline.ingest(new IngestionPipeline.Request(userId, null, null, opt.sourceType(), provider,
             ProviderMode.LIVE, records, coverage));
-        return new Summary(records.size(), res.created, res.duplicated + res.updated, res.rejected, res.errors.stream().limit(25).toList());
+        return new Summary(records.size(), res.created, res.duplicated + res.updated, res.rejected, res.errors.stream().limit(25).toList(), min, max);
     }
 
     private static final Set<String> TEXT_FIELDS = Set.of("name", "symbol", "reference", "type", "newSymbol");

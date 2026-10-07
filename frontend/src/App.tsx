@@ -29,6 +29,7 @@ const Tab8MyWealth          = lazy(() => import('./pages/tabs/Tab8MyWealth').the
 const Tab9AiAdvisor         = lazy(() => import('./pages/tabs/Tab9AiAdvisor').then(m => ({ default: m.Tab9AiAdvisor })));
 const Tab10Expenses         = lazy(() => import('./pages/tabs/Tab10Expenses').then(m => ({ default: m.Tab10Expenses })));
 const Tab11Cards            = lazy(() => import('./pages/tabs/Tab11Cards').then(m => ({ default: m.Tab11Cards })));
+const SetupChecklistPage = lazy(() => import('./pages/SetupChecklistPage').then(m => ({ default: m.SetupChecklistPage })));
 const Tab12Planning         = lazy(() => import('./pages/tabs/Tab12Planning').then(m => ({ default: m.Tab12Planning })));
 const Tab14Dividends        = lazy(() => import('./pages/tabs/Tab14Dividends').then(m => ({ default: m.Tab14Dividends })));
 const Tab16TodaysActions    = lazy(() => import('./pages/tabs/Tab16TodaysActions').then(m => ({ default: m.Tab16TodaysActions })));
@@ -103,6 +104,7 @@ const NAV_SECTIONS: readonly NavSection[] = [
     id: 'settings', label: 'Settings & Integrations', Icon: SettingsIcon,
     tabs: [
       { id: 18, label: 'Settings' },
+      { id: 24, label: 'Setup Checklist' },
       { id: 15, label: 'Email & Statement Sync' },
     ],
   },
@@ -231,6 +233,7 @@ function TabContent({ tab, onNavigate }: { tab: number; onNavigate: (tabId: numb
     case 21: return <SubscriptionsPage />;
     case 22: return <ReconciliationCenterPage />;
     case 23: return <DataPlatformPage />;
+    case 24: return <SetupChecklistPage />;
     default: return <Tab1MarketTrends />;
   }
 }

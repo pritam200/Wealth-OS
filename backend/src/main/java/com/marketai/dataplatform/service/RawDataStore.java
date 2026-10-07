@@ -56,7 +56,7 @@ public class RawDataStore {
         repo.save(row);
     }
 
-    static String sha256(String s) {
+    public static String sha256(String s) {
         try {
             byte[] h = MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8));
             StringBuilder b = new StringBuilder(64);

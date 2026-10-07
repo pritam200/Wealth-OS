@@ -182,7 +182,7 @@ export interface TxnDetail {
   confidenceExplanation: string | null;
 }
 
-export interface ImportSummary { rows: number; created: number; duplicated: number; rejected: number; errors: string[] }
+export interface ImportSummary { rows: number; created: number; duplicated: number; rejected: number; errors: string[]; earliest?: string | null; latest?: string | null }
 export interface BackfillSummary { examined: number; created: number; alreadyPresent: number; rejected: number; email: number; manual: number; errors: string[] }
 
 export interface FamilyMemberView { userId: number; name?: string; role: string; sharesData: boolean }
