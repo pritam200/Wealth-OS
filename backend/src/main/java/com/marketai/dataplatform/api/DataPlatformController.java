@@ -39,11 +39,11 @@ public class DataPlatformController {
         return connectionService.overview(user.getId());
     }
 
-    @Data public static class ConsentBody { private String providerId; private String institution; }
+    @Data public static class ConsentBody { private String providerId; private String institution; private String mobile; }
 
     @PostMapping("/connections")
     public ConsentService.Started startConsent(@AuthenticationPrincipal User user, @RequestBody ConsentBody body) {
-        return consentService.start(user.getId(), body.getProviderId(), body.getInstitution());
+        return consentService.start(user.getId(), body.getProviderId(), body.getInstitution(), body.getMobile());
     }
 
     @PostMapping("/consents/{id}/refresh")

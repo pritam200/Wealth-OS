@@ -241,6 +241,21 @@ wealthos:
         # A development stand-in for an Account Aggregator. It holds no data of its own and is
         # labelled MOCK everywhere. Never enable in production.
         enabled: ${WEALTHOS_MOCK_PROVIDERS:false}
+      # Account Aggregator access through Setu's gateway. SANDBOX (default) stores everything as TEST.
+      # The consent's purpose, FI types and fetch frequency are set on the Setu Bridge product, not here.
+      # Production needs a regulated FIU of record; see reports/India Account Aggregator partners.md.
+      setu:
+        enabled: ${SETU_AA_ENABLED:false}
+        mode: ${SETU_AA_MODE:SANDBOX}
+        base-url: ${SETU_AA_BASE_URL:https://fiu-sandbox.setu.co/v2}
+        token-url: ${SETU_AA_TOKEN_URL:https://uat.setu.co/api/v2/auth/token}
+        client-id: ${SETU_AA_CLIENT_ID:}
+        client-secret: ${SETU_AA_CLIENT_SECRET:}
+        product-instance-id: ${SETU_AA_PRODUCT_INSTANCE_ID:}
+        vua-handle: ${SETU_AA_VUA_HANDLE:setu}
+        # Sandbox only: used when the user gives no mobile number, e.g. Setu's mock FIP number.
+        test-mobile: ${SETU_AA_TEST_MOBILE:}
+        webhook-secret: ${SETU_AA_WEBHOOK_SECRET:}
 
 logging:
   level:

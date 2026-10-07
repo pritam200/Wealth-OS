@@ -198,8 +198,8 @@ export const dataPlatformApi = {
   setOwnership: (accountId: number, ownership: Ownership, familyId?: number, coOwnerEmails?: string[]) =>
     apiClient.put(`/api/data/accounts/${accountId}/ownership`, { ownership, familyId, coOwnerEmails }),
   connections: () => apiClient.get<ConnectionsOverview>('/api/data/connections'),
-  startConnection: (providerId: string, institution: string) =>
-    apiClient.post('/api/data/connections', { providerId, institution }),
+  startConnection: (providerId: string, institution: string, mobile?: string) =>
+    apiClient.post<{ redirectUrl: string | null }>('/api/data/connections', { providerId, institution, mobile }),
   refreshConsent: (consentId: number) => apiClient.post(`/api/data/consents/${consentId}/refresh`),
   disconnect: (id: number) => apiClient.delete(`/api/data/connections/${id}`),
   sync: (id: number, kind: SyncRun['kind']) => apiClient.post<SyncRun>(`/api/data/connections/${id}/sync`, { kind }),

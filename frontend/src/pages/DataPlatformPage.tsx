@@ -46,6 +46,7 @@ function Connections() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [institution, setInstitution] = useState('');
+  const [mobile, setMobile] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -121,11 +122,20 @@ function Connections() {
           <h2 className="text-sm font-bold text-ink">Add a source</h2>
           <input value={institution} onChange={e => setInstitution(e.target.value)} placeholder="Institution (e.g. HDFC Mutual Fund)"
             className="w-full rounded-lg border border-surface-border bg-transparent px-3 py-1.5 text-xs text-ink" />
+          {data.availableProviders.some(p => p.sourceType === 'ACCOUNT_AGGREGATOR' && p.providerId !== 'mock-aa') && (
+            <input value={mobile} onChange={e => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))} inputMode="numeric"
+              placeholder="Mobile number linked to your bank accounts (for Account Aggregator)"
+              className="w-full rounded-lg border border-surface-border bg-transparent px-3 py-1.5 text-xs text-ink" />
+          )}
           {data.availableProviders.map(p => (
             <div key={p.providerId} className="flex items-center justify-between gap-2">
               <span className="text-xs text-gray-300">{p.displayName} <span className="text-2xs text-gray-500">({SOURCE_LABEL[p.sourceType]}{p.mode !== 'LIVE' ? `, ${p.mode}` : ''})</span></span>
               <button className="btn-ghost text-2xs py-1 px-2" disabled={busy !== null || !institution.trim()}
-                onClick={() => run(`c${p.providerId}`, () => dataPlatformApi.startConnection(p.providerId, institution.trim()))}>
+                onClick={() => run(`c${p.providerId}`, async () => {
+                  const { data: started } = await dataPlatformApi.startConnection(p.providerId, institution.trim(), mobile || undefined);
+                  // The user approves the consent on the aggregator's own page; only https links are opened.
+                  if (started?.redirectUrl?.startsWith('https://')) window.open(started.redirectUrl, '_blank', 'noopener,noreferrer');
+                })}>
                 Connect
               </button>
             </div>

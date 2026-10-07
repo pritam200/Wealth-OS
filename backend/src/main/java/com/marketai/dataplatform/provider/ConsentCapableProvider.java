@@ -16,7 +16,13 @@ public interface ConsentCapableProvider extends FinancialDataProvider {
 
     @Override default boolean requiresConsent() { return true; }
 
-    record ConsentRequest(Long userId, String institution, String purpose, List<String> fiTypes, LocalDate from, LocalDate to) {}
+    record ConsentRequest(Long userId, String institution, String purpose, List<String> fiTypes, LocalDate from, LocalDate to,
+                          String subject) {
+        /** {@code subject}: the user's mobile number, which an Account Aggregator uses to identify them; null when not needed. */
+        public ConsentRequest(Long userId, String institution, String purpose, List<String> fiTypes, LocalDate from, LocalDate to) {
+            this(userId, institution, purpose, fiTypes, from, to, null);
+        }
+    }
 
     /** @param redirectUrl where the user authorises with the provider; null if the provider has no hosted step */
     record ConsentInitiation(String consentHandle, String redirectUrl, ConsentStatus status) {}

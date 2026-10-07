@@ -108,6 +108,12 @@ Fill in:
 - `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`
 - `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM`
 - `GEMINI_API_KEY`
+- Optional, Account Aggregator through Setu (sandbox): `SETU_AA_ENABLED=true`, `SETU_AA_CLIENT_ID`,
+  `SETU_AA_CLIENT_SECRET`, `SETU_AA_PRODUCT_INSTANCE_ID` (from your product on Setu's Bridge), and for testing
+  `SETU_AA_TEST_MOBILE` (Setu's mock FIP number). On Bridge, set the product's notification URL to
+  `https://<your domain>/api/data/callbacks/setu-aa` (add header `x-webhook-secret` and set `SETU_AA_WEBHOOK_SECRET`
+  if Bridge lets you). Sandbox data is stored as TEST. Going live needs a regulated FIU of record (see
+  `reports/India Account Aggregator partners.md`); then set `SETU_AA_MODE=LIVE` and the production URLs.
 - Optional, statement forwarding by email: `INBOUND_MAIL_DOMAIN` (a domain or subdomain you point at an inbound-mail
   service, e.g. `in.example.com`), `INBOUND_WEBHOOK_SECRET` (any long random string), and optionally
   `INBOUND_MAILGUN_SIGNING_KEY`. In Mailgun add a route matching `match_recipient("import-.*@in.example.com")`

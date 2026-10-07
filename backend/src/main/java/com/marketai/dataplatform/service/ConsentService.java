@@ -33,7 +33,10 @@ public class ConsentService {
     public record Started(DataConnection connection, ConsentRecord consent, String redirectUrl) {}
 
     @Transactional
-    public Started start(Long userId, String providerId, String institution) {
+    public Started start(Long userId, String providerId, String institution) { return start(userId, providerId, institution, null); }
+
+    @Transactional
+    public Started start(Long userId, String providerId, String institution, String mobile) {
         FinancialDataProvider p = providers.find(providerId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Provider not configured: " + providerId));
         if (!(p instanceof ConsentCapableProvider cp))
@@ -45,7 +48,7 @@ public class ConsentService {
             .status(ConnectionStatus.PENDING_CONSENT).build());
         ConsentCapableProvider.ConsentInitiation init = cp.createConsent(new ConsentCapableProvider.ConsentRequest(
             userId, institution, "Wealth tracking and reconciliation", List.of("DEPOSIT", "MUTUAL_FUNDS", "EQUITIES"),
-            LocalDate.now().minusYears(1), LocalDate.now()));
+            LocalDate.now().minusYears(1), LocalDate.now(), mobile));
         ConsentRecord c = consents.save(ConsentRecord.builder().userId(userId).connectionId(conn.getId()).providerId(p.providerId())
             .providerConsentHandle(init.consentHandle()).status(init.status()).purpose("Wealth tracking and reconciliation")
             .fiTypes("DEPOSIT,MUTUAL_FUNDS,EQUITIES").requestedAt(LocalDateTime.now()).lastEventAt(LocalDateTime.now())
