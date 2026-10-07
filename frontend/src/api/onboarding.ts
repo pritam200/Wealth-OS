@@ -64,3 +64,19 @@ export const onboardingApi = {
     return apiClient.post<{ source: SourceView; summary: ImportSummary }>(`/api/onboarding/sources/${id}/import`, f);
   },
 };
+
+export interface InboundItem {
+  id: number; receivedAt: string; from: string | null; subject: string | null; filename: string | null;
+  status: 'IMPORTED' | 'NEEDS_PASSWORD' | 'FAILED' | 'IGNORED'; note: string | null;
+}
+export interface InboundView { enabled: boolean; address: string | null; hasCasPassword: boolean; items: InboundItem[] }
+
+export const inboundApi = {
+  view: () => apiClient.get<InboundView>('/api/onboarding/inbound'),
+  rotate: () => apiClient.post<InboundView>('/api/onboarding/inbound/rotate'),
+  savePassword: (password: string) => apiClient.put('/api/onboarding/inbound/cas-password', { password }),
+  clearPassword: () => apiClient.delete('/api/onboarding/inbound/cas-password'),
+  unlock: (id: number, password: string, remember: boolean) =>
+    apiClient.post<InboundItem>(`/api/onboarding/inbound/items/${id}/unlock`, { password, remember }),
+  dismiss: (id: number) => apiClient.delete(`/api/onboarding/inbound/items/${id}`),
+};

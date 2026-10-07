@@ -108,6 +108,11 @@ Fill in:
 - `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`
 - `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM`
 - `GEMINI_API_KEY`
+- Optional, statement forwarding by email: `INBOUND_MAIL_DOMAIN` (a domain or subdomain you point at an inbound-mail
+  service, e.g. `in.example.com`), `INBOUND_WEBHOOK_SECRET` (any long random string), and optionally
+  `INBOUND_MAILGUN_SIGNING_KEY`. In Mailgun add a route matching `match_recipient("import-.*@in.example.com")`
+  with action `forward("https://<your domain>/api/inbound/email/<INBOUND_WEBHOOK_SECRET>")` (SendGrid Inbound Parse
+  works the same with that URL). Leave them unset to keep the feature off.
 
 **Copy `JWT_SECRET` and `PDF_PASSWORD_ENC_KEY` into your password manager.** Losing them signs
 everyone out and makes saved statement passwords unreadable.

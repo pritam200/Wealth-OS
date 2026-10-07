@@ -166,6 +166,29 @@ public class OnboardingService {
         return new CasResult(view(sources.save(s), LocalDate.now(IST)), summary);
     }
 
+    /**
+     * A CAS that arrived without the user choosing a section (forwarded email): the kind is read
+     * from the document and it is filed under the user's first source of that kind, created if the
+     * user has none yet. Same watermark rule as an upload.
+     */
+    @Transactional
+    public CasImportService.Summary importForwardedCas(Long userId, byte[] pdf, String password) {
+        CasImportService.Summary summary = casImport.importPdf(userId, pdf, password, "Forwarded CAS", null);
+        SourceKind kind = summary.kind() == CasImportService.Kind.DEMAT ? SourceKind.STOCKS : SourceKind.MUTUAL_FUNDS;
+        ImportSource s = sources.findByUserIdOrderByKindAscNameAsc(userId).stream()
+            .filter(x -> x.getKind() == kind).findFirst()
+            .orElseGet(() -> sources.save(ImportSource.builder().userId(userId).kind(kind)
+                .name(kind == SourceKind.STOCKS ? "Demat (CAS)" : "Mutual funds (CAS)").createdAt(LocalDateTime.now()).build()));
+        if (summary.periodTo() != null && (s.getSyncedThrough() == null || summary.periodTo().isAfter(s.getSyncedThrough()))) {
+            s.setSyncedThrough(summary.periodTo());
+        }
+        s.setLastImportAt(LocalDateTime.now());
+        s.setLastImportNote("Forwarded CAS: " + summary.schemes() + (kind == SourceKind.STOCKS ? " holdings, " : " schemes, ")
+            + summary.created() + " new, " + summary.duplicated() + " already present");
+        sources.save(s);
+        return summary;
+    }
+
     public record CasResult(SourceView source, CasImportService.Summary summary) {}
 
     public record ImportResult(SourceView source, CsvImportService.Summary summary) {}

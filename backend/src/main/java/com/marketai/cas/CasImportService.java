@@ -40,7 +40,7 @@ public class CasImportService {
                                 int transactions, boolean unitsReconcile) {}
 
     public record Summary(LocalDate periodFrom, LocalDate periodTo, int schemes, int rows, int created, int duplicated,
-                          int rejected, List<SchemeSummary> holdings, List<String> warnings) {}
+                          int rejected, List<SchemeSummary> holdings, List<String> warnings, Kind kind) {}
 
     /** Which kind of CAS a PDF is, so the caller can refuse one uploaded under the wrong section. */
     public enum Kind { MUTUAL_FUND, DEMAT }
@@ -126,7 +126,20 @@ public class CasImportService {
             "cas-import", ProviderMode.LIVE, records, null));
         if (res.rejected > 0 && !res.errors.isEmpty()) warnings.add(res.errors.get(0));
         return new Summary(parsed.periodFrom, parsed.periodTo, parsed.schemes.size(), records.size() - holdingCount(parsed),
-            res.created, res.duplicated + res.updated, res.rejected, holdings, warnings);
+            res.created, res.duplicated + res.updated, res.rejected, holdings, warnings, Kind.MUTUAL_FUND);
+    }
+
+    static final String DEMAT_INSTITUTION = "Demat (NSDL/CDSL)";
+
+    /** True when the PDF can't be opened without a password. */
+    public boolean needsPassword(byte[] pdf) {
+        try (PDDocument ignored = Loader.loadPDF(pdf, "")) {
+            return false;
+        } catch (InvalidPasswordException e) {
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     private static int holdingCount(CasParser.Result parsed) {
@@ -154,7 +167,9 @@ public class CasImportService {
         List<String> warnings = new ArrayList<>();
         for (DematCasParser.Holding h : parsed.holdings) {
             ObjectNode n = mapper.createObjectNode();
-            n.put("institution", institutionLabel);
+            // The demat account is identified by its DP/Client id, not by whichever broker the user named
+            // the source after, so one account is never split in two by how the file reached us.
+            n.put("institution", DEMAT_INSTITUTION);
             n.put("accountId", h.account);
             n.put("assetClass", h.isin.startsWith("INF") ? "MUTUAL_FUND" : "STOCK");
             n.put("name", h.name);
@@ -176,7 +191,7 @@ public class CasImportService {
             "cas-import", ProviderMode.LIVE, records, null));
         if (res.rejected > 0 && !res.errors.isEmpty()) warnings.add(res.errors.get(0));
         return new Summary(parsed.asOf, parsed.asOf, holdings.size(), records.size(), res.created,
-            res.duplicated + res.updated, res.rejected, holdings, warnings);
+            res.duplicated + res.updated, res.rejected, holdings, warnings, Kind.DEMAT);
     }
 
     private static String extractText(byte[] pdf, String password) {

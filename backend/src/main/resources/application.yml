@@ -48,6 +48,13 @@ spring:
   cache:
     type: simple
 
+  # Spring's default is 1 MB per file, which rejects most statement PDFs; the endpoints enforce
+  # their own tighter limits (5 MB for CSV/Excel, 15 MB for a CAS).
+  servlet:
+    multipart:
+      max-file-size: 16MB
+      max-request-size: 40MB
+
   # Generic SMTP relay for outbound mail (registration OTP today). No default host on
   # purpose — same convention as app.security.pdf-password-key below: an unset relay must
   # fail loudly when something tries to send mail, never silently pretend to succeed.
@@ -167,6 +174,15 @@ app:
   # recover it.
   # Invite-only sign-up: comma-separated emails allowed to register (you, parents, family).
   # Empty = anyone may register here in dev; the prod profile fails closed instead.
+  # Forwarding inbox: a user forwards a statement to their own import-<code>@<domain> address and
+  # an inbound-mail service (Mailgun route, SendGrid Inbound Parse) POSTs it to
+  # /api/inbound/email/<webhook-secret>. Both unset = the feature is off and nothing is accepted.
+  inbound:
+    domain: ${INBOUND_MAIL_DOMAIN:}
+    webhook-secret: ${INBOUND_WEBHOOK_SECRET:}
+    # Optional: Mailgun's webhook signing key, to also verify each delivery's signature.
+    mailgun-signing-key: ${INBOUND_MAILGUN_SIGNING_KEY:}
+
   signup:
     allowed-emails: ${SIGNUP_ALLOWED_EMAILS:}
     open-when-empty: ${SIGNUP_OPEN_WHEN_EMPTY:true}

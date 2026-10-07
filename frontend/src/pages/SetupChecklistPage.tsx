@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Clock, ListChecks, Loader2, Mail, Plus, Trash2, Upload,
 } from 'lucide-react';
-import { onboardingApi } from '../api/onboarding';
+import { inboundApi, onboardingApi } from '../api/onboarding';
+import type { InboundItem, InboundView } from '../api/onboarding';
 import type { Checklist, CasSummary, Guide, SourceKind, SourceStatus, SourceView } from '../api/onboarding';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -242,6 +243,122 @@ function KindSection({ guide, sources, onAdded, onChanged, onRemoved }: {
   );
 }
 
+const INBOUND_STATUS: Record<InboundItem['status'], { label: string; cls: string }> = {
+  IMPORTED: { label: 'Imported', cls: 'pill-bull' },
+  NEEDS_PASSWORD: { label: 'Needs password', cls: 'pill-neutral' },
+  FAILED: { label: 'Failed', cls: 'pill-bear' },
+  IGNORED: { label: 'Skipped', cls: 'pill-neutral' },
+};
+
+/** Forward a statement email to a private address and it imports itself — no Gmail needed. */
+function ForwardingInbox({ onImported }: { onImported: () => void }) {
+  const [data, setData] = useState<InboundView | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [pw, setPw] = useState('');
+  const [itemPw, setItemPw] = useState<Record<number, string>>({});
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try { setData((await inboundApi.view()).data); } catch { setData(null); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  if (!data) return null;
+  if (!data.enabled) {
+    return (
+      <div className="card text-xs text-gray-500">
+        <h3 className="text-sm font-bold text-ink mb-1 flex items-center gap-2"><Mail size={14} className="text-brand-light" /> Forward statements by email</h3>
+        Not set up on this server yet. An administrator needs to configure an inbound-mail domain (INBOUND_MAIL_DOMAIN and INBOUND_WEBHOOK_SECRET).
+      </div>
+    );
+  }
+
+  const copy = async () => {
+    if (!data.address) return;
+    try { await navigator.clipboard.writeText(data.address); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard blocked */ }
+  };
+  const act = async (fn: () => Promise<unknown>, ok?: string) => {
+    setMsg(null);
+    try { await fn(); if (ok) setMsg(ok); await load(); onImported(); }
+    catch (e) { setMsg(errText(e, 'That did not work.')); }
+  };
+
+  return (
+    <div className="card space-y-3">
+      <div>
+        <h3 className="text-sm font-bold text-ink flex items-center gap-2"><Mail size={14} className="text-brand-light" /> Forward statements by email</h3>
+        <p className="text-2xs text-gray-500">
+          Forward your CAS email (mutual funds from CAMS/KFintech, demat from NSDL/CDSL) to your private address and it is imported automatically.
+          Even better: when you request a CAS, enter this address as a recipient too.
+        </p>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <code className="text-xs bg-surface-hover px-2.5 py-1.5 rounded-lg break-all">{data.address}</code>
+        <button className="btn-secondary text-xs px-3 py-1.5" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+        <button className="btn-ghost text-2xs px-2 py-1.5"
+          onClick={() => { if (window.confirm('Make a new address? The old one stops working.')) act(() => inboundApi.rotate(), 'New address created. The old one no longer works.'); }}>
+          New address
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-2xs text-gray-500">CAS password</span>
+        {data.hasCasPassword ? (
+          <>
+            <span className="text-2xs text-bull">Saved (encrypted) — locked PDFs open automatically</span>
+            <button className="btn-ghost text-2xs px-2 py-1" onClick={() => act(() => inboundApi.clearPassword(), 'Saved password removed.')}>Remove</button>
+          </>
+        ) : (
+          <>
+            <input type="password" autoComplete="off" value={pw} onChange={e => setPw(e.target.value)} className="input-field text-xs py-1 w-56"
+              placeholder="So locked PDFs open on their own" />
+            <button className="btn-secondary text-2xs px-2.5 py-1" disabled={!pw}
+              onClick={() => act(async () => { await inboundApi.savePassword(pw); setPw(''); }, 'Password saved.')}>Save</button>
+          </>
+        )}
+      </div>
+
+      {msg && <div className="text-2xs text-gray-400">{msg}</div>}
+
+      {data.items.length > 0 && (
+        <div className="space-y-1.5">
+          {data.items.map(i => {
+            const st = INBOUND_STATUS[i.status];
+            return (
+              <div key={i.id} className="rounded-lg border border-surface-border p-2.5 text-xs space-y-1.5">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="min-w-0">
+                    <span className={st.cls}>{st.label}</span>{' '}
+                    <span className="font-semibold text-ink">{i.filename ?? 'attachment'}</span>
+                    <span className="text-2xs text-gray-600"> · {new Date(i.receivedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}{i.from ? ` · ${i.from}` : ''}</span>
+                  </div>
+                  <button className="btn-icon p-1" title="Remove" onClick={() => act(() => inboundApi.dismiss(i.id))}><Trash2 size={12} /></button>
+                </div>
+                {i.note && <div className="text-2xs text-gray-500">{i.note}</div>}
+                {i.status === 'NEEDS_PASSWORD' && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input type="password" autoComplete="off" className="input-field text-xs py-1 w-56" placeholder="PDF password"
+                      value={itemPw[i.id] ?? ''} onChange={e => setItemPw({ ...itemPw, [i.id]: e.target.value })} />
+                    <button className="btn-primary text-2xs px-2.5 py-1" disabled={!itemPw[i.id]}
+                      onClick={() => act(async () => { await inboundApi.unlock(i.id, itemPw[i.id], false); setItemPw({ ...itemPw, [i.id]: '' }); }, 'Imported.')}>
+                      Unlock &amp; import
+                    </button>
+                    <button className="btn-secondary text-2xs px-2.5 py-1" disabled={!itemPw[i.id]}
+                      onClick={() => act(async () => { await inboundApi.unlock(i.id, itemPw[i.id], true); setItemPw({ ...itemPw, [i.id]: '' }); }, 'Imported, and the password is saved for next time.')}>
+                      Unlock &amp; remember password
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** First-time setup and ongoing freshness: every place the user keeps money, how to get its data, and how far it has been imported. */
 export function SetupChecklistPage() {
   const [data, setData] = useState<Checklist | null>(null);
@@ -287,6 +404,8 @@ export function SetupChecklistPage() {
             : 'Gmail not connected — optional, picks up new statements automatically (Email & Statement Sync)'}
         </span>
       </div>
+
+      <ForwardingInbox onImported={load} />
 
       {data.guides.map(g => (
         <KindSection key={g.kind} guide={g}

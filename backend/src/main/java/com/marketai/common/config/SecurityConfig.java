@@ -48,6 +48,9 @@ public class SecurityConfig {
                                 // Protected instead by a shared secret in the query string
                                 // (app.gmail.push.verification-token), checked in the handler.
                                 "/api/gmail/push",
+                                // An inbound-mail service posts forwarded statements here. Protected
+                                // by a shared secret in the path, checked in the handler.
+                                "/api/inbound/email/**",
                                 // A provider reports consent outcomes here. It cannot carry a user JWT;
                                 // the provider adapter verifies the callback's signature and the
                                 // controller rejects anything it does not verify.
