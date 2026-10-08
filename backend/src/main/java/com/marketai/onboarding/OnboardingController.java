@@ -51,6 +51,14 @@ public class OnboardingController {
         return service.importFile(user.getId(), id, file, completeStatement);
     }
 
+    /** One box for any CAS PDF: the kind is detected and a locked file is opened with derived passwords. */
+    @PostMapping(value = "/import-cas-auto", consumes = "multipart/form-data")
+    public OnboardingService.CasResult importCasAuto(@AuthenticationPrincipal User user,
+                                                     @RequestParam("file") MultipartFile file,
+                                                     @RequestParam(required = false) String password) throws IOException {
+        return service.importCasAuto(user.getId(), file, password);
+    }
+
     /** The CAS password is used in memory to open the PDF and is never stored or logged. */
     @PostMapping(value = "/sources/{id}/import-cas", consumes = "multipart/form-data")
     public OnboardingService.CasResult importCas(@AuthenticationPrincipal User user, @PathVariable Long id,

@@ -25,6 +25,8 @@ class OnboardingServiceTest {
     private ImportSourceRepository repo;
     private CsvImportService csv;
     private OnboardingService service;
+    private com.marketai.cas.CasImportService cas;
+    private com.marketai.identity.service.FinancialIdentityService identity;
 
     @BeforeEach
     void setUp() {
@@ -33,7 +35,9 @@ class OnboardingServiceTest {
         GmailTokenRepository gmail = mock(GmailTokenRepository.class);
         when(gmail.findByUserId(USER)).thenReturn(Optional.empty());
         when(repo.save(any(ImportSource.class))).thenAnswer(i -> i.getArgument(0));
-        service = new OnboardingService(repo, csv, gmail, mock(com.marketai.cas.CasImportService.class));
+        cas = mock(com.marketai.cas.CasImportService.class);
+        identity = mock(com.marketai.identity.service.FinancialIdentityService.class);
+        service = new OnboardingService(repo, csv, gmail, cas, identity);
     }
 
     private ImportSource source(SourceKind kind, LocalDate through) {
@@ -82,5 +86,55 @@ class OnboardingServiceTest {
     void anotherUsersSourceIsNotFound() {
         when(repo.findByIdAndUserId(1L, 99L)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> service.remove(99L, 1L)).isInstanceOf(ResponseStatusException.class);
+    }
+
+    private static com.marketai.cas.CasImportService.Summary casSummary(com.marketai.cas.CasImportService.Kind kind) {
+        return new com.marketai.cas.CasImportService.Summary(null, TODAY.minusDays(2), 3, 10, 10, 0, 0, List.of(), List.of(), kind);
+    }
+
+    @Test
+    void oneBoxUploadOpensALockedPdfWithAPasswordWorkedOutFromThePan() throws Exception {
+        var pdf = new MockMultipartFile("file", "cas.pdf", "application/pdf", "x".getBytes());
+        when(repo.findByUserIdOrderByKindAscNameAsc(USER)).thenReturn(List.of());
+        when(cas.needsPassword(any())).thenReturn(true);
+        when(identity.derivePassword(eq(USER), eq(com.marketai.identity.service.PasswordStrategy.PAN_UPPERCASE))).thenReturn(Optional.of("ABCDE1234F"));
+        when(identity.derivePassword(eq(USER), argThat(st -> st != com.marketai.identity.service.PasswordStrategy.PAN_UPPERCASE))).thenReturn(Optional.empty());
+        when(cas.importPdf(eq(USER), any(), eq("ABCDE1234F"), any(), isNull()))
+            .thenReturn(casSummary(com.marketai.cas.CasImportService.Kind.DEMAT));
+
+        var r = service.importCasAuto(USER, pdf, null);
+
+        assertThat(r.source().kind()).isEqualTo("STOCKS");   // kind read from the document, source created
+        assertThat(r.source().syncedThrough()).isEqualTo(TODAY.minusDays(2));
+    }
+
+    @Test
+    void oneBoxUploadMovesOnToTheNextGuessWhenAPasswordIsWrongButStopsOnARealError() throws Exception {
+        var pdf = new MockMultipartFile("file", "cas.pdf", "application/pdf", "x".getBytes());
+        when(repo.findByUserIdOrderByKindAscNameAsc(USER)).thenReturn(List.of());
+        when(cas.needsPassword(any())).thenReturn(true);
+        when(identity.derivePassword(eq(USER), any())).thenReturn(Optional.empty());
+        when(identity.derivePassword(eq(USER), eq(com.marketai.identity.service.PasswordStrategy.PAN_UPPERCASE))).thenReturn(Optional.of("WRONG"));
+        when(cas.importPdf(eq(USER), any(), eq("RIGHT"), any(), isNull()))
+            .thenReturn(casSummary(com.marketai.cas.CasImportService.Kind.MUTUAL_FUND));
+        when(cas.importPdf(eq(USER), any(), eq("WRONG"), any(), isNull()))
+            .thenThrow(new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "That password didn't open the PDF."));
+
+        var r = service.importCasAuto(USER, pdf, "RIGHT");   // typed password is tried first
+        assertThat(r.source().kind()).isEqualTo("MUTUAL_FUNDS");
+        verify(cas, never()).importPdf(eq(USER), any(), eq("WRONG"), any(), any());
+
+        reset(cas);
+        when(cas.needsPassword(any())).thenReturn(true);
+        when(cas.importPdf(eq(USER), any(), eq("WRONG"), any(), isNull()))
+            .thenThrow(new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "That password didn't open the PDF."));
+        assertThatThrownBy(() -> service.importCasAuto(USER, pdf, null))
+            .isInstanceOf(ResponseStatusException.class).hasMessageContaining("none of the passwords");
+    }
+
+    @Test
+    void oneBoxUploadRejectsNonPdfWithAPointerToTheRightSection() {
+        assertThatThrownBy(() -> service.importCasAuto(USER, new MockMultipartFile("file", "s.csv", "text/csv", "x".getBytes()), null))
+            .hasMessageContaining("PDF");
     }
 }

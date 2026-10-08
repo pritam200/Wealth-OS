@@ -53,12 +53,13 @@ export function OnboardingModal({ userName, onFinish }: Props) {
                 Let's put what you own into one place. Your dashboard then shows your real net worth from the first screen instead of zero.
               </p>
               <ol className="text-left text-sm text-gray-400 bg-surface-hover rounded-lg p-4 mb-6 space-y-2 list-decimal list-inside">
-                <li>Pick a category you have (mutual funds, stocks, fixed deposits, recurring deposits, other).</li>
-                <li>We tell you what to bring, where to find it, and exactly how to type it, with an example.</li>
-                <li>You can skip any category and come back to this from <b className="text-gray-300">My Wealth</b> or <b className="text-gray-300">Investments</b> later.</li>
+                <li>Upload one statement for all your mutual funds, and one for all your shares.</li>
+                <li>Add fixed deposits, recurring deposits and cards if you have them.</li>
+                <li>Everything is optional and takes about five minutes. You can stop and come back any time.</li>
               </ol>
-              <button onClick={() => setScreen('hub')} className="btn-primary w-full py-2.5">Get started <ArrowRight size={15} /></button>
-              <button onClick={() => onFinish()} className="btn-ghost w-full mt-2 justify-center text-sm">Skip, I'll add this later</button>
+              <button onClick={() => onFinish(24)} className="btn-primary w-full py-2.5">Start guided setup <ArrowRight size={15} /></button>
+              <button onClick={() => setScreen('hub')} className="btn-secondary w-full mt-2 justify-center text-sm">I'd rather type my holdings in</button>
+              <button onClick={() => onFinish()} className="btn-ghost w-full mt-2 justify-center text-sm">Skip, I'll do this later</button>
             </div>
           )}
 
