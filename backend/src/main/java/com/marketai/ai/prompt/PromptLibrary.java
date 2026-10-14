@@ -31,7 +31,7 @@ public final class PromptLibrary {
         "sender/content. Use null rather than a guess.");
 
     /** Transactions, closing balances and statement totals from an email or a statement's text. */
-    public static final PromptTemplate TRANSACTION_EXTRACTION = new PromptTemplate("transaction-extraction", 2,
+    public static final PromptTemplate TRANSACTION_EXTRACTION = new PromptTemplate("transaction-extraction", 3,
         "You extract EVERY financial event from an Indian bank/broker/AMC/RTA/merchant email or " +
         "statement. One email or document can hold many events (zero to hundreds): read all of it — " +
         "every table row, every page, forwarded messages and quoted text — and report each event " +
@@ -120,6 +120,17 @@ public final class PromptLibrary {
         "bank debit described as paying/settling a credit card bill is a single transaction " +
         "(the payment itself, not its line items) with transaction_type DEBIT and category " +
         "\\\"Account Transfer\\\".\n" +
+        "When the document is a credit card statement or bill, also return \"card_statement\": " +
+        "{\"issuer\": bank name, \"card_last4\": the last 4 digits of the card number, null if not shown, " +
+        "\"statement_date\": ISO date, \"due_date\": ISO date, \"total_due\": the total amount due, " +
+        "\"minimum_due\": the minimum amount due, \"previous_balance\": the previous statement balance, " +
+        "\"credit_limit\": the total credit limit, \"available_limit\": the available credit limit, " +
+        "\"evidence\": the exact line(s) stating the total due and due date, verbatim, " +
+        "\"limit_evidence\": the exact line stating the credit limit, verbatim, null when none}. " +
+        "Use null for any figure the statement does not state; omit card_statement for anything that is " +
+        "not a card statement. Fees, interest, GST and other charges the bank levied are listed in the " +
+        "statement's table: extract each as its own DEBIT transaction with the statement's own wording " +
+        "as the merchant (e.g. \"LATE PAYMENT FEE\", \"FINANCE CHARGES\", \"IGST\").\n" +
         "A CAS/AMC statement often also states a per-folio closing balance separately from any " +
         "transaction rows (e.g. \\\"Closing Balance: 1234.567 units as of 31-Jan-2026\\\"). " +
         "Extract each such line as its own element of closing_balances[], each with exactly " +

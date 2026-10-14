@@ -18,6 +18,7 @@ public class CardDtos {
         private BigDecimal pointValue;
         private Integer billingDay;
         private Integer dueDay;
+        private BigDecimal creditLimit;
         private String benefits;
         private String bestFor;
         private Map<String, BigDecimal> rewardRates;
@@ -36,6 +37,7 @@ public class CardDtos {
         private BigDecimal pointsCashValue; // pointsBalance * pointValue
         private BigDecimal currentDue;
         private java.time.LocalDate currentDueDate;
+        private BigDecimal creditLimit;
     }
 
     @Data @Builder @NoArgsConstructor @AllArgsConstructor

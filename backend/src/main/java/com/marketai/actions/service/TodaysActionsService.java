@@ -56,6 +56,14 @@ public class TodaysActionsService {
     private final com.marketai.redemption.service.RedemptionService redemptionService;
     private final SubscriptionDetectionService subscriptionDetectionService;
 
+    /** Optional so the service still builds where it isn't wired (unit tests): funds then read as lump sums. */
+    private com.marketai.recommendation.service.SipDetector sipDetector;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setSipDetector(com.marketai.recommendation.service.SipDetector sipDetector) {
+        this.sipDetector = sipDetector;
+    }
+
     /** Just-crossed the detection threshold — the first day a recurring charge is old/regular
      *  enough to call a subscription at all, so it's worth calling out as new. */
     private static final int NEW_SUBSCRIPTION_OCCURRENCE_COUNT = 3;
@@ -84,7 +92,7 @@ public class TodaysActionsService {
             if (cur == null || cur.compareTo(BigDecimal.ZERO) <= 0) continue;
 
             boolean isMf = PortfolioContextService.isMf(h);
-            AnalystAssessment a = isMf ? assessMf(h, ctx) : assessStock(h, ctx);
+            AnalystAssessment a = isMf ? assessMf(h, ctx, userId) : assessStock(h, ctx);
             String symbol = h.getSymbol();
             String name = h.getName() != null ? h.getName() : symbol;
             String assetType = isMf ? "MF" : "STOCK";
@@ -165,6 +173,7 @@ public class TodaysActionsService {
                 }
                 case "CONTINUE":
                 case "CONTINUE_SIP":
+                case "TOP_UP":
                 case "NO_ACTIONABLE_SIGNAL":
                 case "HOLD": {
                     hold.add(HoldAction.builder()
@@ -177,6 +186,7 @@ public class TodaysActionsService {
                 case "REVIEW":
                 case "AVOID":
                 case "PAUSE_SIP":
+                case "REDIRECT_SIP":
                 case "REBALANCE": {
                     watch.add(WatchAction.builder()
                         .symbol(symbol).name(name).assetType(assetType)
@@ -297,18 +307,24 @@ public class TodaysActionsService {
         }
     }
 
-    private AnalystAssessment assessMf(Holding h, PortfolioContext ctx) {
+    private AnalystAssessment assessMf(Holding h, PortfolioContext ctx, Long userId) {
         try {
             MfRecommendationRequest req = new MfRecommendationRequest();
             req.setSymbol(h.getSymbol());
             req.setFundName(h.getName());
             req.setBuyDate(h.getBuyDate());
             // The ledger-derived XIRR every portfolio screen shows, not the statement's copy.
-            req.setXirr(portfolioContextService.holdingXirr(h));
+            // Without a purchase date the ledger's dates are placeholders, so an XIRR from them means nothing.
+            req.setXirr(h.getBuyDate() != null ? portfolioContextService.holdingXirr(h) : null);
             req.setInvestedValue(h.getInvestedValue());
             req.setCurrentValue(h.getCurrentValue());
             req.setQuantity(h.getQuantity());
             req.setTotalMfPortfolioValue(ctx.getMfValue());
+            if (sipDetector != null) {
+                var sip = sipDetector.detect(userId, h.getSymbol());
+                req.setSipStatus(sip.status());
+                req.setSipAmount(sip.amount());
+            }
             return recommendationEngine.recommendMf(req);
         } catch (Exception e) {
             log.warn("Today's Actions: recommendMf() failed for {}: {}", h.getSymbol(), e.getMessage());
@@ -333,6 +349,7 @@ public class TodaysActionsService {
                     ? "Research found conflicting evidence — read it on the stock page before acting."
                     : "Re-check the original thesis against the validated signal, or set a stop-loss now.";
             case "PAUSE_SIP": return "Resume once the fund's XIRR/trend improves — see reasoning.";
+            case "REDIRECT_SIP": return "Point the next SIP instalment at a stronger fund in the same category; keep the units already held.";
             case "REBALANCE": return "Trim toward the 25% single-fund guideline on the next rebalance.";
             default: return a.getNextActionReason();
         }

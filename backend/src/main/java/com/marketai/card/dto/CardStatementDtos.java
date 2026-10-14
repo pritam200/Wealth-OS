@@ -20,6 +20,17 @@ public class CardStatementDtos {
         private Boolean arithmeticMismatch;
         private String arithmeticMismatchDetail;
         private String sourceEmailId;
+        private BigDecimal creditLimit;
+        private BigDecimal availableLimit;
+        private String cardLastFour;
+        /** Bank charges and unusual activity found on this statement, most serious first. */
+        private List<com.marketai.card.service.CardStatementAnalyzer.Flag> flags;
+    }
+
+    /** What applying a statement to its card changed, in plain words; empty when the card already matched. */
+    @Data @Builder
+    public static class ApplyResult {
+        private List<String> changes;
     }
 
     @Data @Builder

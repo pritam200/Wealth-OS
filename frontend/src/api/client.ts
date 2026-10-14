@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
+// Same-origin by default: the Vite dev server (see vite.config.ts) and nginx/Caddy in production both
+// forward /api to the backend. A hard-coded http://localhost:8080 would point a browser on any other
+// machine at *that machine's* own localhost. Set VITE_API_URL only to target a different backend.
+const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
 export const apiClient = axios.create({
   baseURL: API_BASE,

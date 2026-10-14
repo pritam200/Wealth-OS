@@ -97,10 +97,60 @@ class RecommendationEngineTest {
         req.setInvestedValue(new BigDecimal("100000"));
         req.setCurrentValue(new BigDecimal("125000"));
         req.setXirr(new BigDecimal("11.5"));
+        req.setSipStatus("ACTIVE");
         AnalystAssessment a = engine.recommendMf(req);
         assertThat(a.getRating()).isEqualTo("NOT_RATED");
         assertThat(a.getConfidenceScore()).isNull();
         assertThat(a.getCompositeScore()).isNull();
         assertThat(a.getNextAction()).isEqualTo("CONTINUE_SIP");
+    }
+
+    private MfRecommendationRequest fund(LocalDate bought, String invested, String current, String xirr, String sip) {
+        MfRecommendationRequest req = new MfRecommendationRequest();
+        req.setSymbol("F.MF");
+        req.setBuyDate(bought);
+        req.setInvestedValue(new BigDecimal(invested));
+        req.setCurrentValue(new BigDecimal(current));
+        req.setXirr(xirr == null ? null : new BigDecimal(xirr));
+        req.setSipStatus(sip);
+        return req;
+    }
+
+    @Test
+    @DisplayName("A fund with no SIP on record is a lump sum: on track means hold, not continue a SIP")
+    void lumpSumOnTrackIsHold() {
+        when(md.getDailySeries(anyString(), anyInt())).thenThrow(new RuntimeException("no data"));
+        AnalystAssessment a = engine.recommendMf(fund(LocalDate.now().minusYears(2), "100000", "125000", "11.5", "NONE"));
+        assertThat(a.getNextAction()).isEqualTo("HOLD");
+    }
+
+    @Test
+    @DisplayName("An underperforming SIP is redirected; an underperforming lump sum is a switch")
+    void underperformingSipIsRedirectedLumpSumSwitched() {
+        when(md.getDailySeries(anyString(), anyInt())).thenThrow(new RuntimeException("no data"));
+        assertThat(engine.recommendMf(fund(LocalDate.now().minusYears(2), "100000", "85000", "-4", "ACTIVE")).getNextAction())
+            .isEqualTo("REDIRECT_SIP");
+        assertThat(engine.recommendMf(fund(LocalDate.now().minusYears(2), "100000", "85000", "-4", "INFERRED")).getNextAction())
+            .isEqualTo("REDIRECT_SIP");
+        assertThat(engine.recommendMf(fund(LocalDate.now().minusYears(2), "100000", "85000", "-4", "NONE")).getNextAction())
+            .isEqualTo("SWITCH_FUND");
+    }
+
+    @Test
+    @DisplayName("A strong long-term lump sum is a top-up candidate; a strong SIP is a step-up")
+    void strongFundTopUpOrIncrease() {
+        when(md.getDailySeries(anyString(), anyInt())).thenThrow(new RuntimeException("no data"));
+        assertThat(engine.recommendMf(fund(LocalDate.now().minusYears(3), "100000", "160000", "17", "NONE")).getNextAction())
+            .isEqualTo("TOP_UP");
+        assertThat(engine.recommendMf(fund(LocalDate.now().minusYears(3), "100000", "160000", "17", "ACTIVE")).getNextAction())
+            .isEqualTo("INCREASE_SIP");
+    }
+
+    @Test
+    @DisplayName("An unknown purchase date is neither 'too recent' nor long-term, and tax is not guessed")
+    void unknownPurchaseDate() {
+        AnalystAssessment a = engine.recommendMf(fund(null, "100000", "110000", null, "NONE"));
+        assertThat(a.getNextAction()).isEqualTo("HOLD");
+        assertThat(a.getTaxImpact()).contains("purchase dates are not on record").doesNotContain("LTCG:");
     }
 }

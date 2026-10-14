@@ -50,6 +50,9 @@ public class CreditCard {
     @Column(name = "due_day")
     private Integer dueDay;
 
+    @Column(name = "credit_limit", precision = 14, scale = 2)
+    private BigDecimal creditLimit;
+
     @Column(name = "current_due", precision = 12, scale = 2)
     private BigDecimal currentDue;
 

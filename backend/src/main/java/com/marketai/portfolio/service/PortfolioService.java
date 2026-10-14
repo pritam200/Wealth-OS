@@ -765,8 +765,14 @@ public class PortfolioService {
         }
         for (java.util.Map.Entry<String, List<Holding>> e : byFolio.entrySet()) {
             List<Holding> group = e.getValue();
+            // A folio legitimately holds several schemes (e.g. Growth and IDCW of one fund, or
+            // different funds of one AMC), so only flag a folio when two holdings share a
+            // scheme identity: the same ISIN, or no ISIN to tell them apart.
             long distinctSymbols = group.stream().map(Holding::getSymbol).distinct().count();
-            if (distinctSymbols > 1) {
+            long distinctSchemes = group.stream()
+                .map(h -> h.getIsin() != null && !h.getIsin().isBlank() ? h.getIsin().trim() : "sym:" + h.getSymbol())
+                .distinct().count();
+            if (distinctSymbols > 1 && distinctSchemes < group.size()) {
                 for (Holding h : group) {
                     issues.add(com.marketai.portfolio.dto.IntegrityReportDto.Issue.builder()
                         .holdingId(h.getId()).symbol(h.getSymbol()).name(h.getName())
@@ -815,7 +821,9 @@ public class PortfolioService {
             bySymbol.computeIfAbsent(h.getSymbol().toUpperCase(), k -> new ArrayList<>()).add(h);
         }
         for (java.util.Map.Entry<String, List<Holding>> e : bySymbol.entrySet()) {
-            List<Holding> group = e.getValue();
+          // Only holdings at the same broker are one position counted twice; the same stock at
+          // two brokers is two positions.
+          for (List<Holding> group : splitByBroker(e.getValue())) {
             if (group.size() <= 1) continue;
             for (Holding h : group) {
                 issues.add(com.marketai.portfolio.dto.IntegrityReportDto.Issue.builder()
@@ -825,6 +833,7 @@ public class PortfolioService {
                     .currentValue(h.getCurrentValue())
                     .build());
             }
+          }
         }
 
         // 4b. The same ISIN under different symbols. An ISIN names one security (and, for a
@@ -1135,7 +1144,36 @@ public class PortfolioService {
         }
         java.util.Map<Integer, List<Holding>> groups = new java.util.LinkedHashMap<>();
         for (int i = 0; i < hs.size(); i++) groups.computeIfAbsent(find.applyAsInt(i), k -> new ArrayList<>()).add(hs.get(i));
-        return new ArrayList<>(groups.values());
+        List<List<Holding>> out = new ArrayList<>();
+        for (List<Holding> g : groups.values()) out.addAll(splitByBroker(g));
+        return out;
+    }
+
+    /**
+     * Splits a group of holdings of one security by the broker they sit with. The same stock held
+     * at two brokers (Jio Financial at Mirae and at Kotak) is two real positions, not one counted
+     * twice, so holdings under different brokers are never candidates for merging.
+     *
+     * <p>A blank label or an exchange label ("NSE", "BSE") names no broker, so it does not count as
+     * one: those rows stay with the group when at most one real broker is present (the same
+     * account imported under two labels), and are grouped only among themselves when two or more
+     * real brokers are present, since there is no telling which one they belong to.
+     */
+    static List<List<Holding>> splitByBroker(List<Holding> group) {
+        java.util.Set<String> real = new java.util.LinkedHashSet<>();
+        for (Holding h : group) {
+            String k = brokerKey(h);
+            if (!k.isEmpty()) real.add(k);
+        }
+        if (real.size() <= 1) return List.of(group);
+        java.util.Map<String, List<Holding>> byBroker = new java.util.LinkedHashMap<>();
+        for (Holding h : group) byBroker.computeIfAbsent(brokerKey(h), k -> new ArrayList<>()).add(h);
+        return new ArrayList<>(byBroker.values());
+    }
+
+    private static String brokerKey(Holding h) {
+        String k = h.getBroker() == null ? "" : h.getBroker().trim().toLowerCase();
+        return k.equals("nse") || k.equals("bse") ? "" : k;
     }
 
     /**

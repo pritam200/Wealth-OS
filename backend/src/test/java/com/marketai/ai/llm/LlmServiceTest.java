@@ -84,9 +84,9 @@ class LlmServiceTest {
 
         LlmCompletion c = service.complete(LlmTask.EMAIL_EXTRACTION, PromptLibrary.TRANSACTION_EXTRACTION, "p");
 
-        assertThat(c.getPromptVersion()).isEqualTo("transaction-extraction-v2");
+        assertThat(c.getPromptVersion()).isEqualTo("transaction-extraction-v3");
         assertThat(c.isFallbackUsed()).isFalse();
-        assertThat(c.extractionVersion()).isEqualTo("gemini:gemini-test/transaction-extraction-v2");
+        assertThat(c.extractionVersion()).isEqualTo("gemini:gemini-test/transaction-extraction-v3");
         ArgumentCaptor<LlmRequest> req = ArgumentCaptor.forClass(LlmRequest.class);
         verify(gemini).generate(any(), req.capture());
         assertThat(req.getValue().temperature()).isZero();

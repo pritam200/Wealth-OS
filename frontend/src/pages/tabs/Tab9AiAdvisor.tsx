@@ -45,6 +45,8 @@ const ACTION_META: Record<ActionKind, { label: string; cls: string; Icon: any }>
   CONTINUE_SIP:           { label: 'Continue SIP',  cls: 'text-bull bg-bull/10 border-bull/30',       Icon: TrendingUp },
   INCREASE_SIP:           { label: 'Increase SIP',  cls: 'text-bull bg-bull/10 border-bull/30',       Icon: ArrowUpRight },
   PAUSE_SIP:              { label: 'Pause SIP',     cls: 'text-neutral bg-neutral/10 border-neutral/30', Icon: Activity },
+  REDIRECT_SIP:           { label: 'Redirect SIP',  cls: 'text-neutral bg-neutral/10 border-neutral/30', Icon: Activity },
+  TOP_UP:                 { label: 'Top up',        cls: 'text-bull bg-bull/10 border-bull/30',       Icon: ArrowUpRight },
   PARTIAL_PROFIT_BOOKING: { label: 'Book Partial Profit', cls: 'text-neutral bg-neutral/10 border-neutral/30', Icon: TrendingDown },
   FULL_REDEMPTION:        { label: 'Redeem',        cls: 'text-bear bg-bear/10 border-bear/30',       Icon: ArrowDownRight },
   REBALANCE:              { label: 'Rebalance',     cls: 'text-neutral bg-neutral/10 border-neutral/30', Icon: Activity },
@@ -61,6 +63,7 @@ const HEADLINE: Record<ActionKind, string> = {
   ACCUMULATE: 'Add on strength', CONTINUE: 'Ride the trend', BOOK_PROFIT: 'Book partial profit',
   EXIT: 'Exit / cut losses', REVIEW: 'Review position', HOLD: 'Hold',
   CONTINUE_SIP: 'Keep the SIP running', INCREASE_SIP: 'Step up the SIP', PAUSE_SIP: 'Pause new contributions',
+  REDIRECT_SIP: 'Send future SIP instalments to a stronger fund', TOP_UP: 'Add a lump sum (staggered)',
   PARTIAL_PROFIT_BOOKING: 'Book partial profit', FULL_REDEMPTION: 'Redeem', REBALANCE: 'Rebalance allocation',
   SWITCH_FUND: 'Switch to a better fund',
   AVOID: 'Avoid adding for now', NO_ACTIONABLE_SIGNAL: 'No validated signal', STALE_DATA: 'Price data is out of date',
@@ -140,7 +143,7 @@ export function Tab9AiAdvisor() {
         REVIEW: 2, REBALANCE: 2, SWITCH_FUND: 2,
         ACCUMULATE: 3, INCREASE_SIP: 3,
         CONTINUE: 4, CONTINUE_SIP: 4,
-        PAUSE_SIP: 4.5,
+        PAUSE_SIP: 4.5, REDIRECT_SIP: 2, TOP_UP: 3,
         HOLD: 5, AVOID: 3.5, NO_ACTIONABLE_SIGNAL: 5.5, STALE_DATA: 5.8,
         // Least urgent — there's nothing to act on, because there was nothing to analyse.
         INSUFFICIENT_DATA: 6,
@@ -162,7 +165,7 @@ export function Tab9AiAdvisor() {
 
   const counts = actions.reduce((m, a) => { m[a.kind] = (m[a.kind] ?? 0) + 1; return m; }, {} as Record<string, number>);
   const exitCount = (counts.EXIT ?? 0) + (counts.BOOK_PROFIT ?? 0) + (counts.FULL_REDEMPTION ?? 0) + (counts.PARTIAL_PROFIT_BOOKING ?? 0);
-  const continueCount = (counts.CONTINUE ?? 0) + (counts.ACCUMULATE ?? 0) + (counts.CONTINUE_SIP ?? 0) + (counts.INCREASE_SIP ?? 0);
+  const continueCount = (counts.CONTINUE ?? 0) + (counts.ACCUMULATE ?? 0) + (counts.CONTINUE_SIP ?? 0) + (counts.INCREASE_SIP ?? 0) + (counts.TOP_UP ?? 0);
   const reviewCount = (counts.REVIEW ?? 0) + (counts.REBALANCE ?? 0) + (counts.SWITCH_FUND ?? 0) + (counts.PAUSE_SIP ?? 0);
   // Counted separately and never folded into an actionable bucket — these holdings have no
   // verdict at all, so rolling them into "Continue / Add" would overstate how much of the

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Clock, ListChecks, Loader2, Mail, Plus, Trash2, Upload,
+  AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Clock, FileSpreadsheet, Layers, Loader2, Mail, Plus, Sparkles, Trash2, TrendingUp, Upload,
 } from 'lucide-react';
 import { inboundApi, onboardingApi } from '../api/onboarding';
 import type { InboundItem, InboundView } from '../api/onboarding';
@@ -359,10 +359,172 @@ function ForwardingInbox({ onImported }: { onImported: () => void }) {
   );
 }
 
+/**
+ * "Start here": one box. Drop any statement PDF (mutual funds or demat); the app works out which it is,
+ * opens it with the PAN / date of birth already on file, and files it under the right section.
+ */
+function StartHere({ data, onDone, onShowAll, showAll }: { data: Checklist; onDone: () => void; onShowAll: () => void; showAll: boolean }) {
+  const [password, setPassword] = useState('');
+  const [needPw, setNeedPw] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [over, setOver] = useState(false);
+  const [results, setResults] = useState<{ ok: boolean; text: string }[]>([]);
+  const done = data.sources.filter(s => (s.kind === 'MUTUAL_FUNDS' || s.kind === 'STOCKS') && s.syncedThrough);
+
+  const send = async (files: FileList | File[] | null | undefined) => {
+    if (!files || files.length === 0) return;
+    setBusy(true);
+    const out: { ok: boolean; text: string }[] = [];
+    for (const f of Array.from(files)) {
+      try {
+        const { data: r } = await onboardingApi.importCasAuto(f, password);
+        const what = r.summary.kind === 'DEMAT' ? 'shares and demat holdings' : 'mutual funds';
+        out.push({ ok: true, text: `${f.name}: read your ${what} (${r.summary.schemes} ${r.summary.kind === 'DEMAT' ? 'holdings' : 'schemes'})${r.summary.periodTo ? `, up to ${fmtDate(r.summary.periodTo)}` : ''}.` });
+        setNeedPw(false);
+      } catch (e) {
+        const t = errText(e, 'Could not read that file.');
+        if (/password|locked/i.test(t)) setNeedPw(true);
+        out.push({ ok: false, text: `${f.name}: ${t}` });
+      }
+    }
+    setResults(out);
+    setBusy(false);
+    onDone();
+  };
+
+  return (
+    <div className="card space-y-3">
+      <div>
+        <h3 className="text-sm font-bold text-ink">Start here: add your statements</h3>
+        <p className="text-2xs text-gray-500">
+          Drop the statement PDFs you already have: a mutual fund statement (CAS) and/or a demat statement. We work out which is which and
+          unlock them with your saved PAN and date of birth, so there is nothing to choose or type.
+        </p>
+      </div>
+
+      <label
+        onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+        onDrop={e => { e.preventDefault(); setOver(false); send(e.dataTransfer.files); }}
+        className={`flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed px-4 py-10 text-center bg-brand/[0.03] cursor-pointer transition
+          ${over ? 'border-brand bg-brand/10' : 'border-surface-border hover:border-brand/60'} ${busy ? 'opacity-60 pointer-events-none' : ''}`}>
+        <span className={`icon-badge-brand w-12 h-12 ${over ? 'scale-110' : ''} transition-transform`}>
+          {busy ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
+        </span>
+        <span className="text-sm font-semibold text-ink">{busy ? 'Reading your statements...' : 'Drop statement PDFs here, or click to choose'}</span>
+        <span className="text-2xs text-gray-500">You can pick several at once. Files are read for your holdings and transactions only.</span>
+        <input type="file" accept=".pdf" multiple className="hidden" onChange={e => { send(e.target.files); e.target.value = ''; }} />
+      </label>
+
+      {needPw && (
+        <div className="flex items-center gap-2 flex-wrap rounded-lg bg-surface-hover/60 p-2.5">
+          <span className="text-2xs text-gray-400">This file is locked. Type its password and drop it again:</span>
+          <input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)}
+            placeholder="Password (often your PAN in capitals)" className="input-field text-xs py-1 w-64" />
+        </div>
+      )}
+
+      {results.map(r => (
+        <div key={r.text} className={`text-2xs flex items-start gap-1.5 ${r.ok ? 'text-bull' : 'text-bear'}`}>
+          {r.ok ? <CheckCircle2 size={12} className="mt-0.5 shrink-0" /> : <AlertCircle size={12} className="mt-0.5 shrink-0" />} {r.text}
+        </div>
+      ))}
+
+      {done.length > 0 && (
+        <div className="text-2xs text-gray-400 flex flex-wrap gap-x-4 gap-y-1">
+          {done.map(s => <span key={s.id}><CheckCircle2 size={11} className="inline text-bull mr-1" />{s.kind === 'STOCKS' ? 'Shares' : 'Mutual funds'}: data through <b className="text-ink">{fmtDate(s.syncedThrough!)}</b></span>)}
+        </div>
+      )}
+
+      <div className="rounded-xl bg-brand/10 border border-brand/25 p-3 flex items-start gap-2.5 text-xs text-gray-300">
+        <Mail size={14} className="text-brand-light mt-0.5 shrink-0" />
+        <div>
+          <b className="text-ink">Check your email first.</b> Search your inbox for <b>"Consolidated Account Statement"</b>, <b>"CAS"</b>, <b>"NSDL"</b> or <b>"CDSL"</b>.
+          You probably already have one. Save the PDF and drop it above, or forward the email to your private address (see "Stay up to date automatically" below).
+        </div>
+      </div>
+
+      <div className="grid gap-2.5 sm:grid-cols-3">
+        {[
+          { icon: Layers, title: 'Mutual funds', fmt: 'PDF', what: 'Consolidated statement (CAS), detailed type', where: 'Emailed by CAMS / KFintech, or request at', href: 'https://www.mfcentral.com', link: 'mfcentral.com' },
+          { icon: TrendingUp, title: 'Shares, all brokers', fmt: 'PDF', what: 'Depository CAS. Shows what you hold, not what you paid', where: 'Emailed by NSDL / CDSL, or request at', href: 'https://www.cdslindia.com', link: 'cdslindia.com' },
+          { icon: FileSpreadsheet, title: 'What you paid (optional)', fmt: 'CSV / Excel', what: 'Holdings or tradebook file from your broker', where: 'Your broker\'s website, under Reports or Portfolio. Upload it in the broker section below.', href: '', link: '' },
+        ].map(c => (
+          <div key={c.title} className="rounded-xl border border-surface-border p-3 space-y-1.5 hover:border-brand/40 hover:-translate-y-0.5 transition">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-ink flex items-center gap-2"><span className="icon-badge-brand w-7 h-7"><c.icon size={14} /></span>{c.title}</span>
+              <span className="pill-neutral">{c.fmt}</span>
+            </div>
+            <p className="text-2xs text-gray-400">{c.what}</p>
+            <p className="text-2xs text-gray-500">
+              {c.where}{' '}
+              {c.href && <a className="text-brand-light underline" href={c.href} target="_blank" rel="noopener noreferrer">{c.link}</a>}
+            </p>
+          </div>
+        ))}
+      </div>
+      <p className="text-2xs text-gray-600">
+        Locked PDFs usually use your PAN in capital letters as the password. If your PAN and date of birth are saved in Settings, we try that for you.
+        Site menus change often, so look for "Consolidated Account Statement" on each site.
+      </p>
+
+      <div className="rounded-xl border border-surface-border p-3 flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-bold text-ink">Fixed deposits, recurring deposits, credit cards</div>
+          <div className="text-2xs text-gray-500">These have no combined statement. Add each one and import its file or enter the details.</div>
+        </div>
+        <button className="btn-ghost text-2xs px-2 py-1 flex items-center gap-1" onClick={onShowAll}>
+          {showAll ? 'Hide' : 'Show'} {showAll ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Progress ring + headline: shows how far along setup is and what to do next. */
+function Hero({ data, stale }: { data: Checklist; stale: number }) {
+  const pct = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+  const started = data.sources.some(s => s.syncedThrough);
+  const r = 34, c = 2 * Math.PI * r;
+  const headline = !started ? 'Let\'s fill your dashboard in two minutes'
+    : stale > 0 ? `${stale} source${stale > 1 ? 's' : ''} need a fresh statement`
+    : data.current === data.total && data.total > 0 ? 'Everything is up to date' : 'Nice start, keep going';
+  const sub = !started ? 'Drop a statement below. We do the rest: detect it, unlock it and file it.'
+    : 'Each source shows how far its data goes, and updates continue from that date.';
+  return (
+    <div className="relative overflow-hidden rounded-2xl bg-brand-gradient text-white p-5 flex items-center gap-5">
+      <div className="absolute -right-10 -top-10 w-40 h-40 rounded-full bg-white/10" />
+      <div className="absolute right-16 -bottom-14 w-32 h-32 rounded-full bg-white/10" />
+      <div className="relative shrink-0">
+        <svg width="84" height="84" viewBox="0 0 84 84" className="-rotate-90">
+          <circle cx="42" cy="42" r={r} fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="7" />
+          <circle cx="42" cy="42" r={r} fill="none" stroke="white" strokeWidth="7" strokeLinecap="round"
+            strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} style={{ transition: 'stroke-dashoffset .6s ease' }} />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-lg font-bold leading-none">{data.current}<span className="text-xs font-medium opacity-80">/{data.total}</span></span>
+          <span className="text-[10px] opacity-80 mt-0.5">up to date</span>
+        </div>
+      </div>
+      <div className="relative min-w-0">
+        <div className="flex items-center gap-1.5 text-xs font-medium opacity-90 mb-0.5"><Sparkles size={13} /> Setup</div>
+        <h2 className="text-lg sm:text-xl font-bold leading-tight">{headline}</h2>
+        <p className="text-xs opacity-90 mt-1">{sub}</p>
+        <div className="mt-2 inline-flex items-center gap-1.5 text-2xs bg-white/15 rounded-full px-2.5 py-1">
+          <Mail size={11} />
+          {data.gmail.connected
+            ? <>Gmail connected{data.gmail.lastSyncAt ? <> · read through {new Date(data.gmail.lastSyncAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</> : ''}</>
+            : 'Gmail not connected (optional)'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** First-time setup and ongoing freshness: every place the user keeps money, how to get its data, and how far it has been imported. */
 export function SetupChecklistPage() {
   const [data, setData] = useState<Checklist | null>(null);
   const [error, setError] = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
   const load = useCallback(async () => {
     setError(false);
@@ -384,34 +546,34 @@ export function SetupChecklistPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-brand/10 border border-brand/25 flex items-center justify-center text-brand-light shrink-0">
-          <ListChecks size={20} />
-        </div>
-        <div>
-          <h2 className="text-xl font-bold text-ink mb-0.5">Setup Checklist</h2>
-          <p className="text-gray-500 text-xs">Bring in every place you keep money. Each source shows how far its data goes, and updates continue from that date.</p>
-        </div>
-      </div>
+      <Hero data={data} stale={stale} />
 
-      <div className="card flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
-        <span><span className="font-bold text-ink">{data.current}</span> of {data.total} sources up to date</span>
-        {stale > 0 && <span className="text-bear flex items-center gap-1"><AlertCircle size={12} /> {stale} need an update</span>}
-        <span className="flex items-center gap-1.5 text-gray-400">
-          <Mail size={12} />
-          {data.gmail.connected
-            ? <>Gmail connected{data.gmail.lastSyncAt ? <> · emails read through <span className="font-semibold text-ink">{new Date(data.gmail.lastSyncAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span></> : ''} (picks up new statements automatically)</>
-            : 'Gmail not connected — optional, picks up new statements automatically (Email & Statement Sync)'}
-        </span>
-      </div>
+      <StartHere data={data} onDone={load} showAll={showAll} onShowAll={() => setShowAll(v => !v)} />
 
-      <ForwardingInbox onImported={load} />
-
-      {data.guides.map(g => (
+      {showAll && data.guides.filter(g => g.kind !== 'MUTUAL_FUNDS' && g.kind !== 'STOCKS').map(g => (
         <KindSection key={g.kind} guide={g}
           sources={data.sources.filter(s => s.kind === g.kind)}
           onAdded={() => load()} onChanged={() => load()} onRemoved={() => load()} />
       ))}
+
+      {/* Sources that already exist stay visible and editable (watermarks, re-upload, remove). */}
+      {data.sources.some(s => s.kind === 'MUTUAL_FUNDS' || s.kind === 'STOCKS') && (
+        <details className="card">
+          <summary className="text-sm font-bold text-ink cursor-pointer">Your mutual fund and share sources</summary>
+          <div className="mt-3 space-y-3">
+            {data.guides.filter(g => g.kind === 'MUTUAL_FUNDS' || g.kind === 'STOCKS').map(g => (
+              <KindSection key={g.kind} guide={g}
+                sources={data.sources.filter(s => s.kind === g.kind)}
+                onAdded={() => load()} onChanged={() => load()} onRemoved={() => load()} />
+            ))}
+          </div>
+        </details>
+      )}
+
+      <details className="card">
+        <summary className="text-sm font-bold text-ink cursor-pointer">Optional: stay up to date automatically</summary>
+        <div className="mt-3"><ForwardingInbox onImported={load} /></div>
+      </details>
     </div>
   );
 }

@@ -27,6 +27,7 @@ const NEXT_ACTION_TONE: Record<string, string> = {
   BOOK_PROFIT: 'text-neutral border-neutral/40 bg-neutral/10', PARTIAL_PROFIT_BOOKING: 'text-neutral border-neutral/40 bg-neutral/10',
   EXIT: 'text-bear border-bear/40 bg-bear/10', FULL_REDEMPTION: 'text-bear border-bear/40 bg-bear/10', SWITCH_FUND: 'text-bear border-bear/40 bg-bear/10',
   REVIEW: 'text-neutral border-neutral/40 bg-neutral/10', REBALANCE: 'text-neutral border-neutral/40 bg-neutral/10', PAUSE_SIP: 'text-neutral border-neutral/40 bg-neutral/10',
+  REDIRECT_SIP: 'text-neutral border-neutral/40 bg-neutral/10', TOP_UP: 'text-bull border-bull/40 bg-bull/10',
   HOLD: 'text-gray-300 border-surface-border bg-surface-hover',
   AVOID: 'text-bear border-bear/40 bg-bear/10',
   NO_ACTIONABLE_SIGNAL: 'text-gray-300 border-surface-border bg-surface-hover',

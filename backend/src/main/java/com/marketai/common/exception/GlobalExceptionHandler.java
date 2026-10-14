@@ -86,7 +86,10 @@ public class GlobalExceptionHandler {
         return buildError(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
     }
 
-    @ExceptionHandler(org.apache.catalina.connector.ClientAbortException.class)
+    // Spring wraps the same dropped connection in AsyncRequestNotUsableException when the
+    // response was being streamed, which otherwise fell through to the ERROR-level catch-all.
+    @ExceptionHandler({org.apache.catalina.connector.ClientAbortException.class,
+        org.springframework.web.context.request.async.AsyncRequestNotUsableException.class})
     public void handleClientAbort(Exception ex) {
         log.debug("Client disconnected: {}", ex.getMessage());
     }
@@ -129,6 +132,18 @@ public class GlobalExceptionHandler {
         if (status.is5xxServerError()) log.error("Request failed: {}", ex.getReason(), ex);
         else log.debug("Request refused ({}): {}", status.value(), ex.getReason());
         return buildError(status, ex.getReason() != null ? ex.getReason() : status.getReasonPhrase(), request);
+    }
+
+    /**
+     * A route that exists but not for this verb — usually a frontend newer than the running jar
+     * (GET /api/cards/charges landing on PUT/DELETE /api/cards/{id}). This used to fall through
+     * to {@link #handleGeneral} and log an ERROR with a 500, which read as a server fault.
+     */
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleMethodNotSupported(
+            org.springframework.web.HttpRequestMethodNotSupportedException ex, WebRequest request) {
+        log.warn("{} on {}", ex.getMessage(), request.getDescription(false));
+        return buildError(HttpStatus.METHOD_NOT_ALLOWED, ex.getMessage(), request);
     }
 
     /** The record changed underneath this request (a sync and an edit at the same moment). */

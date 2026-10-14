@@ -129,6 +129,7 @@ public class CardService {
         if (req.getPointsBalance() != null) c.setPointsBalance(req.getPointsBalance());
         if (req.getBillingDay() != null) c.setBillingDay(req.getBillingDay());
         if (req.getDueDay() != null) c.setDueDay(req.getDueDay());
+        if (req.getCreditLimit() != null) c.setCreditLimit(req.getCreditLimit());
         if (req.getBenefits() != null) c.setBenefits(req.getBenefits());
         if (req.getBestFor() != null) c.setBestFor(req.getBestFor());
         if (req.getRewardRates() != null && !req.getRewardRates().isEmpty())
@@ -400,6 +401,7 @@ public class CardService {
             .pointsBalance(balance).billingDay(c.getBillingDay()).dueDay(c.getDueDay())
             .benefits(c.getBenefits()).bestFor(c.getBestFor())
             .rewardRates(c.getRewardRates()).pointsCashValue(cash)
-            .currentDue(c.getCurrentDue()).currentDueDate(c.getCurrentDueDate()).build();
+            .currentDue(c.getCurrentDue()).currentDueDate(c.getCurrentDueDate())
+            .creditLimit(c.getCreditLimit()).build();
     }
 }

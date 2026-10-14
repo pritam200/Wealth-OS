@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 public class RecommendationController {
 
     private final RecommendationEngine engine;
+    private final com.marketai.recommendation.service.SipDetector sipDetector;
 
     // Real trailing index returns, replacing the hardcoded benchmark strings that used
     // to live in the Tab6 Mutual Funds UI.
@@ -34,7 +35,13 @@ public class RecommendationController {
     // Mutual funds need more holding-specific numbers (buyDate/XIRR/portfolio concentration)
     // than a GET can carry cleanly — same engine, dedicated MF-aware entry point.
     @PostMapping("/mf")
-    public ResponseEntity<AnalystAssessment> getMf(@RequestBody MfRecommendationRequest req) {
+    public ResponseEntity<AnalystAssessment> getMf(
+            @org.springframework.security.core.annotation.AuthenticationPrincipal com.marketai.auth.entity.User user,
+            @RequestBody MfRecommendationRequest req) {
+        // SIP or lump sum comes from the user's own records, never from the request body.
+        var sip = sipDetector.detect(user != null ? user.getId() : null, req.getSymbol());
+        req.setSipStatus(sip.status());
+        req.setSipAmount(sip.amount());
         return ResponseEntity.ok(engine.recommendMf(req));
     }
 }

@@ -50,16 +50,18 @@ public final class IssuerDomainRegistry {
         put("MF Central",    "mfcentral.com");
 
         // Depositories
-        put("CDSL",          "cdslindia.com");
+        // cdslindia.co.in is the sender of the "Transactions In Your Demat Account" alerts.
+        put("CDSL",          "cdslindia.com", "cdslindia.co.in");
         put("NSDL",          "nsdl.co.in", "nsdl.com");
 
         // Banks
         // hdfcbank.bank.in is HDFC's domain under RBI's .bank.in TLD — a genuine issuer domain,
         // not a lookalike; it was previously missing and caused real HDFC mail to be blocked.
         put("HDFC Bank",     "hdfcbank.com", "hdfcbank.net", "hdfcbank.bank.in");
-        put("ICICI Bank",    "icicibank.com");
-        put("Axis Bank",     "axisbank.com");
-        put("SBI",           "sbi.co.in", "onlinesbi.com", "sbicard.com");
+        // RBI's .bank.in TLD: banks now send alerts from <bank>.bank.in (e.g. alerts.sbi.bank.in).
+        put("ICICI Bank",    "icicibank.com", "icici.bank.in", "icicibank.bank.in");
+        put("Axis Bank",     "axisbank.com", "axis.bank.in");
+        put("SBI",           "sbi.co.in", "onlinesbi.com", "sbicard.com", "sbi.bank.in");
         // kotaksecurities.com is Kotak's brokerage arm — already trusted by
         // ProviderPasswordRules for password derivation, but previously absent here, so the
         // system would derive a password for a domain it simultaneously flagged as an attacker.

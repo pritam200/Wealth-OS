@@ -17,4 +17,8 @@ public class MfRecommendationRequest {
     // used for the concentration/rebalance check. Cheap for the caller to supply
     // since the frontend already has every holding in memory; avoids a DB round-trip here.
     private BigDecimal totalMfPortfolioValue;
+    // Set on the server from the user's own records, never taken from the client:
+    // ACTIVE | PAUSED (a recorded SIP), INFERRED (monthly purchases in the ledger), NONE (lump sum).
+    private String sipStatus;
+    private BigDecimal sipAmount;
 }

@@ -4,8 +4,10 @@ import {
   TrendingUp, Wand2, ChevronDown, ChevronUp, Search, AlertTriangle, Ban,
 } from 'lucide-react';
 import { cardApi } from '../../api/card';
-import type { CardResponse, CatalogEntry, RecommendResult, PointsTip } from '../../api/card';
+import type { CardResponse, CatalogEntry, RecommendResult, PointsTip, CardStatement } from '../../api/card';
 import { useMaskedText } from '../shared/Amount';
+import { BestCardToGet } from './BestCardToGet';
+import { CardChargesPanel } from './CardChargesPanel';
 
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
@@ -48,11 +50,12 @@ export function CreditCardSection() {
   const [categories, setCategories] = useState<string[]>([]);
   const [tips, setTips]       = useState<PointsTip[]>([]);
   const [showAdd, setShowAdd] = useState(false);
+  const [catalogFailed, setCatalogFailed] = useState(false);
 
   const load = useCallback(async () => {
     const [c, cat, cats, t] = await Promise.all([
       cardApi.list().catch(e => { console.error('Cards list failed:', e); return { data: [] as CardResponse[] }; }),
-      cardApi.catalog().catch(e => { console.error('Card catalog failed:', e); return { data: [] as CatalogEntry[] }; }),
+      cardApi.catalog().then(r => { setCatalogFailed(false); return r; }).catch(e => { console.error('Card catalog failed:', e); setCatalogFailed(true); return { data: [] as CatalogEntry[] }; }),
       cardApi.categories().catch(e => { console.error('Card categories failed:', e); return { data: [] as string[] }; }),
       cardApi.pointsTips().catch(e => { console.error('Points tips failed:', e); return { data: [] as PointsTip[] }; }),
     ]);
@@ -92,10 +95,22 @@ export function CreditCardSection() {
           )}
       </div>
 
+      {/* ── Bank charges and unusual activity from every statement read ── */}
+      <CardChargesPanel refreshKey={cards.length} />
+
       {/* ── Rewards & Points (always visible) ── */}
-      <RewardsPanel tips={tips} />
+      <RewardsPanel tips={tips} cards={cards} />
+
+      {/* ── Which card to get next, from the user's own spend ── */}
+      <BestCardToGet catalog={catalog} onAdd={async (name) => { await cardApi.add({ catalogName: name }); load(); }} />
 
       {/* ── Card Benefits Explorer (always visible) ── */}
+      {catalogFailed && (
+        <div className="card flex items-center justify-between">
+          <p className="text-xs text-gray-500">The card list could not be loaded.</p>
+          <button onClick={load} className="btn-ghost text-xs">Retry</button>
+        </div>
+      )}
       <CardBenefitsExplorer catalog={catalog}
         ownedNames={cards.map(c => c.name)}
         onAdd={async (name) => { await cardApi.add({ catalogName: name }); load(); }} />
@@ -103,8 +118,54 @@ export function CreditCardSection() {
   );
 }
 
+interface RedemptionOption { label: string; multiple: number; note: string; how: string; avoid?: boolean }
+
+/**
+ * Redemption routes for a card, best first. Which routes exist comes from the card's own listed
+ * benefits — a points-to-miles transfer is offered only where the card lists one, never assumed
+ * from the issuer. Multiples are of the card's cash value per point and are typical, not quotes.
+ */
+function redemptionOptions(card: CardResponse): RedemptionOption[] {
+  const benefits = (card.benefits || '').toLowerCase();
+  const transfers = /transfer|miles/.test(benefits);
+  const travelPortal = /smartbuy|travel edge|travel portal/.test(benefits);
+  const cashback = card.pointValue >= 0.9 || /cashback auto|auto-credit|auto credit/.test(benefits);
+  const portal = `${card.issuer} NetBanking or the ${card.issuer} card app → Credit card → Rewards / Redeem`;
+
+  if (cashback) {
+    return [
+      { label: 'Let it credit to the bill', multiple: 1,
+        note: 'This card pays cashback at face value — nothing to redeem by hand.',
+        how: 'It is applied to your statement automatically each cycle; check the "cashback" or "reward credit" line on the statement.' },
+      { label: 'Gift vouchers', multiple: 1,
+        note: 'Only if the voucher is for something you buy anyway.',
+        how: `${portal} → Vouchers.` },
+    ];
+  }
+  const out: RedemptionOption[] = [];
+  if (transfers) {
+    out.push({ label: 'Transfer to airline / hotel partner', multiple: 2,
+      note: 'Usually the highest value per point (up to about 2× cashback), when you have a trip in mind.',
+      how: `${portal} → Transfer to partner. Link your frequent-flyer or hotel member ID (the name must match the card exactly), check the transfer ratio, then transfer. Transfers are usually irreversible and take 1–7 days to arrive — transfer only when you are ready to book.` });
+  }
+  if (travelPortal) {
+    out.push({ label: 'Flights / hotels on the bank\'s travel portal', multiple: 1.5,
+      note: 'Often better than statement credit on this card; pay part or all of a booking with points.',
+      how: `Open the bank's travel portal (for HDFC, SmartBuy) from NetBanking, search the flight or hotel, and choose to pay with reward points at checkout. Compare the price against booking directly first.` });
+  }
+  out.push({ label: 'Statement credit', multiple: 1,
+    note: out.length ? 'Safe fallback when you have no trip planned.' : 'Predictable, and usually the best use on this card.',
+    how: `${portal} → Redeem against card balance (statement credit). It shows as a credit on the next statement.` });
+  out.push({ label: 'Vouchers on the bank portal', multiple: 1,
+    note: 'Compare with the statement-credit rate first; sometimes slightly better, sometimes worse.',
+    how: `${portal} → Vouchers / Catalogue → e-vouchers. Check the points needed per ₹100 of voucher.` });
+  out.push({ label: 'Merchandise catalogue', multiple: 0.5,
+    note: 'Often values points at half or less — avoid.', how: 'Not recommended.', avoid: true });
+  return out;
+}
+
 /* ── Rewards & points: personalized tips if points exist, else a how-to guide ── */
-function RewardsPanel({ tips }: { tips: PointsTip[] }) {
+function RewardsPanel({ tips, cards }: { tips: PointsTip[]; cards: CardResponse[] }) {
   const maskText = useMaskedText();
   return (
     <div className="card border border-neutral/20">
@@ -112,6 +173,43 @@ function RewardsPanel({ tips }: { tips: PointsTip[] }) {
         <Gift size={14} className="text-neutral" />
         <h3 className="font-semibold text-ink text-sm">Rewards &amp; Points</h3>
       </div>
+
+      {cards.length > 0 && (
+        <div className="space-y-2 mb-3">
+          <p className="text-2xs text-gray-500">How to use each card's points for the best outcome. Values are typical and the options follow each card's listed benefits — confirm the current rate on your bank's rewards portal:</p>
+          {cards.map(c => {
+            const opts = redemptionOptions(c);
+            return (
+              <div key={c.id} className="bg-surface-hover rounded-lg p-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-ink text-xs font-medium">{c.name}</span>
+                  <span className="text-2xs text-gray-500">
+                    {c.pointsBalance > 0 ? `${c.pointsBalance.toLocaleString('en-IN')} pts` : 'no balance recorded — tap the points on the card to add it'}
+                  </span>
+                </div>
+                <ul className="space-y-1">
+                  {opts.map((o, i) => (
+                    <li key={o.label} className="text-2xs flex items-start gap-1.5">
+                      <span className={i === 0 ? 'text-bull' : o.avoid ? 'text-bear' : 'text-gray-600'}>{i === 0 ? '★' : o.avoid ? '✕' : '•'}</span>
+                      <span className="text-gray-400">
+                        <span className={`font-medium ${i === 0 ? 'text-bull' : 'text-gray-300'}`}>{o.label}</span>
+                        {c.pointsBalance > 0 && <span className="font-mono"> · ≈ {maskText(fmtINR(c.pointsCashValue * o.multiple))}</span>}
+                        {' — '}{o.note}
+                        {!o.avoid && (
+                          <details className="mt-0.5">
+                            <summary className="cursor-pointer text-brand/80 hover:text-brand">How to do it</summary>
+                            <span className="block text-gray-500 mt-0.5">{o.how}</span>
+                          </details>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {tips.length > 0 ? (
         <div className="space-y-2">
@@ -418,6 +516,86 @@ function SpendAdvisor({ categories, hasCards }: { categories: string[]; hasCards
 }
 
 /* ── Individual card tile ── */
+const FLAG_STYLE: Record<string, string> = {
+  ALERT: 'bg-bear/10 border-bear/30 text-bear',
+  WARN:  'bg-neutral/10 border-neutral/30 text-neutral',
+  INFO:  'bg-surface-hover border-surface-border text-gray-400',
+};
+
+/** The latest statement read from email: its figures, anything the bank charged or that looks unusual, and a button to copy it onto the card. */
+function StatementPanel({ card, onApplied }: { card: CardResponse; onApplied: () => void }) {
+  const maskText = useMaskedText();
+  const [st, setSt] = useState<CardStatement | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    cardApi.statements(card.id).then(r => {
+      if (!live) return;
+      const latest = [...r.data].sort((a, b) =>
+        (b.statementDate ?? b.dueDate ?? '').localeCompare(a.statementDate ?? a.dueDate ?? ''))[0];
+      setSt(latest ?? null);
+    }).catch(() => { if (live) setSt(null); });
+    return () => { live = false; };
+  }, [card.id, card.currentDue, card.creditLimit]);
+
+  if (!st) return null;
+
+  const differs = (st.creditLimit != null && st.creditLimit !== card.creditLimit)
+    || st.totalDue !== card.currentDue
+    || (st.dueDate != null && st.dueDate !== card.currentDueDate)
+    || (!card.lastFour && !!st.cardLastFour);
+  const used = st.creditLimit && st.creditLimit > 0 ? Math.round((st.totalDue / st.creditLimit) * 100) : null;
+
+  const apply = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await cardApi.applyStatement(card.id, st.id);
+      setMsg(r.data.changes.length ? `Updated: ${r.data.changes.join(' · ')}` : 'Card already matches this statement.');
+      onApplied();
+    } catch { setMsg('Could not update the card.'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="mb-2 border border-surface-border/60 rounded p-2 space-y-1.5">
+      <div className="flex items-center justify-between text-2xs">
+        <span className="text-gray-500">Statement{st.statementDate ? ` · ${st.statementDate}` : ''}</span>
+        <span className="font-mono text-gray-300">{maskText(fmtINR(st.totalDue))}
+          {st.minimumDue != null && <span className="text-gray-500"> (min {maskText(fmtINR(st.minimumDue))})</span>}</span>
+      </div>
+      {(st.creditLimit != null || st.dueDate) && (
+        <div className="flex items-center justify-between text-2xs text-gray-500">
+          <span>{st.dueDate ? `Due ${st.dueDate}` : ''}</span>
+          {st.creditLimit != null && (
+            <span>Limit {maskText(fmtINR(st.creditLimit))}{used != null && ` · ${used}% of limit`}</span>
+          )}
+        </div>
+      )}
+      {st.flags.length > 0 ? (
+        <ul className="space-y-1">
+          {st.flags.map((f, i) => (
+            <li key={i} className={`text-2xs border rounded px-1.5 py-1 flex gap-1.5 ${FLAG_STYLE[f.severity] ?? FLAG_STYLE.INFO}`}>
+              <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+              <span><span className="font-medium">{f.title}</span>{f.detail ? <span className="opacity-80"> — {f.detail}</span> : null}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-2xs text-bull">No bank charges or unusual activity found on this statement.</p>
+      )}
+      <div className="flex items-center gap-2">
+        <button onClick={apply} disabled={busy}
+          className={`text-2xs px-2 py-0.5 rounded border ${differs ? 'border-brand text-brand hover:bg-brand/10' : 'border-surface-border text-gray-500'}`}>
+          {busy ? 'Updating…' : 'Update card from statement'}
+        </button>
+        {msg && <span className="text-2xs text-gray-400">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
 function CardTile({ card, onDelete, onPoints }: { card: CardResponse; onDelete: () => void; onPoints: () => void }) {
   const maskText = useMaskedText();
   const [expanded, setExpanded] = useState(false);
@@ -452,6 +630,7 @@ function CardTile({ card, onDelete, onPoints }: { card: CardResponse; onDelete: 
             <span className="text-xs font-mono font-bold text-bear">{maskText(fmtINR(card.currentDue))}</span>
           </div>
         )}
+        <StatementPanel card={card} onApplied={onPoints} />
         {card.bestFor && (
           <div className="flex gap-1.5 mb-2">
             <TrendingUp size={11} className="text-brand shrink-0 mt-0.5" />

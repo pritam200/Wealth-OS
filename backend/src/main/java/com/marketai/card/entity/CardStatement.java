@@ -56,6 +56,20 @@ public class CardStatement {
      * statement's own internal redundancy rather than trusting any single extracted number.
      * Never silently corrected — the mismatch is surfaced, not "fixed."
      */
+    /** Stated on the statement, span-verified; null when the statement does not state it. */
+    @Column(name = "credit_limit", precision = 14, scale = 2)
+    private BigDecimal creditLimit;
+
+    @Column(name = "available_limit", precision = 14, scale = 2)
+    private BigDecimal availableLimit;
+
+    @Column(name = "card_last_four", length = 4)
+    private String cardLastFour;
+
+    /** JSON array of {@link com.marketai.card.service.CardStatementAnalyzer.Flag}: bank charges and unusual activity. */
+    @Column(name = "flags_json", length = 4000)
+    private String flagsJson;
+
     @Column(name = "arithmetic_mismatch")
     private Boolean arithmeticMismatch;
 

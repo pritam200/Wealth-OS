@@ -185,8 +185,13 @@ public class RecommendationEngine {
             ? current.subtract(invested).divide(invested, 4, RoundingMode.HALF_UP).doubleValue() * 100 : 0;
         double xirr = req.getXirr() != null ? req.getXirr().doubleValue() : Double.NaN;
         long daysHeld = req.getBuyDate() != null ? ChronoUnit.DAYS.between(req.getBuyDate(), LocalDate.now()) : Long.MAX_VALUE;
-        boolean isLongTerm = req.getBuyDate() == null
-            || com.marketai.tax.lot.CapitalGainsRates.isLongTerm(req.getBuyDate(), LocalDate.now());
+        // An unknown purchase date is unknown — not "long-term", and not "bought today". Imports
+        // from a holdings summary (a CAS summary, a broker holdings file) carry no purchase dates.
+        boolean dateKnown = req.getBuyDate() != null;
+        boolean isLongTerm = dateKnown
+            && com.marketai.tax.lot.CapitalGainsRates.isLongTerm(req.getBuyDate(), LocalDate.now());
+        String sipStatus = req.getSipStatus() != null ? req.getSipStatus() : "NONE";
+        boolean sip = "ACTIVE".equals(sipStatus) || "INFERRED".equals(sipStatus);
         long daysToLtcgFromBuy = com.marketai.tax.lot.CapitalGainsRates.daysToLongTerm(req.getBuyDate(), LocalDate.now());
 
         List<String> positives = new ArrayList<>();
@@ -196,16 +201,29 @@ public class RecommendationEngine {
         String nextActionReason;
 
         factors.add(AnalystAssessment.Factor.builder().name("Holding period").category("HOLDING").weightPct(0)
-            .note(String.format("%d days held (%s)", daysHeld == Long.MAX_VALUE ? 0 : daysHeld, isLongTerm ? "long-term" : "short-term")).build());
+            .note(dateKnown
+                ? String.format("%d days held (%s)", daysHeld, isLongTerm ? "long-term" : "short-term")
+                : "Purchase date not on record — holding period and tax treatment unknown").build());
+        factors.add(AnalystAssessment.Factor.builder().name("Investment mode").category("HOLDING").weightPct(0)
+            .note(switch (sipStatus) {
+                case "ACTIVE" -> "SIP" + (req.getSipAmount() != null ? String.format(" of ₹%,.0f", req.getSipAmount()) : "") + " (recorded)";
+                case "PAUSED" -> "SIP paused (recorded)";
+                case "INFERRED" -> "SIP (monthly purchases in the ledger)";
+                default -> "Lump sum — no SIP recorded for this fund";
+            }).build());
 
-        if (daysHeld < 90) {
+        if (dateKnown && daysHeld < 90) {
             // Too early — XIRR is noisy on a very young position, don't act on it yet.
-            nextAction = "CONTINUE_SIP";
-            nextActionReason = String.format("Only %d days held — XIRR is too noisy this early to act on; keep contributing on schedule.", daysHeld);
+            if (sip) {
+                nextAction = "CONTINUE_SIP";
+                nextActionReason = String.format("Only %d days held — XIRR is too noisy this early to act on; keep contributing on schedule.", daysHeld);
+            } else {
+                nextAction = "HOLD";
+                nextActionReason = String.format("Bought only %d days ago — too early to judge the fund; nothing to do yet.", daysHeld);
+            }
             positives.add("Recently started — too early to judge performance");
-        } else if (pnlPercent >= 20 && !isLongTerm) {
-            // The exact scenario the user described: strong short-term gain, tax-aware
-            // decision instead of a flat "Sell".
+        } else if (dateKnown && pnlPercent >= 20 && !isLongTerm) {
+            // Strong short-term gain: a tax-aware partial booking instead of a flat "Sell".
             nextAction = "PARTIAL_PROFIT_BOOKING";
             long daysToLtcg = daysToLtcgFromBuy;
             nextActionReason = String.format("Up %.1f%% but still short-term (%d days held, %d to go for LTCG) — book part of the gain now and let the rest season into long-term tax treatment.", pnlPercent, daysHeld, daysToLtcg);
@@ -214,23 +232,44 @@ public class RecommendationEngine {
             factors.add(AnalystAssessment.Factor.builder().name("Tax timing").category("HOLDING").weightPct(0)
                 .note(String.format("%d more days to reach LTCG treatment", daysToLtcg)).build());
         } else if ((!Double.isNaN(xirr) && xirr < 0) || pnlPercent < -8) {
-            nextAction = "SWITCH_FUND";
-            long displayDays = daysHeld == Long.MAX_VALUE ? 0 : daysHeld;
-            nextActionReason = (!Double.isNaN(xirr) && xirr < 0)
-                ? String.format("XIRR of %.1f%% over %d days held is negative/weak — this fund isn't compounding; a switch is worth considering.", xirr, displayDays)
-                : String.format("Down %.1f%% overall — underperforming enough to reconsider this fund.", pnlPercent);
+            String weak = (!Double.isNaN(xirr) && xirr < 0)
+                ? String.format("XIRR of %.1f%%%s is negative", xirr, dateKnown ? String.format(" over %d days held", daysHeld) : "")
+                : String.format("Down %.1f%% overall", pnlPercent);
+            if (sip) {
+                // Rotate the SIP, not the money already in: new instalments go to a stronger fund,
+                // and the units held stay put, so no loss is booked and no exit load or tax is paid.
+                nextAction = "REDIRECT_SIP";
+                nextActionReason = weak + " — redirect future SIP instalments to a stronger fund in the same category, "
+                    + "and keep the units you already hold rather than selling them at a loss.";
+            } else {
+                nextAction = "SWITCH_FUND";
+                nextActionReason = weak + " — this lump sum isn't compounding; a switch to a stronger fund is worth considering. "
+                    + "A switch is a redemption plus a new purchase, so check the exit load and tax first.";
+            }
             risks.add(String.format("Underperforming (%s)", !Double.isNaN(xirr) ? String.format("XIRR %.1f%%", xirr) : String.format("%.1f%% return", pnlPercent)));
         } else if (!Double.isNaN(xirr) && xirr >= 15 && isLongTerm) {
-            nextAction = "INCREASE_SIP";
-            nextActionReason = String.format("XIRR of %.1f%% over %d days held (long-term) is strong compounding — worth increasing the monthly contribution.", xirr, daysHeld == Long.MAX_VALUE ? 0 : daysHeld);
+            if (sip) {
+                nextAction = "INCREASE_SIP";
+                nextActionReason = String.format("XIRR of %.1f%% over %d days held (long-term) is strong compounding — worth increasing the monthly contribution.", xirr, daysHeld);
+            } else {
+                nextAction = "TOP_UP";
+                nextActionReason = String.format("XIRR of %.1f%% over %d days held (long-term) is strong compounding — a further lump sum (or starting a SIP) is reasonable, staggered rather than all at once.", xirr, daysHeld);
+            }
             positives.add(String.format("Strong compounding (XIRR %.1f%%) over a long holding period", xirr));
         } else if (!Double.isNaN(xirr) && xirr >= 8) {
-            nextAction = "CONTINUE_SIP";
-            nextActionReason = String.format("XIRR of %.1f%% is on track — no reason to change the SIP amount either way.", xirr);
+            nextAction = sip ? "CONTINUE_SIP" : "HOLD";
+            nextActionReason = sip
+                ? String.format("XIRR of %.1f%% is on track — no reason to change the SIP amount either way.", xirr)
+                : String.format("XIRR of %.1f%% is on track — hold the lump sum; nothing needs changing.", xirr);
             positives.add(String.format("On track (XIRR %.1f%%)", xirr));
         } else {
-            nextAction = "HOLD";
-            nextActionReason = "No XIRR data and return is unremarkable either way — nothing here warrants a change today.";
+            nextAction = sip ? "CONTINUE_SIP" : "HOLD";
+            nextActionReason = (Double.isNaN(xirr) ? "No XIRR on record" : String.format("XIRR of %.1f%%", xirr))
+                + String.format(" and a %.1f%% return so far — nothing here warrants a change today", pnlPercent)
+                + (sip ? "; keep the SIP running." : ".");
+        }
+        if ("PAUSED".equals(sipStatus) && ("HOLD".equals(nextAction) || "TOP_UP".equals(nextAction))) {
+            nextActionReason += " Your SIP in this fund is paused — resume it if you still want to keep adding.";
         }
 
         // Concentration check — flagged as a risk alongside whatever the primary action is,
@@ -240,9 +279,14 @@ public class RecommendationEngine {
             double concentration = current.divide(req.getTotalMfPortfolioValue(), 4, RoundingMode.HALF_UP).doubleValue() * 100;
             if (concentration > 25) {
                 risks.add(String.format("%.0f%% of your mutual fund portfolio is in this one fund — concentration risk", concentration));
-                if ("HOLD".equals(nextAction) || "CONTINUE_SIP".equals(nextAction)) {
-                    nextAction = "REBALANCE";
-                    nextActionReason = String.format("%.0f%% of your MF portfolio sits in this one fund — that concentration risk now outweighs the otherwise fine performance.", concentration);
+                if (java.util.Set.of("HOLD", "CONTINUE_SIP", "INCREASE_SIP", "TOP_UP").contains(nextAction)) {
+                    if (sip) {
+                        nextAction = "REDIRECT_SIP";
+                        nextActionReason = String.format("%.0f%% of your MF portfolio sits in this one fund — send future SIP instalments to a different fund instead of adding more here.", concentration);
+                    } else {
+                        nextAction = "REBALANCE";
+                        nextActionReason = String.format("%.0f%% of your MF portfolio sits in this one fund — that concentration risk now outweighs the otherwise fine performance.", concentration);
+                    }
                 }
             }
         }
@@ -267,11 +311,15 @@ public class RecommendationEngine {
             else if (diff <= -2) risks.add(String.format("Behind Nifty 50 by %.1f pts (%s, same period)", Math.abs(diff), what));
         }
 
-        String taxImpact = taxImpactText(current.subtract(invested), daysToLtcgFromBuy, isLongTerm);
+        String taxImpact = dateKnown
+            ? taxImpactText(current.subtract(invested), daysToLtcgFromBuy, isLongTerm)
+            : current.subtract(invested).signum() <= 0 ? "No tax impact — position is at a loss."
+            : "Tax depends on when each unit was bought, and the purchase dates are not on record, so STCG vs LTCG "
+              + "cannot be worked out. Importing a detailed CAS (with transactions) fills this in.";
 
         String basis = String.format(
             "Rule-of-thumb MF assessment (fixed thresholds: 90 days minimum, +20%% short-term gain, −8%%/negative XIRR, XIRR 8%%/15%% — heuristics, not backtested): %d days held (%s), XIRR %s, return %.1f%%%s. Not investment advice.",
-            daysHeld == Long.MAX_VALUE ? 0 : daysHeld, isLongTerm ? "long-term" : "short-term",
+            daysHeld == Long.MAX_VALUE ? 0 : daysHeld, !dateKnown ? "purchase date unknown" : isLongTerm ? "long-term" : "short-term",
             !Double.isNaN(xirr) ? String.format("%.1f%%", xirr) : "unavailable", pnlPercent,
             nifty != null ? String.format(", Nifty 50 since first buy %.1f%%", nifty.totalPct) : "");
 

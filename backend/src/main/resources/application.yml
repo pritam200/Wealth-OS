@@ -10,7 +10,7 @@ spring:
 # what must differ in a hosted deployment.
 spring:
   config:
-    import: optional:file:./neon.env[.properties],optional:file:./backend/neon.env[.properties],optional:file:./mail.env[.properties],optional:file:./backend/mail.env[.properties]
+    import: optional:file:./mail.env[.properties],optional:file:./backend/mail.env[.properties]
   # More than Spring's single default thread: the sync-lock heartbeat (every 30s) must not wait
   # behind a long nightly sweep, or a live sync's lock goes stale and a second sync takes it over.
   task:

@@ -130,7 +130,7 @@ export interface AnalystAssessment {
   barsAvailable?: number | null;   // daily bars of real price history behind this assessment
 }
 
-export type MfNextAction = 'CONTINUE_SIP' | 'INCREASE_SIP' | 'PAUSE_SIP' | 'HOLD'
+export type MfNextAction = 'CONTINUE_SIP' | 'INCREASE_SIP' | 'PAUSE_SIP' | 'REDIRECT_SIP' | 'TOP_UP' | 'HOLD'
   | 'PARTIAL_PROFIT_BOOKING' | 'FULL_REDEMPTION' | 'REBALANCE' | 'SWITCH_FUND';
 
 export const analystApi = {

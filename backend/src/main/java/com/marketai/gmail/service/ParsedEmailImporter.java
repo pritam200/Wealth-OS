@@ -824,13 +824,49 @@ public class ParsedEmailImporter {
             .build());
     }
 
-    private com.marketai.card.entity.CreditCard findCard(Long userId, ParsedEmail pe) {
-        List<com.marketai.card.entity.CreditCard> matches = new ArrayList<>();
-        if (pe.getCardLast4() != null) {
-            matches = cardRepo.findByUserIdAndLastFour(userId, pe.getCardLast4());
+    /**
+     * Keeps the figures a card statement states, against the card they belong to. Unlike
+     * {@link #applyCardBill} it changes nothing on the card itself: the person applies the
+     * statement from the card's page. Returns false when nothing was kept — no card matches
+     * (several from one issuer need the last 4 digits), or this email's statement is already on file.
+     */
+    public boolean recordCardStatement(Long userId, com.marketai.card.service.CardStatementFacts f, String gmailMessageId) {
+        if (f == null || f.totalDue() == null || f.totalDue().signum() <= 0) return false;
+        if (cardStatementRepo.existsByUserIdAndSourceEmailId(userId, gmailMessageId)) return false;
+        com.marketai.card.entity.CreditCard card = findCard(userId, f.cardLast4(), f.issuer());
+        if (card == null) {
+            log.info("Card statement in {} matches no single saved card (issuer {}, last4 {})", gmailMessageId, f.issuer(), f.cardLast4());
+            return false;
         }
-        if (matches.isEmpty() && pe.getBank() != null) {
-            matches = cardRepo.findByUserIdAndIssuerIgnoreCase(userId, pe.getBank());
+        cardStatementRepo.save(com.marketai.card.entity.CardStatement.builder()
+            .cardId(card.getId()).userId(userId)
+            .statementDate(f.statementDate()).dueDate(f.dueDate())
+            .totalDue(f.totalDue()).minimumDue(f.minimumDue()).previousBalance(f.previousBalance())
+            .creditLimit(f.creditLimit()).availableLimit(f.availableLimit())
+            .cardLastFour(f.cardLast4()).flagsJson(f.flagsJson())
+            .sourceEmailId(gmailMessageId).build());
+        return true;
+    }
+
+    private com.marketai.card.entity.CreditCard findCard(Long userId, ParsedEmail pe) {
+        return findCard(userId, pe.getCardLast4(), pe.getBank());
+    }
+
+    private com.marketai.card.entity.CreditCard findCard(Long userId, String last4, String bank) {
+        List<com.marketai.card.entity.CreditCard> matches = new ArrayList<>();
+        if (last4 != null) {
+            matches = cardRepo.findByUserIdAndLastFour(userId, last4);
+        }
+        if (matches.isEmpty() && bank != null) {
+            matches = cardRepo.findByUserIdAndIssuerIgnoreCase(userId, bank);
+        }
+        if (matches.isEmpty() && bank != null) {
+            // "HDFC Bank" on a statement, "HDFC" on the saved card.
+            String b = bank.toLowerCase().replaceAll("[^a-z0-9]", "");
+            matches = cardRepo.findByUserIdOrderByCreatedAtDesc(userId).stream()
+                .filter(c -> c.getIssuer() != null && !c.getIssuer().isBlank()
+                    && b.contains(c.getIssuer().toLowerCase().replaceAll("[^a-z0-9]", "")))
+                .toList();
         }
         // With two cards from one issuer and no last-4 to tell them apart, picking the first
         // would attach the bill or payment to whichever card happened to be saved first.

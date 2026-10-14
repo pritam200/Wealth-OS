@@ -27,6 +27,7 @@ public class CardStatementController {
     private final CardStatementRepository statementRepository;
     private final CardPaymentRepository paymentRepository;
     private final CardReconciliationService reconciliationService;
+    private final com.marketai.card.service.CardStatementApplyService applyService;
 
     @GetMapping("/statements")
     public ResponseEntity<List<StatementResponse>> statements(@AuthenticationPrincipal User user,
@@ -35,6 +36,13 @@ public class CardStatementController {
         List<StatementResponse> out = statementRepository.findByCardIdOrderByDueDateDesc(cardId).stream()
             .map(this::toDto).collect(Collectors.toList());
         return ResponseEntity.ok(out);
+    }
+
+    /** Copies the latest statement's figures (or the one given) onto the card. */
+    @PostMapping("/apply-statement")
+    public ResponseEntity<ApplyResult> applyStatement(@AuthenticationPrincipal User user, @PathVariable Long cardId,
+                                                      @RequestParam(required = false) Long statementId) {
+        return ResponseEntity.ok(applyService.apply(user.getId(), cardId, statementId));
     }
 
     @GetMapping("/payments")
@@ -58,7 +66,10 @@ public class CardStatementController {
     }
 
     private StatementResponse toDto(CardStatement s) {
+        var flags = com.marketai.card.service.CardStatementAnalyzer.flagsFor(s);
         return StatementResponse.builder()
+            .creditLimit(s.getCreditLimit()).availableLimit(s.getAvailableLimit())
+            .cardLastFour(s.getCardLastFour()).flags(flags)
             .id(s.getId()).statementDate(s.getStatementDate()).dueDate(s.getDueDate())
             .totalDue(s.getTotalDue()).minimumDue(s.getMinimumDue())
             .previousBalance(s.getPreviousBalance())

@@ -7,6 +7,8 @@ const NEXT_ACTION_META: Record<string, { label: string; tone: 'buy' | 'hold' | '
   CONTINUE_SIP:            { label: 'CONTINUE SIP',  tone: 'hold' },
   INCREASE_SIP:            { label: 'INCREASE SIP',  tone: 'buy' },
   PAUSE_SIP:               { label: 'PAUSE SIP',     tone: 'watch' },
+  REDIRECT_SIP:            { label: 'REDIRECT SIP',  tone: 'watch' },
+  TOP_UP:                  { label: 'TOP UP',        tone: 'buy' },
   HOLD:                    { label: 'HOLD',          tone: 'hold' },
   PARTIAL_PROFIT_BOOKING:  { label: 'BOOK PROFIT',   tone: 'watch' },
   FULL_REDEMPTION:         { label: 'REDEEM',         tone: 'sell' },

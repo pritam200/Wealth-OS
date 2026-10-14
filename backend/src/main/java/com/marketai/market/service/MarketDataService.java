@@ -38,6 +38,17 @@ public class MarketDataService {
     private final MarketIndexRepository marketIndexRepository;
     private final YahooFinanceClient yahooClient;
 
+    /**
+     * Batch writer for new history rows. Optional so the service still works (one row at a time
+     * through JPA) where no JDBC template is wired, as in unit tests.
+     */
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setJdbcTemplate(org.springframework.jdbc.core.JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
     private static final Map<String, String> INDEX_SYMBOLS;
     static {
         INDEX_SYMBOLS = new HashMap<>();
@@ -280,11 +291,29 @@ public class MarketDataService {
                 int gap = weekdaysBetween(newest.getDate(), expected);
                 range = gap <= 4 ? "5d" : gap <= 20 ? "1mo" : gap <= 60 ? "3mo" : "1y";
             }
-            fetchAndStorePriceHistory(symbol, range);
+            // A first fetch writes ~2,500 rows one by one inside a single transaction, holding a
+            // pooled connection throughout. A holdings page asks for dozens of symbols at once, and
+            // letting them all run pinned the whole pool, so every other request waited behind them.
+            // Only a few run at a time; a symbol that cannot get a turn is simply picked up by the
+            // next request, and the caller reports it as having no data yet.
+            if (!historyBackfillGate.tryAcquire(45, java.util.concurrent.TimeUnit.SECONDS)) {
+                log.info("History top-up for {} deferred — other symbols are still loading", symbol);
+                return;
+            }
+            try {
+                fetchAndStorePriceHistory(symbol, range);
+            } finally {
+                historyBackfillGate.release();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         } catch (Exception e) {
             log.warn("Could not top up price history for {}: {}", symbol, e.getMessage());
         }
     }
+
+    /** How many symbols may download and store history at once; see {@link #ensureFreshDailyHistory}. */
+    private final java.util.concurrent.Semaphore historyBackfillGate = new java.util.concurrent.Semaphore(3);
 
     @Transactional
     public void fetchAndStorePriceHistory(String symbol, String range) {
@@ -360,7 +389,32 @@ public class MarketDataService {
             toSave.add(row);
             updated++;
         }
-        priceHistoryRepository.saveAll(toSave);
+        // New rows go in as one JDBC batch. The ids are database identities, which stops
+        // Hibernate from batching, so saveAll sent a separate round trip per row — ~2,500 of them
+        // for a first 10-year fetch, minutes per symbol against a remote database.
+        List<PriceHistory> fresh = toSave.stream().filter(r -> r.getId() == null).toList();
+        if (jdbc != null && !fresh.isEmpty()) {
+            jdbc.batchUpdate("insert into price_history (symbol, date, open, high, low, close, adj_close, volume, "
+                    + "exchange, provider, bar_interval, ingested_at, updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                fresh, 500, (ps, r) -> {
+                    ps.setString(1, r.getSymbol());
+                    ps.setObject(2, r.getDate());
+                    ps.setBigDecimal(3, r.getOpen());
+                    ps.setBigDecimal(4, r.getHigh());
+                    ps.setBigDecimal(5, r.getLow());
+                    ps.setBigDecimal(6, r.getClose());
+                    ps.setBigDecimal(7, r.getAdjClose());
+                    ps.setObject(8, r.getVolume());
+                    ps.setString(9, r.getExchange());
+                    ps.setString(10, r.getProvider());
+                    ps.setString(11, r.getInterval());
+                    ps.setObject(12, r.getIngestedAt());
+                    ps.setObject(13, r.getUpdatedAt());
+                });
+            priceHistoryRepository.saveAll(toSave.stream().filter(r -> r.getId() != null).toList());
+        } else {
+            priceHistoryRepository.saveAll(toSave);
+        }
 
         if (rescaled > 0) {
             log.warn("{}: {} stored bar(s) differed from Yahoo by more than 20% and were rewritten — likely a split or bonus", symbol, rescaled);

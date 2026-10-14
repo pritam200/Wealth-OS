@@ -57,6 +57,13 @@ export const onboardingApi = {
     if (password) f.append('password', password);
     return apiClient.post<{ source: SourceView; summary: CasSummary }>(`/api/onboarding/sources/${id}/import-cas`, f);
   },
+  /** One box for any CAS PDF: the kind is detected and a locked file is opened with passwords worked out from the saved PAN / DOB. */
+  importCasAuto: (file: File, password: string) => {
+    const f = new FormData();
+    f.append('file', file);
+    if (password) f.append('password', password);
+    return apiClient.post<{ source: SourceView; summary: CasSummary & { kind: 'MUTUAL_FUND' | 'DEMAT' } }>('/api/onboarding/import-cas-auto', f);
+  },
   importFile: (id: number, file: File, completeStatement: boolean) => {
     const f = new FormData();
     f.append('file', file);

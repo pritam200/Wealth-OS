@@ -46,6 +46,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Single LLM-based replacement for the whole regex parser cascade (18 {@code EmailParser}
@@ -411,6 +412,8 @@ public class EmailLLMParserService {
         LlmTask extractTask = src.isDocument() ? LlmTask.DOCUMENT_EXTRACTION : LlmTask.EMAIL_EXTRACTION;
         int imported = 0, duplicates = 0, conflicts = 0, extracted = 0, queuedForReview = 0, rejected = 0, resolved = 0;
         StatementTotals totals = new StatementTotals();
+        JsonNode cardStatementNode = null;
+        List<JsonNode> allTxns = new ArrayList<>();
         List<String> summaries = new ArrayList<>();
         java.util.Map<String, Integer> occurrences = new java.util.HashMap<>();
         java.util.Map<String, Integer> rawOccurrences = new java.util.HashMap<>();
@@ -458,6 +461,10 @@ public class EmailLLMParserService {
             totals.readStated(root.get("statement_totals"), sourceText);
             JsonNode txns = root.get("transactions");
             if (txns != null && txns.isArray()) totals.addLines(txns);
+            if (cardStatementNode == null && root.get("card_statement") != null && root.get("card_statement").isObject()) {
+                cardStatementNode = root.get("card_statement");
+            }
+            if (txns != null && txns.isArray()) txns.forEach(allTxns::add);
             if (txns == null || !txns.isArray() || txns.isEmpty()) {
                 audit.record(userId, EXTRACT_TASK, gmailMessageId, PromptLibrary.TRANSACTION_EXTRACTION.system(), prompt, completion,
                     overallConfidence, "ACCEPTED", "No transactions found");
@@ -631,6 +638,14 @@ public class EmailLLMParserService {
                 lastCompletion, EventState.RECONCILIATION_REQUIRED, totals.detail()));
         } else {
             ledger.resolveIfOpen(userId, gmailMessageId, totalsKey, "The document's own totals match the lines read from it.");
+        }
+        if (cardStatementNode != null && !senderBlocked) {
+            try {
+                importer.recordCardStatement(userId, cardStatementFacts(cardStatementNode, allTxns, sourceText), gmailMessageId);
+            } catch (RuntimeException e) {
+                // The statement's figures are a bonus on top of its transactions; never fail the import over them.
+                log.warn("Could not keep the card statement figures from {}: {}", gmailMessageId, e.getMessage());
+            }
         }
         if (!anyTransactions) {
             return Result.builder().outcome(Outcome.NOT_FINANCIAL)
@@ -809,6 +824,48 @@ public class EmailLLMParserService {
      * transaction is: an un-groundable closing balance is not a financial event that needs
      * booking, it is a number that just isn't usable as an independent check yet.
      */
+    /**
+     * The card statement's own figures, each kept only when the line quoted for it states it —
+     * a due amount that is not written in its evidence is dropped, and so is the whole statement.
+     * Also runs the charge/unusual-activity scan over the statement's extracted lines.
+     */
+    private com.marketai.card.service.CardStatementFacts cardStatementFacts(JsonNode node, List<JsonNode> txns, String sourceText) {
+        String evidence = json.str(node, "evidence");
+        if (!SpanVerifier.appearsIn(sourceText, evidence)) return null;
+        BigDecimal totalDue = json.decimal(node, "total_due");
+        if (totalDue == null || !SpanVerifier.containsAmount(evidence, totalDue)) return null;
+        BigDecimal minimumDue = json.decimal(node, "minimum_due");
+        if (minimumDue != null && !SpanVerifier.containsAmount(evidence, minimumDue)) minimumDue = null;
+        LocalDate dueDate = parseDate(json.str(node, "due_date"));
+        if (dueDate != null && !SpanVerifier.containsDate(evidence, dueDate)) dueDate = null;
+        LocalDate statementDate = parseDate(json.str(node, "statement_date"));
+        if (statementDate != null && !SpanVerifier.containsDate(sourceText, statementDate)) statementDate = null;
+        BigDecimal previous = json.decimal(node, "previous_balance");
+        if (previous != null && !SpanVerifier.containsAmount(sourceText, previous)) previous = null;
+
+        String limitEvidence = json.str(node, "limit_evidence");
+        boolean limitGrounded = SpanVerifier.appearsIn(sourceText, limitEvidence);
+        BigDecimal limit = json.decimal(node, "credit_limit");
+        if (limit != null && !(limitGrounded && SpanVerifier.containsAmount(limitEvidence, limit))) limit = null;
+        BigDecimal available = json.decimal(node, "available_limit");
+        if (available != null && !(limitGrounded && SpanVerifier.containsAmount(limitEvidence, available))) available = null;
+        String last4 = json.str(node, "card_last4");
+        if (last4 != null && !last4.matches("\\d{4}")) last4 = null;
+
+        List<com.marketai.card.service.CardStatementAnalyzer.Line> lines = new ArrayList<>();
+        for (JsonNode t : txns) {
+            BigDecimal amt = json.decimal(t, "amount_inr");
+            if (amt == null) amt = json.decimal(t, "amount");
+            String type = up(json.str(t, "transaction_type"));
+            if (amt == null || (!"DEBIT".equals(type) && !"CREDIT".equals(type))) continue;
+            lines.add(new com.marketai.card.service.CardStatementAnalyzer.Line(json.str(t, "merchant"), amt.abs(),
+                parseDate(json.str(t, "transaction_date")), json.str(t, "currency"), "DEBIT".equals(type), json.str(t, "evidence")));
+        }
+        var flags = com.marketai.card.service.CardStatementAnalyzer.analyze(lines, limit, totalDue);
+        return new com.marketai.card.service.CardStatementFacts(json.str(node, "issuer"), last4, statementDate, dueDate,
+            totalDue, minimumDue, previous, limit, available, com.marketai.card.service.CardStatementAnalyzer.toJson(flags));
+    }
+
     private void persistClosingBalances(Long userId, JsonNode closingBalances, String sourceText,
                                         String gmailMessageId) {
         if (closingBalances == null || !closingBalances.isArray() || closingBalances.isEmpty()) return;
@@ -1068,6 +1125,11 @@ public class EmailLLMParserService {
             }
         }
 
+        // The model often leaves instrument_type empty on a plain bank/UPI alert. A bare debit or
+        // credit with a verified amount and date is a bank movement; anything else still goes to review.
+        if (instrumentType == null && ("DEBIT".equals(transactionType) || "CREDIT".equals(transactionType))) {
+            instrumentType = "BANK";
+        }
         return switch (instrumentType == null ? "" : instrumentType) {
             case "MF" -> Extraction.orReview(toMfParsedEmail(t, transactionType, amount, date),
                 "The mutual fund scheme could not be matched to an AMFI scheme, or the transaction type was unclear.");
@@ -1519,6 +1581,10 @@ public class EmailLLMParserService {
         if (claimedIssuer == null || claimedIssuer.isBlank() || domain == null) return false;
         Optional<String> verified = IssuerDomainRegistry.issuerFor(domain);
         if (verified.isEmpty()) return false; // unknown domain — not evidence of spoofing on its own
+        // Registrars send on behalf of AMCs and listed companies (an SBI Mutual Fund purchase
+        // confirmation or a PFC dividend notice both arrive from CAMS/KFintech), so a different
+        // named issuer there is the normal case, not impersonation.
+        if (Set.of("CAMS", "KFintech", "MF Central").contains(verified.get())) return false;
         String v = verified.get().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
         String c = claimedIssuer.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
         return !v.contains(c) && !c.contains(v);
