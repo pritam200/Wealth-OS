@@ -74,6 +74,8 @@ public class SignalPayload {
     private Map<String, Factor> factors;
 
     private Execution execution;         // null for HOLD / INSUFFICIENT_DATA
+    /** Levels for the rule's own BUY/SELL reading, validated or not — the "model call". */
+    private Execution modelExecution;
     private List<Guardrail> guardrails;
     private List<String> rationale;
     private String engineVersion;

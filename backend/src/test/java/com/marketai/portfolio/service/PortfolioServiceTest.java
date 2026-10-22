@@ -574,4 +574,69 @@ class PortfolioServiceTest {
         verify(holdingRepository).delete(titanB);
         verify(holdingRepository, never()).delete(cleanStock);
     }
+    private Transaction openingLot(String qty, String price) {
+        return Transaction.builder().id(500L).type(Transaction.TransactionType.BUY)
+            .quantity(new BigDecimal(qty)).price(new BigDecimal(price))
+            .transactionDate(LocalDate.of(2026, 10, 14))
+            .notes("Imported from CAS summary (cost value only); buy date unknown (import date used)").build();
+    }
+
+    private Holding fund() {
+        return Holding.builder().id(7L).portfolio(Portfolio.builder().id(PORTFOLIO_ID).build())
+            .symbol("SBIMIDCAP.MF").name("SBI Midcap Fund").quantity(new BigDecimal("100"))
+            .averageCost(new BigDecimal("200")).build();
+    }
+
+    private AddHoldingRequest sipInstalment(String date) {
+        AddHoldingRequest req = new AddHoldingRequest();
+        req.setSymbol("SBIMIDCAP.MF");
+        req.setName("SBI Midcap Fund");
+        req.setQuantity(new BigDecimal("10"));
+        req.setPrice(new BigDecimal("150"));
+        req.setTransactionDate(LocalDate.parse(date));
+        req.setCharges(BigDecimal.ZERO);
+        return req;
+    }
+
+    @Test
+    void sipBeforeTheSummaryIsCarvedOutOfTheOpeningLot_notAddedOnTop() {
+        Transaction lot = openingLot("100", "200");
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "SBIMIDCAP.MF")).thenReturn(Optional.of(fund()));
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(7L)).thenReturn(List.of(lot));
+
+        Holding h = service.addHolding(PORTFOLIO_ID, USER_ID, sipInstalment("2025-06-05"));
+
+        // 100 units cost 20,000 in all; the dated instalment takes 10 units costing 1,500.
+        assertThat(lot.getQuantity()).isEqualByComparingTo("90");
+        assertThat(lot.getPrice()).isEqualByComparingTo("205.5556"); // 18,500 / 90
+        assertThat(h.getBuyDate()).isEqualTo(LocalDate.of(2025, 6, 5));
+    }
+
+    @Test
+    void purchaseAfterTheSummaryIsAddedNormally() {
+        Transaction lot = openingLot("100", "200");
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "SBIMIDCAP.MF")).thenReturn(Optional.of(fund()));
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(7L)).thenReturn(List.of(lot));
+
+        service.addHolding(PORTFOLIO_ID, USER_ID, sipInstalment("2026-10-20"));
+
+        assertThat(lot.getQuantity()).isEqualByComparingTo("100");
+        assertThat(service.predatesOpeningLot(7L, LocalDate.of(2026, 10, 20))).isFalse();
+        assertThat(service.predatesOpeningLot(7L, LocalDate.of(2026, 3, 1))).isTrue();
+    }
+    @Test
+    void samePurchaseFromTwoEmailsIsOneEvenWhenDateAndRoundingDiffer() {
+        Transaction booked = Transaction.builder().type(Transaction.TransactionType.BUY)
+            .quantity(new BigDecimal("2.8130")).price(new BigDecimal("177.7400"))
+            .transactionDate(LocalDate.of(2026, 9, 5)).build();
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "SBIMIDCAP.MF")).thenReturn(Optional.of(fund()));
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(7L)).thenReturn(List.of(booked));
+
+        // The confirmation: allotted a day later, units to 3 places.
+        assertThat(service.isDuplicateFundPurchase(PORTFOLIO_ID, "SBIMIDCAP.MF", LocalDate.of(2026, 9, 6),
+            new BigDecimal("2.813"), new BigDecimal("177.74"))).isTrue();
+        // Next month's instalment is a new purchase.
+        assertThat(service.isDuplicateFundPurchase(PORTFOLIO_ID, "SBIMIDCAP.MF", LocalDate.of(2026, 10, 5),
+            new BigDecimal("2.813"), new BigDecimal("177.74"))).isFalse();
+    }
 }

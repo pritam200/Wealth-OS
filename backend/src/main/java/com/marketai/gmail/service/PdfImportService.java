@@ -80,7 +80,11 @@ public class PdfImportService {
 
     public List<PendingPdf> list(Long userId) {
         List<PendingPdf> items = pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, PENDING_STATUSES);
-        backfillHints(userId, items);
+        // Cheap fill-ins only. Re-reading each email from Gmail and asking the model for its
+        // password format used to happen here, on every page load: ~150 statements meant minutes
+        // per request on the local model, holding web threads and starving the sync of the model.
+        // That now runs in bulkAutoUnlock, in the background.
+        backfillHints(userId, items, false);
         // Auto-unlock is NOT done here — it's too slow for a synchronous GET (downloads
         // PDFs from Gmail, attempts decryption). It runs during sync and bulkAutoUnlock instead.
         return items;
@@ -107,9 +111,22 @@ public class PdfImportService {
                 if (pdf.getResultSummary() != null && pdf.getResultSummary().contains("image-capable model")) locked.add(pdf);
             }
         }
+        // Statements with no known password format get one model read of their email, here in the
+        // background rather than in the page request.
+        backfillHints(userId, locked.stream().filter(p -> p.getPasswordHint() == null).toList(), true);
         int unlocked = 0;
         for (PendingPdf pdf : locked) {
             if (pdf.getProviderKey() == null && !"NEEDS_OCR".equals(pdf.getStatus())) continue;
+            // A statement queued without a password format (the model missed it, or was down)
+            // never had a derived password tried. Borrow the format another statement from the
+            // same sender already established, so a full sync can open it.
+            if (pdf.getPasswordHint() == null && pdf.getProviderKey() != null) {
+                String hint = findKnownHint(userId, pdf.getProviderKey());
+                if (hint != null) {
+                    pdf.setPasswordHint(hint);
+                    pendingPdfRepo.save(pdf);
+                }
+            }
             try {
                 tryAutoUnlock(userId, pdf);
                 PendingPdf refreshed = pendingPdfRepo.findById(pdf.getId()).orElse(pdf);
@@ -144,12 +161,12 @@ public class PdfImportService {
     // API call per legacy row to re-read the body text.
     // Hints that were stored by earlier buggy extraction logic (e.g. "Folio number" or
     // "Customer ID" when the email actually says PAN). Instead of maintaining an ever-growing
-    // list, backfillHints always re-extracts from the email body and replaces the stored hint
-    // whenever the fresh result differs — so improving PasswordHintExtractor automatically
-    // fixes all previously-wrong rows on the next list() call.
+    // list, the background pass re-extracts from the email body of statements that still have no
+    // hint. Page loads (readEmails=false) only fill in what needs no Gmail or model call.
 
-    private void backfillHints(Long userId, List<PendingPdf> items) {
-        GmailToken token = tokenRepo.findByUserId(userId).orElse(null);
+    private void backfillHints(Long userId, List<PendingPdf> items, boolean readEmails) {
+        if (items.isEmpty()) return;
+        GmailToken token = readEmails ? tokenRepo.findByUserId(userId).orElse(null) : null;
         Gmail gmail = null;
         if (token != null) {
             try { gmail = gmailClient.buildGmailService(token.getAccessToken(), token.getRefreshToken()); }

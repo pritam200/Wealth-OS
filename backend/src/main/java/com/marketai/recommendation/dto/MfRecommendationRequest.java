@@ -13,6 +13,8 @@ public class MfRecommendationRequest {
     private BigDecimal investedValue;
     private BigDecimal currentValue;
     private BigDecimal quantity;
+    /** AMFI scheme code when the holding is linked; resolved from the fund name otherwise. */
+    private String schemeCode;
     // Total value of ALL mutual fund holdings in the portfolio (not just this one) —
     // used for the concentration/rebalance check. Cheap for the caller to supply
     // since the frontend already has every holding in memory; avoids a DB round-trip here.

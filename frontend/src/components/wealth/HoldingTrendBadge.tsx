@@ -71,10 +71,17 @@ export function HoldingTrendBadge({ symbol, pnlPercent, holdingValue, totalPortf
     );
   }
 
-  const sig = NEXT_ACTION_STYLE[data.nextAction] ?? NEXT_ACTION_STYLE.NO_ACTIONABLE_SIGNAL;
   const trend = data.fundamentals?.trend;
   const up = trend?.includes('UPTREND');
   const down = trend?.includes('DOWNTREND');
+  // No validated buy/sell call is the usual case, and a column of identical "NO SIGNAL" badges
+  // told the user nothing. Show the descriptive trend instead; the tooltip still says it is
+  // not a trade call.
+  const noCall = !NEXT_ACTION_STYLE[data.nextAction] || data.nextAction === 'NO_ACTIONABLE_SIGNAL';
+  const sig = noCall && trend && trend !== 'INSUFFICIENT_DATA'
+    ? { cls: `${up ? 'text-bull' : down ? 'text-bear' : 'text-gray-400'} bg-transparent border-dashed border-surface-border`,
+        label: trend.replace('STRONG_', 'STRONG ').replace('_', ' ') }
+    : NEXT_ACTION_STYLE[data.nextAction] ?? NEXT_ACTION_STYLE.NO_ACTIONABLE_SIGNAL;
   const TrendIcon = up ? ArrowUpRight : down ? ArrowDownRight : Minus;
   const trendColor = up ? 'text-bull' : down ? 'text-bear' : 'text-gray-500';
   const title = [

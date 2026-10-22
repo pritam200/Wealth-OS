@@ -76,6 +76,15 @@ public class MfSchemeLinkService {
         String symbol = holding.getSymbol();
         if (symbol == null || !symbol.endsWith(".MF")) return null;
 
+        // An ISIN identifies exactly one plan and option, so it links without the name heuristics.
+        AmfiNavResult byIsin = amfiNavService.findByIsin(holding.getIsin());
+        if (byIsin != null) {
+            holding.setAmfiSchemeCode(byIsin.getSchemeCode());
+            holdingRepository.save(holding);
+            log.info("Linked MF holding '{}' -> AMFI scheme {} by ISIN {}", holding.getName(), byIsin.getSchemeCode(), holding.getIsin());
+            return byIsin.getSchemeCode();
+        }
+
         String name = holding.getName();
         if (name == null || name.trim().length() < 3) return null;
 

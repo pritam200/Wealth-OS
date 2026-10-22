@@ -556,10 +556,11 @@ export function SetupChecklistPage() {
           onAdded={() => load()} onChanged={() => load()} onRemoved={() => load()} />
       ))}
 
-      {/* Sources that already exist stay visible and editable (watermarks, re-upload, remove). */}
-      {data.sources.some(s => s.kind === 'MUTUAL_FUNDS' || s.kind === 'STOCKS') && (
-        <details className="card">
-          <summary className="text-sm font-bold text-ink cursor-pointer">Your mutual fund and share sources</summary>
+      {/* Always shown: this is where a broker is added for the "What you paid" tradebook upload.
+          Showing it only once a source existed left a new user nowhere to add the first one. */}
+      {(
+        <details className="card" open={!data.sources.some(s => s.kind === 'MUTUAL_FUNDS' || s.kind === 'STOCKS')}>
+          <summary className="text-sm font-bold text-ink cursor-pointer">Your mutual fund and share sources (add a broker, upload a tradebook)</summary>
           <div className="mt-3 space-y-3">
             {data.guides.filter(g => g.kind === 'MUTUAL_FUNDS' || g.kind === 'STOCKS').map(g => (
               <KindSection key={g.kind} guide={g}

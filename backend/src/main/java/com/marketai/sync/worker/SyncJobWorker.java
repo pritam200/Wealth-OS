@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.*;
@@ -37,6 +38,7 @@ public class SyncJobWorker {
     private int staleAfterMinutes;
 
     private ExecutorService pool;
+    private final LocalDateTime startedAt = LocalDateTime.now();
     private final String workerId = "worker-" + java.util.UUID.randomUUID().toString().substring(0, 8);
 
     /** Jobs this JVM is currently running, so the poller doesn't re-dispatch them. */
@@ -108,10 +110,16 @@ public class SyncJobWorker {
         }
     }
 
-    /** Safety net for jobs whose worker died without releasing them. */
-    @Scheduled(fixedDelay = 600_000, initialDelay = 600_000)
+    /**
+     * Safety net for jobs whose worker died without releasing them. A job claimed before this
+     * process started cannot be ours, so it is requeued as soon as its sync lock goes stale
+     * (3 minutes) — a restart quicker than that used to leave it RUNNING for the full window,
+     * with every job queued behind it, including the Full Sync the user had just asked for.
+     */
+    @Scheduled(fixedDelay = 120_000, initialDelay = 240_000)
     public void reclaimStale() {
         try {
+            jobService.requeueStale(Duration.between(startedAt, LocalDateTime.now()), syncLockService::isHeld);
             jobService.requeueStale(Duration.ofMinutes(staleAfterMinutes), syncLockService::isHeld);
         } catch (Exception e) {
             log.warn("Stale-job reclaim failed: {}", e.getMessage());

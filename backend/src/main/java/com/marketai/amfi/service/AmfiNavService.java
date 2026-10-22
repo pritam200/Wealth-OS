@@ -107,6 +107,7 @@ public class AmfiNavService {
         String schemeType = null;
         String amc = null;
         int idxName = -1, idxNav = -1, idxDate = -1, skipped = 0;
+        int[] idxIsin = {1, 2};
 
         for (String rawLine : raw.split("\n")) {
             String line = rawLine.trim();
@@ -136,6 +137,7 @@ public class AmfiNavService {
                 idxName = indexOf(f, "Scheme Name");
                 idxNav  = indexOf(f, "Net Asset Value");
                 idxDate = indexOf(f, "Date");
+                idxIsin = isinColumns(f);
                 continue;
             }
 
@@ -154,6 +156,7 @@ public class AmfiNavService {
                     .schemeType(schemeType)
                     .amc(amc)
                     .categoryBucket(MfCategoryBucket.from(category))
+                    .isins(isinsOf(f, idxIsin))
                     .build());
             } catch (Exception e) {
                 skipped++;
@@ -176,6 +179,25 @@ public class AmfiNavService {
             if (c != null && c.trim().equalsIgnoreCase("Net Asset Value")) return true;
         }
         return false;
+    }
+
+    /** Columns whose header names an ISIN; AMFI's long-standing layout has them at 1 and 2. */
+    private static int[] isinColumns(String[] f) {
+        List<Integer> cols = new ArrayList<>();
+        for (int i = 0; i < f.length; i++) {
+            if (f[i] != null && f[i].trim().toUpperCase(Locale.ENGLISH).startsWith("ISIN")) cols.add(i);
+        }
+        return cols.isEmpty() ? new int[] {1, 2} : cols.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    private static List<String> isinsOf(String[] f, int[] cols) {
+        List<String> out = new ArrayList<>(2);
+        for (int c : cols) {
+            if (c >= f.length) continue;
+            String v = f[c].trim().toUpperCase(Locale.ENGLISH);
+            if (v.matches("IN[A-Z0-9]{10}")) out.add(v);
+        }
+        return out;
     }
 
     private static int indexOf(String[] f, String label) {
@@ -241,4 +263,21 @@ public class AmfiNavService {
     }
 
     public int cachedSchemeCount() { return cache.get().size(); }
+
+    /** Every scheme in the latest AMFI list; empty until the first refresh lands. */
+    public List<AmfiNavResult> all() { return cache.get(); }
+
+    /** The scheme carrying this exact ISIN, or null. An ISIN names one plan and option, unlike a name. */
+    public AmfiNavResult findByIsin(String isin) {
+        if (isin == null || isin.isBlank()) return null;
+        String q = isin.trim().toUpperCase(Locale.ENGLISH);
+        for (AmfiNavResult r : cache.get()) if (r.getIsins().contains(q)) return r;
+        return null;
+    }
+
+    public AmfiNavResult findByCode(String schemeCode) {
+        if (schemeCode == null) return null;
+        for (AmfiNavResult r : cache.get()) if (schemeCode.equals(r.getSchemeCode())) return r;
+        return null;
+    }
 }

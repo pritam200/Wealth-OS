@@ -10,13 +10,15 @@ import { AdvisorChat } from '../../components/advisor/AdvisorChat';
 import { StatTile } from '../../components/shared/StatTile';
 import { useMaskedText } from '../../components/shared/Amount';
 import { portfolioApi } from '../../api/portfolio';
-import { recommendationApi, recommendationMfApi, isInsufficient } from '../../api/analyst';
+import { recommendationApi, recommendationMfApi, isInsufficient, modelCallRecord, type ModelExecution } from '../../api/analyst';
 import type { NextAction, MfNextAction } from '../../api/analyst';
 import { aiApi } from '../../api/ai';
 import { ResearchSection } from '../../components/research/ResearchPanel';
 import { marketApi } from '../../api/market';
 import type { PortfolioSummary, HoldingDto, AiResponse, MarketOverview } from '../../types';
 
+const fmtPrice = (n: number) =>
+  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
 
@@ -28,10 +30,17 @@ interface Action {
   headline: string;
   reason: string;
   signal?: string;
+  /** The rule's raw BUY/SELL/HOLD reading — shown as unvalidated when no call has a proven edge. */
+  ruleOutput?: string;
+  ruleEvidence?: string;
+  modelLevels?: ModelExecution | null;
+  modelRecord?: string | null;
   trend?: string;
   rsi?: number;
   confidenceScore?: number | null;
   taxImpact?: string | null;
+  /** The fund engine's own working — what it looked at and why. Shown when the card is expanded. */
+  fundDetail?: { positives: string[]; risks: string[]; factors: { name: string; reading?: string | null; note?: string | null }[]; basis: string };
 }
 
 const ACTION_META: Record<ActionKind, { label: string; cls: string; Icon: any }> = {
@@ -86,6 +95,7 @@ async function decide(h: HoldingDto, totalMfPortfolioValue: number): Promise<Act
         holding: h, kind, headline: HEADLINE[kind] ?? 'Hold',
         reason: data.nextActionReason || [...(data.positives || []), ...(data.risks || [])].join(' ') || data.basis,
         confidenceScore: data.confidenceScore, taxImpact: data.taxImpact,
+        fundDetail: { positives: data.positives ?? [], risks: data.risks ?? [], factors: data.factorBreakdown ?? [], basis: data.basis },
       };
     } catch {
       // The call failed, so we know nothing about this fund right now. Deriving a verdict
@@ -106,6 +116,10 @@ async function decide(h: HoldingDto, totalMfPortfolioValue: number): Promise<Act
       // Indicator context is only shown when it's real — on the INSUFFICIENT path the
       // rating is null and the trend is UNKNOWN.
       signal: data.rating === 'BUY' || data.rating === 'SELL' ? data.rating : undefined,
+      ruleOutput: insufficient ? undefined : data.ruleOutput ?? undefined,
+      ruleEvidence: data.signalValidation?.summary,
+      modelLevels: insufficient ? undefined : data.modelExecution,
+      modelRecord: insufficient ? undefined : modelCallRecord(data.ruleOutput, data.signalValidation),
       trend: insufficient ? undefined : data.fundamentals?.trend,
       rsi: insufficient ? undefined : data.fundamentals?.rsi ?? undefined,
       confidenceScore: data.confidenceScore,
@@ -166,7 +180,7 @@ export function Tab9AiAdvisor() {
   const counts = actions.reduce((m, a) => { m[a.kind] = (m[a.kind] ?? 0) + 1; return m; }, {} as Record<string, number>);
   const exitCount = (counts.EXIT ?? 0) + (counts.BOOK_PROFIT ?? 0) + (counts.FULL_REDEMPTION ?? 0) + (counts.PARTIAL_PROFIT_BOOKING ?? 0);
   const continueCount = (counts.CONTINUE ?? 0) + (counts.ACCUMULATE ?? 0) + (counts.CONTINUE_SIP ?? 0) + (counts.INCREASE_SIP ?? 0) + (counts.TOP_UP ?? 0);
-  const reviewCount = (counts.REVIEW ?? 0) + (counts.REBALANCE ?? 0) + (counts.SWITCH_FUND ?? 0) + (counts.PAUSE_SIP ?? 0);
+  const reviewCount = (counts.REVIEW ?? 0) + (counts.REBALANCE ?? 0) + (counts.SWITCH_FUND ?? 0) + (counts.PAUSE_SIP ?? 0) + (counts.REDIRECT_SIP ?? 0);
   // Counted separately and never folded into an actionable bucket — these holdings have no
   // verdict at all, so rolling them into "Continue / Add" would overstate how much of the
   // portfolio the engine has actually vouched for.
@@ -291,6 +305,24 @@ export function Tab9AiAdvisor() {
                         {a.trend && <span className="text-gray-600">{a.trend.replace(/_/g, ' ').toLowerCase()}</span>}
                         {a.rsi != null && <span className="text-gray-600">RSI {a.rsi.toFixed(0)}</span>}
                       </div>
+                      {isStock && a.ruleOutput && ['BUY', 'SELL', 'HOLD'].includes(a.ruleOutput) && (
+                        <div className="mb-1.5 rounded border border-surface-border/60 px-2 py-1.5 text-2xs" title={a.ruleEvidence}>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-gray-500">Model call</span>
+                            <span className={`font-semibold ${a.ruleOutput === 'BUY' ? 'text-bull' : a.ruleOutput === 'SELL' ? 'text-bear' : 'text-gray-300'}`}>{a.ruleOutput}</span>
+                            {a.signal
+                              ? <span className="px-1 rounded bg-bull/10 text-bull border border-bull/30">Validated</span>
+                              : <span className="px-1 rounded text-amber-300/90 border border-dashed border-amber-500/50">Unvalidated</span>}
+                            {a.modelRecord && <span className="text-gray-600">· {a.modelRecord}</span>}
+                          </div>
+                          {a.modelLevels && (
+                            <div className="mt-1 font-mono text-gray-400">
+                              Entry {fmtPrice(a.modelLevels.entryLow)}–{fmtPrice(a.modelLevels.entryHigh)} · Stop {fmtPrice(a.modelLevels.stopLoss)} · Target {fmtPrice(a.modelLevels.takeProfit)}
+                              {a.modelLevels.riskRewardRatio != null && <span className="text-gray-600"> · R:R {a.modelLevels.riskRewardRatio}</span>}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <p className="text-xs text-gray-400 leading-snug"><span className="text-ink font-medium">{a.headline}.</span> {a.reason}</p>
                       {a.taxImpact && <p className="text-2xs text-neutral/90 mt-1">{a.taxImpact}</p>}
                       <div className="text-2xs text-brand mt-1.5 flex items-center gap-1">
@@ -301,6 +333,16 @@ export function Tab9AiAdvisor() {
                     {open && (
                       <div className="mt-3 pt-3 border-t border-surface-border/40 space-y-3">
                         {isStock && <AnalystPanel symbol={a.holding.symbol} name={a.holding.name} />}
+                        {a.fundDetail && (
+                          <div className="space-y-2 text-xs">
+                            {a.fundDetail.factors.map((f, i) => (
+                              <div key={i} className="text-gray-400"><span className="text-ink font-medium">{f.name}</span>{f.reading ? ` · ${f.reading}` : ''}{f.note ? ` — ${f.note}` : ''}</div>
+                            ))}
+                            {a.fundDetail.positives.map((r, i) => <div key={`p${i}`} className="text-gray-400 flex gap-1.5"><span className="text-bull">▸</span>{r}</div>)}
+                            {a.fundDetail.risks.map((r, i) => <div key={`r${i}`} className="text-gray-400 flex gap-1.5"><span className="text-bear">▸</span>{r}</div>)}
+                            <p className="text-2xs text-gray-600">{a.fundDetail.basis}</p>
+                          </div>
+                        )}
                         <ResearchSection subject={isStock ? { kind: 'stock', symbol: a.holding.symbol, name: a.holding.name } : { kind: 'fund', symbol: a.holding.symbol }}
                           title={isStock ? 'AI Research' : 'AI fund research'} />
                       </div>

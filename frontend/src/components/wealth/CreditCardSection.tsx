@@ -8,6 +8,8 @@ import type { CardResponse, CatalogEntry, RecommendResult, PointsTip, CardStatem
 import { useMaskedText } from '../shared/Amount';
 import { BestCardToGet } from './BestCardToGet';
 import { CardChargesPanel } from './CardChargesPanel';
+import { DetectedCardsPrompt } from './DetectedCardsPrompt';
+import { CardStatementsSection } from './CardStatementsSection';
 
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
@@ -68,6 +70,9 @@ export function CreditCardSection() {
       {/* ── Smart Spend Advisor (always on) ── */}
       <SpendAdvisor categories={categories} hasCards={cards.length > 0} />
 
+      {/* ── Cards seen in email but not saved yet ── */}
+      <DetectedCardsPrompt cards={cards} onChanged={load} />
+
       {/* ── My Cards ── */}
       <div className="card">
         <div className="flex items-center justify-between mb-4">
@@ -97,6 +102,9 @@ export function CreditCardSection() {
 
       {/* ── Bank charges and unusual activity from every statement read ── */}
       <CardChargesPanel refreshKey={cards.length} />
+
+      {/* ── Every statement's transactions, tallied against expenses ── */}
+      <CardStatementsSection cards={cards} refreshKey={cards.length} />
 
       {/* ── Rewards & Points (always visible) ── */}
       <RewardsPanel tips={tips} cards={cards} />
@@ -571,6 +579,13 @@ function StatementPanel({ card, onApplied }: { card: CardResponse; onApplied: ()
           {st.creditLimit != null && (
             <span>Limit {maskText(fmtINR(st.creditLimit))}{used != null && ` · ${used}% of limit`}</span>
           )}
+        </div>
+      )}
+      {st.tally && st.tally.lines > 0 && (
+        <div className="text-2xs text-gray-500">
+          {st.tally.lines} line{st.tally.lines === 1 ? '' : 's'} · {st.tally.matched} already in expenses
+          {st.tally.added > 0 && <> · <span className="text-brand-light">{st.tally.added} added from statement</span></>}
+          {st.tally.missing > 0 && <> · <span className="text-neutral">{st.tally.missing} not in expenses</span></>}
         </div>
       )}
       {st.flags.length > 0 ? (

@@ -101,6 +101,31 @@ public class PortfolioService {
         return false;
     }
 
+    /**
+     * One fund purchase reported by two emails — an SIP-instalment intimation and the purchase
+     * confirmation, or an email and a CAS — rarely matches exactly: one gives the debit date and
+     * the other the allotment date, one rounds units to 3 places and the other to 4. Exact
+     * date/units/NAV matching booked both. Same fund, within a few days, and the same units (to
+     * rounding) or the same rupee amount is the same purchase.
+     */
+    public boolean isDuplicateFundPurchase(Long portfolioId, String symbol, LocalDate date, BigDecimal units, BigDecimal nav) {
+        if (portfolioId == null || symbol == null || date == null || units == null || nav == null) return false;
+        Optional<Holding> holding = holdingRepository.findByPortfolioIdAndSymbol(portfolioId, symbol.toUpperCase());
+        if (holding.isEmpty()) return false;
+        BigDecimal amount = units.multiply(nav);
+        BigDecimal unitTolerance = units.abs().multiply(new BigDecimal("0.002")).max(new BigDecimal("0.005"));
+        for (Transaction t : transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(holding.get().getId())) {
+            if (t.getType() != Transaction.TransactionType.BUY || t.getTransactionDate() == null || t.getQuantity() == null) continue;
+            if (t.getNotes() != null && t.getNotes().toLowerCase(java.util.Locale.ROOT).contains(OPENING_LOT_MARKER)) continue;
+            if (Math.abs(ChronoUnit.DAYS.between(t.getTransactionDate(), date)) > 4) continue;
+            boolean sameUnits = t.getQuantity().subtract(units).abs().compareTo(unitTolerance) <= 0;
+            boolean sameAmount = t.getPrice() != null
+                && t.getQuantity().multiply(t.getPrice()).subtract(amount).abs().compareTo(BigDecimal.ONE) <= 0;
+            if (sameUnits || sameAmount) return true;
+        }
+        return false;
+    }
+
     /** What a corporate-action booking did — or why it could not be booked. */
     public record CorporateActionResult(boolean booked, boolean duplicate, String detail) {
         static CorporateActionResult ok(String d) { return new CorporateActionResult(true, false, d); }
@@ -266,6 +291,55 @@ public class PortfolioService {
         return nameSymbol;
     }
 
+    /** Marks the single BUY a holdings summary was loaded as: the units and cost the statement
+     *  stated, dated the day of import because the statement gave no purchase dates. */
+    static final String OPENING_LOT_MARKER = "buy date unknown";
+
+    private Optional<Transaction> openingLot(Long holdingId) {
+        return transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(holdingId).stream()
+            .filter(t -> t.getType() == Transaction.TransactionType.BUY && t.getNotes() != null
+                && t.getNotes().toLowerCase(java.util.Locale.ROOT).contains(OPENING_LOT_MARKER)
+                && t.getQuantity() != null && t.getQuantity().signum() > 0)
+            .findFirst();
+    }
+
+    /**
+     * True when this holding was loaded from a summary dated on or after {@code date}: whatever
+     * happened to it that day is already inside the summary's units.
+     */
+    public boolean predatesOpeningLot(Long holdingId, LocalDate date) {
+        if (holdingId == null || date == null) return false;
+        return openingLot(holdingId).map(t -> !date.isAfter(t.getTransactionDate())).orElse(false);
+    }
+
+    /**
+     * A purchase dated before the summary a holding was loaded from is already counted in that
+     * summary's units. Adding it as well double-counted it: every SIP instalment read from email
+     * grew the fund by units it never had. Instead the purchase is carved out of the opening lot —
+     * that lot shrinks by the same units and cost — so the totals stay what the statement said
+     * while the holding gains a real purchase date and, over several instalments, a SIP pattern.
+     */
+    private void carveFromOpeningLot(Holding holding, AddHoldingRequest req) {
+        if (req.getTransactionDate() == null || req.getQuantity() == null || req.getPrice() == null) return;
+        Transaction lot = openingLot(holding.getId()).orElse(null);
+        if (lot == null || req.getTransactionDate().isAfter(lot.getTransactionDate())) return;
+        BigDecimal units = req.getQuantity();
+        // Allow for the summary rounding units to 3 decimals.
+        BigDecimal tolerance = new BigDecimal("0.01");
+        if (lot.getQuantity().add(tolerance).compareTo(units) < 0) return; // not covered by the summary
+        BigDecimal remaining = lot.getQuantity().subtract(units);
+        if (remaining.compareTo(tolerance) <= 0) {
+            transactionRepository.delete(lot);
+            log.info("Opening lot of {} fully replaced by dated purchases", holding.getSymbol());
+            return;
+        }
+        BigDecimal lotCost = lot.getQuantity().multiply(lot.getPrice());
+        BigDecimal restCost = lotCost.subtract(units.multiply(req.getPrice()));
+        lot.setQuantity(remaining);
+        if (restCost.signum() > 0) lot.setPrice(restCost.divide(remaining, 4, RoundingMode.HALF_UP));
+        transactionRepository.save(lot);
+    }
+
     @Transactional
     public Holding addHolding(Long portfolioId, Long userId, AddHoldingRequest req) {
         Portfolio portfolio = portfolioRepository.findByIdAndUserId(portfolioId, userId)
@@ -339,6 +413,7 @@ public class PortfolioService {
         }
 
         holding = holdingRepository.save(holding);
+        if (existing.isPresent()) carveFromOpeningLot(holding, req);
 
         Transaction txn = Transaction.builder()
                 .holding(holding)

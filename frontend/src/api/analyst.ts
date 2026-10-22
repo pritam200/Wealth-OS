@@ -27,6 +27,21 @@ export interface SignalValidation {
   currentCallValidated: boolean; summary: string;
 }
 
+export interface ModelExecution {
+  entryLow: number; entryHigh: number; stopLoss: number; takeProfit: number;
+  riskRewardRatio: number | null; atr: number; basis: string;
+}
+
+/** One-line track record of the rule's current reading on this stock: "right 54% of 41 past calls (base 51%)". */
+export function modelCallRecord(call: string | null | undefined, v: SignalValidation | null | undefined): string | null {
+  if (!v || (call !== 'BUY' && call !== 'SELL')) return null;
+  const buy = call === 'BUY';
+  const hit = buy ? v.buyHitRate : v.sellHitRate, n = buy ? v.buyCalls : v.sellCalls;
+  if (hit == null || v.baseUpRate == null) return 'no past calls of this kind to measure';
+  const base = buy ? v.baseUpRate : 1 - v.baseUpRate;
+  return `past ${call} calls right ${Math.round(hit * 100)}% of ${n} (vs ${Math.round(base * 100)}% by chance)`;
+}
+
 export interface FundamentalFact {
   name: string; value: number | null; unit: string; period: string | null;
   source: string | null; fetchedAt: string | null; note: string | null;
@@ -93,6 +108,8 @@ export interface AnalystAssessment {
   compositeScore: number | null;
   ruleOutput?: string | null;
   signalValidation?: SignalValidation | null;
+  /** Entry/stop/target for the rule's own BUY/SELL reading, validated or not. */
+  modelExecution?: ModelExecution | null;
   trendAssessment?: TrendAssessment | null;
   fundamentalFacts?: FundamentalFact[] | null;
   priceDate?: string | null;

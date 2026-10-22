@@ -82,6 +82,13 @@ public class MfNavHistoryService {
         return toInsert.size();
     }
 
+    /** Date of the most recently stored NAV for a scheme, if any. */
+    public Optional<LocalDate> latestNavDate(String schemeCode) {
+        if (schemeCode == null || schemeCode.trim().isEmpty()) return Optional.empty();
+        return navHistoryRepository.findTopBySchemeCodeOrderByDateDesc(schemeCode.trim())
+                .map(MfNavHistory::getDate);
+    }
+
     /** Most recently stored NAV for a scheme, if any history has been fetched for it. */
     public Optional<BigDecimal> latestNav(String schemeCode) {
         if (schemeCode == null || schemeCode.trim().isEmpty()) return Optional.empty();

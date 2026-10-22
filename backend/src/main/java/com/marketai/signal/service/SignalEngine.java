@@ -110,6 +110,8 @@ public class SignalEngine {
                 .timeframesMissing(List.of())
                 .factors(now.factors())
                 .execution(actionable ? buildExecution(shown, lastClose, now.atr()) : null)
+                .modelExecution(now.type() == SignalPayload.Type.BUY || now.type() == SignalPayload.Type.SELL
+                        ? buildExecution(now.type(), lastClose, now.atr()) : null)
                 .guardrails(guardrails)
                 .rationale(rationale)
                 .validation(validation)

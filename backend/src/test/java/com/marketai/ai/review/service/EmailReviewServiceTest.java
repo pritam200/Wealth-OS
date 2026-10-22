@@ -166,4 +166,32 @@ class EmailReviewServiceTest {
             .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
             .hasMessageContaining("choose a type");
     }
+    private static EmailReviewItem pending(int index) {
+        EmailReviewItem i = EmailReviewItem.builder().userId(USER_ID).gmailMessageId("msg-1").itemIndex(index).build();
+        i.setStatus(com.marketai.ai.review.entity.ReviewStatus.PENDING);
+        return i;
+    }
+
+    @Test
+    @DisplayName("a full re-read drops pending questions it no longer has, and keeps the ones it asked again")
+    void rereadClearsSupersededItems() {
+        EmailReviewItem askedAgain = pending(0), superseded = pending(1);
+        when(repo.findByUserIdAndGmailMessageIdAndStatus(USER_ID, "msg-1", com.marketai.ai.review.entity.ReviewStatus.PENDING))
+            .thenReturn(java.util.List.of(askedAgain, superseded));
+
+        service.beginReread();
+        queue(sip()); // item 0 still uncertain
+        int cleared = service.finishReread(USER_ID, "msg-1", true);
+
+        assertThat(cleared).isEqualTo(1);
+        verify(repo).deleteAll(java.util.List.of(superseded));
+    }
+
+    @Test
+    @DisplayName("a partial re-read leaves the queue alone")
+    void partialRereadKeepsItems() {
+        service.beginReread();
+        assertThat(service.finishReread(USER_ID, "msg-1", false)).isZero();
+        verify(repo, never()).deleteAll(any());
+    }
 }

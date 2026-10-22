@@ -10,7 +10,8 @@ spring:
 # what must differ in a hosted deployment.
 spring:
   config:
-    import: optional:file:./mail.env[.properties],optional:file:./backend/mail.env[.properties]
+    # llm.env holds GEMINI_API_KEY for a machine where the key is not saved in Settings.
+    import: optional:file:./mail.env[.properties],optional:file:./backend/mail.env[.properties],optional:file:./llm.env[.properties],optional:file:./backend/llm.env[.properties]
   # More than Spring's single default thread: the sync-lock heartbeat (every 30s) must not wait
   # behind a long nightly sweep, or a live sync's lock goes stale and a second sync takes it over.
   task:
@@ -329,3 +330,13 @@ springdoc:
     enabled: false
   swagger-ui:
     enabled: false
+
+---
+# Local development reads the Neon connection from the git-ignored neon.env, so `./start.sh`
+# reaches Neon without exporting DB_* first. Dev only: a hosted deployment must never pick up a
+# developer's database credentials from a stray file in its working directory.
+spring:
+  config:
+    activate:
+      on-profile: "dev & !prod"
+    import: optional:file:./neon.env[.properties],optional:file:./backend/neon.env[.properties]

@@ -312,6 +312,7 @@ public class TodaysActionsService {
             MfRecommendationRequest req = new MfRecommendationRequest();
             req.setSymbol(h.getSymbol());
             req.setFundName(h.getName());
+            req.setSchemeCode(h.getAmfiSchemeCode());
             req.setBuyDate(h.getBuyDate());
             // The ledger-derived XIRR every portfolio screen shows, not the statement's copy.
             // Without a purchase date the ledger's dates are placeholders, so an XIRR from them means nothing.

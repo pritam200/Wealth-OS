@@ -194,6 +194,7 @@ public class GmailSyncService {
                 // is the backstop for exactly that. Known, expected failure points already have
                 // their own inner try/catch (PDF auto-unlock, bulk unlock) and are unaffected.
                 try {
+                emailReviewService.beginReread();
                 ProcessedEmail existing = processedRepo.findByUserIdAndGmailMessageId(userId, msgId).orElse(null);
                 if (existing != null) {
                     // Only two outcomes are genuinely terminal: a completed import, and a sender
@@ -476,7 +477,30 @@ public class GmailSyncService {
                         skipped++;
                     }
                 }
+                // An email tied to a PDF already handled elsewhere is not judged here: that PDF's
+                // own review items were not re-read in this pass.
+                emailReviewService.finishReread(userId, msgId, !queuedPdf && !result.isIncomplete()
+                    && result.getOutcome() != EmailLLMParserService.Outcome.UNAVAILABLE);
                 manifestService.refresh(userId, msgId, attachments.size(), attachmentsRead, String.join("; ", attachmentNotes));
+                } catch (com.google.api.client.googleapis.json.GoogleJsonResponseException e) {
+                    if (e.getStatusCode() != 404) {
+                        failed++;
+                        log.error("Failed to process message {} for user {}: {}", msgId, userId, e.getMessage(), e);
+                        saveProcessed(userId, msgId, "ERROR", "FAILED", "Sync error: " + e.getMessage(), null, null, null,
+                            com.marketai.gmail.entity.DocumentCounts.builder().outcome(com.marketai.gmail.entity.DocumentCounts.FAILED).build());
+                        logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                            .gmailMessageId(msgId).status("FAILED").detail("Sync error: " + e.getMessage())
+                            .build());
+                    } else {
+                        // Deleted (or permanently trashed) between the history event and the fetch:
+                        // nothing to import, and retrying can never succeed.
+                        log.warn("Message {} for user {} no longer exists in Gmail — skipping", msgId, userId);
+                        skipped++;
+                        saveProcessed(userId, msgId, "DELETED", "SKIPPED", "Message was deleted from Gmail before it could be read", null, null);
+                        logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                            .gmailMessageId(msgId).status("SKIPPED").detail("Deleted from Gmail before it could be read")
+                            .build());
+                    }
                 } catch (Exception e) {
                     log.error("Failed to process message {} for user {}: {}", msgId, userId, e.getMessage(), e);
                     failed++;

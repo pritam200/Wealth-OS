@@ -93,11 +93,41 @@ public final class XirrCalculator {
             if (t.getType() == com.marketai.portfolio.entity.Transaction.TransactionType.BUY) amount = amount.negate();
             flows.add(new CashFlow(t.getTransactionDate(), amount));
         }
+        // The ledger must explain the units actually held. A partial ledger (some SIP instalments
+        // missing, a switch-in without its purchase) yields a cash-flow set whose XIRR is meaningless
+        // — often negative for a fund that is in profit — so fall back to the statement figure.
+        if (!ledgerExplainsUnits(h, txns)) return h.getXirr();
         java.math.BigDecimal currentValue = h.getCurrentValue();
         if (currentValue != null && currentValue.signum() > 0) {
             flows.add(new CashFlow(java.time.LocalDate.now(), currentValue));
         }
         Double pct = computeXirrPercent(flows);
         return pct != null ? java.math.BigDecimal.valueOf(pct).setScale(2, java.math.RoundingMode.HALF_UP) : h.getXirr();
+    }
+
+    /** Units the transactions add up to: buys and bonuses in, sells out. */
+    public static java.math.BigDecimal ledgerUnits(java.util.List<com.marketai.portfolio.entity.Transaction> txns) {
+        java.math.BigDecimal net = java.math.BigDecimal.ZERO;
+        for (com.marketai.portfolio.entity.Transaction t : txns) {
+            if (t.getQuantity() == null || t.getType() == null) continue;
+            switch (t.getType()) {
+                case BUY, BONUS -> net = net.add(t.getQuantity());
+                case SELL -> net = net.subtract(t.getQuantity());
+                default -> { }
+            }
+        }
+        return net;
+    }
+
+    /**
+     * True when the ledger accounts for the units held (within 2%). A split rescales units without
+     * recording the multiplier, so a ledger with one is given the benefit of the doubt.
+     */
+    public static boolean ledgerExplainsUnits(com.marketai.portfolio.entity.Holding h,
+                                              java.util.List<com.marketai.portfolio.entity.Transaction> txns) {
+        java.math.BigDecimal held = h.getQuantity();
+        if (held == null || held.signum() <= 0) return true;
+        if (txns.stream().anyMatch(t -> t.getType() == com.marketai.portfolio.entity.Transaction.TransactionType.SPLIT)) return true;
+        return ledgerUnits(txns).subtract(held).abs().compareTo(held.multiply(new java.math.BigDecimal("0.02"))) <= 0;
     }
 }

@@ -37,12 +37,22 @@ class RecommendationEngineTest {
     }
 
     @Test
-    @DisplayName("A strong downtrend alone no longer triggers EXIT: no validated signal → NO_ACTIONABLE_SIGNAL")
-    void trendAloneIsNotAnAction() {
+    @DisplayName("No validated signal: the action comes from the trend, says so, and carries no confidence")
+    void trendDrivesTheActionWhenNoCallIsValidated() {
         when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "STRONG_DOWNTREND", null));
         AnalystAssessment a = engine.recommend("X", "X", -12.0, 1000.0, 100000.0);
-        assertThat(a.getNextAction()).isEqualTo("NO_ACTIONABLE_SIGNAL");
+        assertThat(a.getNextAction()).isEqualTo("EXIT");
+        assertThat(a.getNextActionReason()).contains("not a backtested signal");
         assertThat(a.getConfidenceScore()).isNull();
+
+        when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "STRONG_DOWNTREND", null));
+        assertThat(engine.recommend("X", "X", null, null, null).getNextAction()).isEqualTo("AVOID");
+        when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "UPTREND", null));
+        assertThat(engine.recommend("X", "X", 5.0, 1000.0, 100000.0).getNextAction()).isEqualTo("CONTINUE");
+        when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "DOWNTREND", null));
+        assertThat(engine.recommend("X", "X", -5.0, 1000.0, 100000.0).getNextAction()).isEqualTo("REVIEW");
+        when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "SIDEWAYS", null));
+        assertThat(engine.recommend("X", "X", 1.0, 1000.0, 100000.0).getNextAction()).isEqualTo("HOLD");
     }
 
     @Test
@@ -65,12 +75,13 @@ class RecommendationEngineTest {
         assertThat(out.getNextAction()).isEqualTo("REVIEW");
         assertThat(out.getNextActionReason()).contains("research leans SELL");
 
-        // research leaning BUY with no validated signal does not create an action
+        // research leaning BUY with no validated signal does not create a call: the action is the
+        // trend's (CONTINUE), never ACCUMULATE
         AnalystAssessment none = assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "UPTREND", null);
         none.setResearchActionability("NO_ACTIONABLE_SIGNAL");
         none.setResearchLean("BUY");
         when(analyst.assess(anyString(), any())).thenReturn(none);
-        assertThat(engine.recommend("X", "X", 5.0, 1000.0, 100000.0).getNextAction()).isEqualTo("NO_ACTIONABLE_SIGNAL");
+        assertThat(engine.recommend("X", "X", 5.0, 1000.0, 100000.0).getNextAction()).isEqualTo("CONTINUE");
     }
 
     @Test

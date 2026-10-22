@@ -45,6 +45,12 @@ public class RecommendationEngine {
     private final AnalystService analystService;
     private final MarketDataService marketDataService;
 
+    // Optional so the engine still works (and unit-tests) without the MF data stack.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.marketai.mf.service.MfPeerComparisonService mfPeers;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.marketai.mf.service.MfSchemeLinkService mfSchemeLink;
+
     /** Watchlist/Research use: no position held, so no profit/loss context. */
     public AnalystAssessment recommend(String symbol, String displayName) {
         return recommend(symbol, displayName, null, null, null);
@@ -166,9 +172,29 @@ public class RecommendationEngine {
         String ruleNote = a.getRuleOutput() != null && !AnalystService.NO_ACTIONABLE_SIGNAL.equals(a.getRuleOutput())
             && !"HOLD".equals(a.getRuleOutput())
             ? " The rule reads " + a.getRuleOutput() + ", but that call has not beaten the base rate on this stock." : "";
+        // No validated call: fall back to a position action read from the measured trend, as the
+        // engine did before 9ee742a. Removing this left every holding at "no signal", which gave
+        // the user nothing to act on. Each reason says it comes from the trend, not a backtest.
+        String trend = a.getFundamentals() != null ? a.getFundamentals().getTrend() : null;
+        String trendLabel = trend != null ? trend.toLowerCase().replace('_', ' ') : "unknown";
+        String basis = " Trend-based, not a backtested signal." + ruleNote;
+        if (trend != null && trend.contains("STRONG_DOWNTREND")) {
+            return hasPosition
+                ? new NextActionDecision("EXIT", String.format("Strong downtrend while you're %s — consider exiting or a tight stop-loss to limit further downside.%s",
+                    pnlPercent >= 0 ? String.format("up %.1f%%", pnlPercent) : String.format("down %.1f%%", Math.abs(pnlPercent)), basis))
+                : new NextActionDecision("AVOID", "Strong downtrend — avoid entering until it stabilises." + basis);
+        }
+        if (trend != null && trend.contains("UPTREND")) {
+            return new NextActionDecision("CONTINUE", "Trend is " + trendLabel + " — stay invested, no new action needed." + basis);
+        }
+        if (trend != null && trend.contains("DOWNTREND")) {
+            return new NextActionDecision("REVIEW", "Trend is " + trendLabel + " — re-check your reason for holding and set a stop-loss." + basis);
+        }
+        if (trend != null && trend.equals("SIDEWAYS")) {
+            return new NextActionDecision("HOLD", "Trend is sideways — nothing about this stock warrants action today." + basis);
+        }
         return new NextActionDecision(AnalystService.NO_ACTIONABLE_SIGNAL, String.format(
-            "No validated signal — nothing in the verified data justifies a trade on its own.%s Trend is %s (descriptive). %s",
-            ruleNote, a.getFundamentals() != null ? String.valueOf(a.getFundamentals().getTrend()).toLowerCase().replace('_', ' ') : "unknown", record));
+            "No validated signal and no readable trend — nothing in the verified data justifies a trade on its own.%s %s", ruleNote, record));
     }
 
     /**
@@ -184,6 +210,12 @@ public class RecommendationEngine {
         double pnlPercent = invested.compareTo(BigDecimal.ZERO) > 0
             ? current.subtract(invested).divide(invested, 4, RoundingMode.HALF_UP).doubleValue() * 100 : 0;
         double xirr = req.getXirr() != null ? req.getXirr().doubleValue() : Double.NaN;
+        // A fund worth more than was put in cannot have a negative annualised return, and one worth
+        // less cannot have a positive one. A contradiction means the XIRR was built from an incomplete
+        // ledger — don't act on it (it would turn a profitable fund into "Switch Fund").
+        boolean xirrContradictsPnl = !Double.isNaN(xirr) && invested.signum() > 0
+            && ((pnlPercent > 1 && xirr < 0) || (pnlPercent < -1 && xirr > 0));
+        if (xirrContradictsPnl) xirr = Double.NaN;
         long daysHeld = req.getBuyDate() != null ? ChronoUnit.DAYS.between(req.getBuyDate(), LocalDate.now()) : Long.MAX_VALUE;
         // An unknown purchase date is unknown — not "long-term", and not "bought today". Imports
         // from a holdings summary (a CAS summary, a broker holdings file) carry no purchase dates.
@@ -204,6 +236,10 @@ public class RecommendationEngine {
             .note(dateKnown
                 ? String.format("%d days held (%s)", daysHeld, isLongTerm ? "long-term" : "short-term")
                 : "Purchase date not on record — holding period and tax treatment unknown").build());
+        if (xirrContradictsPnl) {
+            factors.add(AnalystAssessment.Factor.builder().name("XIRR").category("HOLDING").weightPct(0)
+                .note("The recorded XIRR contradicts the fund's gain/loss (transaction history looks incomplete) — ignored; judged on return alone.").build());
+        }
         factors.add(AnalystAssessment.Factor.builder().name("Investment mode").category("HOLDING").weightPct(0)
             .note(switch (sipStatus) {
                 case "ACTIVE" -> "SIP" + (req.getSipAmount() != null ? String.format(" of ₹%,.0f", req.getSipAmount()) : "") + " (recorded)";
@@ -211,6 +247,11 @@ public class RecommendationEngine {
                 case "INFERRED" -> "SIP (monthly purchases in the ledger)";
                 default -> "Lump sum — no SIP recorded for this fund";
             }).build());
+
+        // Category standing — the question that actually decides "keep or switch": is this fund
+        // beating the funds you could hold instead? A loss the whole category shares is the
+        // market, not the fund.
+        PeerView peer = peerView(req, factors, positives, risks);
 
         if (dateKnown && daysHeld < 90) {
             // Too early — XIRR is noisy on a very young position, don't act on it yet.
@@ -231,6 +272,21 @@ public class RecommendationEngine {
             risks.add(String.format("Still short-term (%d days held) — STCG applies if redeemed now", daysHeld));
             factors.add(AnalystAssessment.Factor.builder().name("Tax timing").category("HOLDING").weightPct(0)
                 .note(String.format("%d more days to reach LTCG treatment", daysToLtcg)).build());
+        } else if (peer != null && peer.laggard) {
+            String instead = peer.alternatives.isEmpty() ? "" : " Stronger funds in the same category: " + peer.alternatives + ".";
+            if (sip) {
+                nextAction = "REDIRECT_SIP";
+                nextActionReason = "It " + peer.summary + " — consistently behind its category. Send future SIP instalments to a stronger "
+                    + "fund in the same category and keep the units you hold (no exit load or tax on those)." + instead;
+            } else {
+                nextAction = "SWITCH_FUND";
+                nextActionReason = "It " + peer.summary + " — consistently behind its category. A switch is worth considering; it is a "
+                    + "redemption plus a purchase, so check the exit load and tax first." + instead;
+            }
+        } else if (peer != null && peer.leader && ((!Double.isNaN(xirr) && xirr < 0) || pnlPercent < -8)) {
+            nextAction = sip ? "CONTINUE_SIP" : "HOLD";
+            nextActionReason = String.format("Down %.1f%%, but it %s — the fall is the market, not the fund. Switching would sell low into a weaker fund.%s",
+                pnlPercent, peer.summary, sip ? " Keep the SIP running; instalments now buy more units." : "");
         } else if ((!Double.isNaN(xirr) && xirr < 0) || pnlPercent < -8) {
             String weak = (!Double.isNaN(xirr) && xirr < 0)
                 ? String.format("XIRR of %.1f%%%s is negative", xirr, dateKnown ? String.format(" over %d days held", daysHeld) : "")
@@ -339,6 +395,83 @@ public class RecommendationEngine {
             .taxImpact(taxImpact)
             .basis(basis)
             .build();
+    }
+
+    /** The category verdict used by {@link #recommendMf}. */
+    private record PeerView(boolean laggard, boolean leader, String summary, String alternatives) {}
+
+    /**
+     * Ranks the fund in its SEBI category (3Y CAGR, falling back to 1Y for young funds) and against
+     * Nifty 50, adding what it found to the factors. Null when the fund is unlinked or peers are
+     * still loading — the caller then falls back to the fund's own return.
+     */
+    private PeerView peerView(MfRecommendationRequest req, List<AnalystAssessment.Factor> factors,
+                              List<String> positives, List<String> risks) {
+        if (mfPeers == null) return null;
+        String code = req.getSchemeCode();
+        if ((code == null || code.isBlank()) && mfSchemeLink != null && req.getFundName() != null) {
+            code = mfSchemeLink.resolveSchemeCodeByFundName(req.getFundName()).orElse(null);
+        }
+        if (code == null) {
+            factors.add(AnalystAssessment.Factor.builder().name("Category comparison").category("BENCHMARK").weightPct(0)
+                .note("Fund is not linked to an AMFI scheme, so it can't be compared with its category.").build());
+            return null;
+        }
+        java.util.Optional<com.marketai.mf.service.MfPeerComparisonService.Comparison> found;
+        try { found = mfPeers.compare(code); } catch (Exception e) {
+            log.warn("MF peer comparison failed for {}: {}", code, e.getMessage());
+            return null;
+        }
+        if (found.isEmpty()) return null;
+        var c = found.get();
+
+        // Fund vs Nifty 50 over the same trailing windows, from the fund's own NAV history.
+        for (String w : List.of("1Y", "3Y", "5Y")) {
+            BigDecimal f = switch (w) { case "1Y" -> c.fund().getReturn1Y(); case "3Y" -> c.fund().getReturn3YCagr(); default -> c.fund().getReturn5YCagr(); };
+            if (f == null) continue;
+            int years = Integer.parseInt(w.substring(0, 1));
+            BenchmarkReturn n = returnSince(NIFTY_SYMBOL, LocalDate.now().minusYears(years));
+            if (n == null || n.years < years - 0.05) continue;
+            double bench = years == 1 ? n.totalPct : n.annualisedPct;
+            double diff = f.doubleValue() - bench;
+            factors.add(AnalystAssessment.Factor.builder().name("vs Nifty 50 (" + w + ")").category("BENCHMARK").weightPct(0)
+                .reading(String.format("%+.1f pts", diff))
+                .note(String.format("Fund %.1f%% vs Nifty 50 %.1f%%%s (NAV-based; Nifty price index excludes dividends).",
+                    f.doubleValue(), bench, years == 1 ? "" : " a year")).build());
+        }
+
+        if (c.ranks().isEmpty()) {
+            factors.add(AnalystAssessment.Factor.builder().name("Category comparison").category("BENCHMARK").weightPct(0)
+                .note(c.peerDataLoading()
+                    ? String.format("Loading NAV history for %d %s peers in %s — the ranking appears on the next refresh.", c.peersInCategory(), c.plan(), c.category())
+                    : String.format("Not enough peers with history in %s to rank against.", c.category())).build());
+            return null;
+        }
+        for (var r : c.ranks()) {
+            factors.add(AnalystAssessment.Factor.builder().name("Category rank (" + r.window() + ")").category("BENCHMARK").weightPct(0)
+                .reading(String.format("%d of %d", r.rank(), r.ranked()))
+                .note(String.format("%s: %.1f%% vs category median %.1f%% among %s %s growth plans.",
+                    r.quartileLabel(), r.fund().doubleValue(), r.categoryMedian().doubleValue(), c.plan(), c.category())).build());
+        }
+
+        var primary = c.rank("3Y").orElse(c.rank("1Y").orElse(c.ranks().get(0)));
+        var oneYear = c.rank("1Y").orElse(null);
+        int p = primary.percentileFromTop();
+        // Laggard: bottom quartile on the long window, and not rescued by a recent turnaround.
+        boolean laggard = p > 75 && (oneYear == null || oneYear == primary || oneYear.percentileFromTop() > 50);
+        boolean leader = p <= 50;
+        String summary = String.format("ranks %d of %d in its category on %s returns (%s; %.1f%% vs median %.1f%%)",
+            primary.rank(), primary.ranked(), primary.window(), primary.quartileLabel(),
+            primary.fund().doubleValue(), primary.categoryMedian().doubleValue());
+        if (leader) positives.add("Category " + summary.replaceFirst("^ranks", "rank"));
+        if (p > 75) risks.add("Category " + summary.replaceFirst("^ranks", "rank"));
+
+        String alternatives = String.join("; ", c.leaders().stream()
+            .map(l -> String.format("%s (%s %.1f%%)", l.name(),
+                l.m().getReturn3YCagr() != null ? "3Y" : "1Y",
+                (l.m().getReturn3YCagr() != null ? l.m().getReturn3YCagr() : l.m().getReturn1Y()).doubleValue()))
+            .toList());
+        return new PeerView(laggard, leader, summary, alternatives);
     }
 
     private String taxImpactText(BigDecimal gain, long daysToLtcg, boolean isLongTerm) {

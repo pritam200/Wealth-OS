@@ -25,6 +25,8 @@ public class AnalystAssessment {
     /** The rule's reading before validation, and how its calls on this instrument have played out. */
     private String ruleOutput;
     private com.marketai.signal.dto.SignalPayload.Validation signalValidation;
+    /** Entry/stop/target for the rule's reading (ruleOutput) even when unvalidated. */
+    private com.marketai.signal.dto.SignalPayload.Execution modelExecution;
     private com.marketai.technical.dto.TrendAssessment trendAssessment;
     /** Fundamental figures with unit, period, source and fetch time. */
     private List<FundamentalFact> fundamentalFacts;

@@ -808,6 +808,10 @@ public class ParsedEmailImporter {
             throw new ImportRejectedException("The card payment's date isn't stated — confirm the date to record it.");
         }
         com.marketai.card.entity.CreditCard card = findCard(userId, pe);
+        if (card == null && detectedCards != null) {
+            try { detectedCards.noteCard(userId, pe.getBank(), pe.getCardLast4()); }
+            catch (RuntimeException e) { log.debug("Could not note detected card: {}", e.getMessage()); }
+        }
         com.marketai.card.entity.CardPaymentStatus status =
             "REVERSED".equalsIgnoreCase(pe.getPaymentStatus())
                 ? com.marketai.card.entity.CardPaymentStatus.REVERSED
@@ -836,8 +840,12 @@ public class ParsedEmailImporter {
         com.marketai.card.entity.CreditCard card = findCard(userId, f.cardLast4(), f.issuer());
         if (card == null) {
             log.info("Card statement in {} matches no single saved card (issuer {}, last4 {})", gmailMessageId, f.issuer(), f.cardLast4());
+            // Kept, not dropped: the card page asks the user to add or link the card, and the
+            // statement is filed onto it then.
+            if (detectedCards != null) detectedCards.holdStatement(userId, f, gmailMessageId);
             return false;
         }
+        if (statementIngest != null) return statementIngest.file(userId, card, f, gmailMessageId) != null;
         cardStatementRepo.save(com.marketai.card.entity.CardStatement.builder()
             .cardId(card.getId()).userId(userId)
             .statementDate(f.statementDate()).dueDate(f.dueDate())
@@ -847,6 +855,16 @@ public class ParsedEmailImporter {
             .sourceEmailId(gmailMessageId).build());
         return true;
     }
+
+    // Optional so the importer's many unit tests, which build it by hand, need not supply them.
+    private com.marketai.card.service.DetectedCardService detectedCards;
+    private com.marketai.card.service.CardStatementIngestService statementIngest;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setDetectedCards(com.marketai.card.service.DetectedCardService s) { this.detectedCards = s; }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setStatementIngest(com.marketai.card.service.CardStatementIngestService s) { this.statementIngest = s; }
 
     private com.marketai.card.entity.CreditCard findCard(Long userId, ParsedEmail pe) {
         return findCard(userId, pe.getCardLast4(), pe.getBank());
@@ -1334,7 +1352,9 @@ public class ParsedEmailImporter {
         symbol = portfolioService.resolveFundSymbol(portfolio.getId(), symbol, pe.getIsin());
         LocalDate date = requireDate(pe);
 
-        if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, units, nav)) {
+        if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, units, nav)
+                || (pe.getType() != ParsedEmail.Type.MF_REDEEM
+                    && portfolioService.isDuplicateFundPurchase(portfolio.getId(), symbol, date, units, nav))) {
             log.debug("Skipping duplicate MF import: {} {} units @ {} on {}", symbol, units, nav, date);
             return false;
         }
@@ -1351,6 +1371,12 @@ public class ParsedEmailImporter {
                 // the one thing that must never happen is a redemption being recorded as a purchase.
                 throw new ImportRejectedException("Redemption of " + units.stripTrailingZeros().toPlainString()
                     + " units of '" + pe.getFundName() + "' has no matching holding — import the purchase history first.");
+            }
+            if (portfolioService.predatesOpeningLot(holdingId, date)) {
+                // The holding was loaded from a summary dated after this redemption, so the units
+                // it removed are already gone; removing them again would understate the fund.
+                log.info("MF redemption of {} on {} predates the summary it was loaded from — already reflected", symbol, date);
+                return false;
             }
             sell(portfolio.getId(), holdingId, userId, units, nav, date, provenance);
             log.info("Imported MF REDEMPTION: {} x {} units @ ₹{}", symbol, units, nav);

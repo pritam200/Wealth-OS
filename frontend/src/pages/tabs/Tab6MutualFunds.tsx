@@ -657,7 +657,7 @@ export function Tab6MutualFunds() {
           {/* 5. Redemption Tracker */}
           <CollapsibleSection title="Redemption &amp; Reinvestment Tracker" icon={<ArrowUpRight size={15} className="text-brand-light" />}
             onRefresh={load} loading={loading}>
-            <RedeemedInvestments />
+            <RedeemedInvestments showEmpty />
           </CollapsibleSection>
 
           {/* 6. AI Recommendations */}

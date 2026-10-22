@@ -300,8 +300,16 @@ public class MarketDataService {
                 log.info("History top-up for {} deferred — other symbols are still loading", symbol);
                 return;
             }
+            // One writer per symbol. Concurrent requests for the same symbol (every holding's
+            // analysis reads the Nifty) each saw the bar missing and each inserted it, which left
+            // tens of thousands of duplicate bars. The second caller now waits, re-checks, and
+            // finds the work already done.
+            Object symbolLock = historyLocks.computeIfAbsent(symbol, k -> new Object());
             try {
-                fetchAndStorePriceHistory(symbol, range);
+                synchronized (symbolLock) {
+                    PriceHistory again = priceHistoryRepository.findTopBySymbolOrderByDateDesc(symbol).orElse(null);
+                    if (again == null || again.getDate().isBefore(expected)) fetchAndStorePriceHistory(symbol, range);
+                }
             } finally {
                 historyBackfillGate.release();
             }
@@ -314,6 +322,9 @@ public class MarketDataService {
 
     /** How many symbols may download and store history at once; see {@link #ensureFreshDailyHistory}. */
     private final java.util.concurrent.Semaphore historyBackfillGate = new java.util.concurrent.Semaphore(3);
+
+    /** Per-symbol monitors for {@link #ensureFreshDailyHistory}; one entry per symbol ever refreshed. */
+    private final java.util.concurrent.ConcurrentHashMap<String, Object> historyLocks = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Transactional
     public void fetchAndStorePriceHistory(String symbol, String range) {

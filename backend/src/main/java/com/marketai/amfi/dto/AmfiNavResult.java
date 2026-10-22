@@ -23,4 +23,8 @@ public class AmfiNavResult {
 
     /** Normalised bucket derived from {@link #category}; OTHER when unclear. Never null. */
     private MfCategoryBucket categoryBucket;
+
+    /** The scheme's ISINs (growth/payout and reinvestment); empty when the file listed none. */
+    @Builder.Default
+    private java.util.List<String> isins = java.util.List.of();
 }

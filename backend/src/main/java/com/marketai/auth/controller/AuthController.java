@@ -74,7 +74,10 @@ public class AuthController {
     @PostMapping("/logout")
     @Operation(summary = "Logout and revoke refresh tokens")
     public ResponseEntity<Void> logout(@AuthenticationPrincipal UserDetails userDetails) {
-        authService.logout(userDetails.getUsername());
+        // Expired/missing access token leaves no principal; logout is still a success for the client.
+        if (userDetails != null) {
+            authService.logout(userDetails.getUsername());
+        }
         return ResponseEntity.noContent().build();
     }
 }

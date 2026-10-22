@@ -177,6 +177,7 @@ public class AnalystService {
                 .factorBreakdown(factors)
                 .ruleOutput(sig.getRuleOutput() != null ? sig.getRuleOutput().name() : null)
                 .signalValidation(v)
+                .modelExecution(sig.getModelExecution())
                 .trendAssessment(ta.getTrendAssessment())
                 .fundamentalFacts(facts)
                 .fundamentals(fund).technicals(tl).news(pulse).positives(dedup(positives)).risks(dedup(risks))

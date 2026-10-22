@@ -107,7 +107,7 @@ function RedemptionCard({ r, onReinvested }: { r: MfRedemption; onReinvested: ()
 
 // Tracks mutual funds after they've been redeemed — capital gains/tax, and stays active
 // until the full amount has been reinvested, with a staged deployment plan.
-export function RedeemedInvestments() {
+export function RedeemedInvestments({ showEmpty = false }: { showEmpty?: boolean }) {
   const [redemptions, setRedemptions] = useState<MfRedemption[] | null>(null);
 
   const load = useCallback(() => {
@@ -116,7 +116,17 @@ export function RedeemedInvestments() {
 
   useEffect(() => { load(); }, [load]);
 
-  if (!redemptions || redemptions.length === 0) return null;
+  if (!redemptions) return null;
+  if (redemptions.length === 0) {
+    // Inside its own "Redemption & Reinvestment Tracker" section an empty list rendered nothing,
+    // which read as the feature having been removed rather than as "nothing redeemed yet".
+    return showEmpty ? (
+      <p className="text-xs text-gray-500 py-3">
+        No redemptions recorded yet. When you sell units with <b>Sell</b> on a fund, or import a detailed CAS that
+        contains redemptions, the money appears here until it is fully reinvested, with a staged plan for putting it back to work.
+      </p>
+    ) : null;
+  }
 
   return (
     <div className="card">

@@ -853,17 +853,27 @@ public class EmailLLMParserService {
         if (last4 != null && !last4.matches("\\d{4}")) last4 = null;
 
         List<com.marketai.card.service.CardStatementAnalyzer.Line> lines = new ArrayList<>();
+        List<com.marketai.card.service.CardStatementFacts.Line> kept = new ArrayList<>();
         for (JsonNode t : txns) {
             BigDecimal amt = json.decimal(t, "amount_inr");
             if (amt == null) amt = json.decimal(t, "amount");
             String type = up(json.str(t, "transaction_type"));
             if (amt == null || (!"DEBIT".equals(type) && !"CREDIT".equals(type))) continue;
+            String lineEvidence = json.str(t, "evidence");
+            LocalDate date = parseDate(json.str(t, "transaction_date"));
             lines.add(new com.marketai.card.service.CardStatementAnalyzer.Line(json.str(t, "merchant"), amt.abs(),
-                parseDate(json.str(t, "transaction_date")), json.str(t, "currency"), "DEBIT".equals(type), json.str(t, "evidence")));
+                date, json.str(t, "currency"), "DEBIT".equals(type), lineEvidence));
+            // Kept for the statement view and the expense tally only when the amount is in the
+            // line it was read from; a date not written there is dropped rather than trusted.
+            if (lineEvidence == null || !SpanVerifier.appearsIn(sourceText, lineEvidence)
+                    || !SpanVerifier.containsAmount(lineEvidence, amt.abs())) continue;
+            if (date != null && !SpanVerifier.containsDate(lineEvidence, date)) date = null;
+            kept.add(new com.marketai.card.service.CardStatementFacts.Line(json.str(t, "merchant"), amt.abs(), date,
+                json.str(t, "currency"), "DEBIT".equals(type), json.str(t, "category"), lineEvidence));
         }
         var flags = com.marketai.card.service.CardStatementAnalyzer.analyze(lines, limit, totalDue);
         return new com.marketai.card.service.CardStatementFacts(json.str(node, "issuer"), last4, statementDate, dueDate,
-            totalDue, minimumDue, previous, limit, available, com.marketai.card.service.CardStatementAnalyzer.toJson(flags));
+            totalDue, minimumDue, previous, limit, available, com.marketai.card.service.CardStatementAnalyzer.toJson(flags), kept);
     }
 
     private void persistClosingBalances(Long userId, JsonNode closingBalances, String sourceText,

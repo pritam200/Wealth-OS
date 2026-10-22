@@ -98,4 +98,20 @@ class MfSchemeLinkServiceTest {
         assertThat(service.confidence(null, "SBI Bluechip Fund")).isZero();
         assertThat(service.confidence("SBI Bluechip Fund", null)).isZero();
     }
+
+    @Test
+    @DisplayName("An ISIN links exactly, even when the stored name would fail the name gate")
+    void isinLinksWithoutTheNameGate() {
+        var amfi = org.mockito.Mockito.mock(com.marketai.amfi.service.AmfiNavService.class);
+        var repo = org.mockito.Mockito.mock(com.marketai.portfolio.repository.HoldingRepository.class);
+        org.mockito.Mockito.when(amfi.findByIsin("INF179K01XQ0")).thenReturn(com.marketai.amfi.dto.AmfiNavResult.builder()
+                .schemeCode("118989").schemeName("HDFC Mid Cap Fund - Growth Option - Direct Plan").build());
+        com.marketai.portfolio.entity.Holding h = new com.marketai.portfolio.entity.Holding();
+        h.setSymbol("HDFCMIDCAPFUNDDIRECTPLANGROWTH.MF");
+        h.setName("HDFC Mid Cap");
+        h.setIsin("INF179K01XQ0");
+
+        assertThat(new MfSchemeLinkService(amfi, repo).resolve(h)).isEqualTo("118989");
+        assertThat(h.getAmfiSchemeCode()).isEqualTo("118989");
+    }
 }

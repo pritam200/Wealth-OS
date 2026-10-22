@@ -76,7 +76,7 @@ class ProdProfileConfigTest {
         assertThat(env.getProperty("springdoc.swagger-ui.enabled", Boolean.class)).isFalse();
         assertThat(env.getProperty("springdoc.api-docs.enabled", Boolean.class)).isFalse();
         assertThat(env.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("update");
-        assertThat(env.getProperty("spring.datasource.url")).isEqualTo("jdbc:postgresql://postgres:5432/marketai_db");
+        assertThat(env.getProperty("spring.datasource.url")).isEqualTo("jdbc:postgresql://postgres:5432/marketai_db?sslmode=prefer&channelBinding=prefer");
         assertThat(env.getProperty("app.cors.allowed-origins")).isEqualTo("https://family.duckdns.org");
     }
 

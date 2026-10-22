@@ -27,6 +27,27 @@ public class MfNavHistoryScheduler {
     private final MfNavHistoryService navHistoryService;
     private final MfSchemeLinkService schemeLinkService;
     private final com.marketai.common.jobs.JobHealthRecorder jobHealth;
+    private final com.marketai.amfi.service.AmfiNavService amfiNavService;
+
+    /**
+     * Also once at startup. Linking and NAV history otherwise waited for 22:00, so funds imported
+     * during the day had no scheme code, no NAV history and no fund analysis until the next night.
+     * Waits for the AMFI list, which loads on its own thread, since linking reads it.
+     */
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    void onStartup() {
+        Thread t = new Thread(() -> {
+            try {
+                for (int i = 0; i < 60 && amfiNavService.cachedSchemeCount() == 0; i++) Thread.sleep(5_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            refreshHeldSchemeHistory();
+        }, "mf-nav-startup");
+        t.setDaemon(true);
+        t.start();
+    }
 
     @Scheduled(cron = "0 0 22 * * *")
     public void refreshHeldSchemeHistory() {

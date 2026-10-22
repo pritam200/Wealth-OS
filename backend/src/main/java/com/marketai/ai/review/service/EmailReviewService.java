@@ -20,7 +20,9 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * The human-review queue for uncertain email extractions.
@@ -48,6 +50,34 @@ public class EmailReviewService {
      * extracted from the same email overwrote — or, once judged, was blocked by — the placeholder.
      */
     public static final int WHOLE_EMAIL_ITEM_INDEX = -1;
+
+    // Item indexes queued while one email is being re-read on the sync thread; null outside a re-read.
+    private static final ThreadLocal<Set<Integer>> REREAD = new ThreadLocal<>();
+
+    /** Starts tracking which items a re-read of one email queues again. */
+    public void beginReread() {
+        REREAD.set(new HashSet<>());
+    }
+
+    /**
+     * Ends a re-read. When the email was read in full, items still pending from an earlier read
+     * that this read did not queue again are dropped: the new read either imported them or found
+     * nothing there. Without this, a better model re-reading an email imported its lines cleanly
+     * but left every question from the first read in the queue, so the count never went down.
+     */
+    @Transactional
+    public int finishReread(Long userId, String gmailMessageId, boolean readInFull) {
+        Set<Integer> queued = REREAD.get();
+        REREAD.remove();
+        if (!readInFull || queued == null || gmailMessageId == null) return 0;
+        List<EmailReviewItem> stale = repo.findByUserIdAndGmailMessageIdAndStatus(userId, gmailMessageId, ReviewStatus.PENDING)
+            .stream().filter(i -> !queued.contains(i.getItemIndex())).toList();
+        if (!stale.isEmpty()) {
+            repo.deleteAll(stale);
+            log.info("Re-read of {} cleared {} superseded review item(s) for user {}", gmailMessageId, stale.size(), userId);
+        }
+        return stale.size();
+    }
 
     /** Queues a whole-email placeholder (the extractor could not read it). Idempotent per gmail
      *  message — a re-sync updates the existing pending row instead of adding another, and never
@@ -80,6 +110,8 @@ public class EmailReviewService {
     @Transactional
     public void enqueue(Long userId, String gmailMessageId, int itemIndex, String sender, String subject,
                         EmailIntelResult result) {
+        Set<Integer> rereadQueued = REREAD.get();
+        if (rereadQueued != null) rereadQueued.add(itemIndex);
         EmailReviewItem existing = gmailMessageId == null ? null
             : repo.findByUserIdAndGmailMessageIdAndItemIndex(userId, gmailMessageId, itemIndex).orElse(null);
 

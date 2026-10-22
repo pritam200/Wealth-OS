@@ -19,4 +19,5 @@ public interface EmailReviewItemRepository extends JpaRepository<EmailReviewItem
     // its rows are still PENDING.
     boolean existsByUserIdAndGmailMessageId(Long userId, String gmailMessageId);
     boolean existsByUserIdAndGmailMessageIdAndStatus(Long userId, String gmailMessageId, ReviewStatus status);
+    List<EmailReviewItem> findByUserIdAndGmailMessageIdAndStatus(Long userId, String gmailMessageId, ReviewStatus status);
 }
