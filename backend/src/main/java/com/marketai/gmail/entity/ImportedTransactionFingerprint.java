@@ -139,7 +139,7 @@ public class ImportedTransactionFingerprint {
     private LocalDateTime importedAt;
 
     /** The PDF attachment the event was read from; null for an email body. */
-    @Column(name = "attachment_id", length = 200)
+    @Column(name = "attachment_id", length = 500)
     private String attachmentId;
 
     /** SHA-256 of the source document's text (statement PDFs). */

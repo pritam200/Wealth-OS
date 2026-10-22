@@ -113,7 +113,11 @@ public class SchemaPatches {
             + "WHERE p.status = 'IMPORTED' AND p.content_hash IS NOT NULL AND EXISTS (SELECT 1 FROM pending_pdfs q "
             + "WHERE q.user_id = p.user_id AND q.content_hash = p.content_hash AND q.status = 'IMPORTED' AND q.id < p.id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_pdf_imported_content "
-            + "ON pending_pdfs (user_id, content_hash) WHERE status = 'IMPORTED' AND content_hash IS NOT NULL"
+            + "ON pending_pdfs (user_id, content_hash) WHERE status = 'IMPORTED' AND content_hash IS NOT NULL",
+
+        // Gmail attachment ids run past 400 characters; at 200 every transaction read from a PDF
+        // failed to record its fingerprint. Same width as pending_pdfs and email_financial_events.
+        "ALTER TABLE imported_transaction_fingerprints ALTER COLUMN attachment_id TYPE varchar(500)"
     );
 
     private final DataSource dataSource;
