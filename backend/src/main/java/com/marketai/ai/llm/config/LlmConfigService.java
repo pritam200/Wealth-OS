@@ -34,6 +34,9 @@ public class LlmConfigService {
     // Environment defaults — used until the configuration is first saved.
     @Value("${app.llm.provider:ollama}") String envProvider = "ollama";
     @Value("${app.llm.email-provider:}") String envEmailProvider = "";
+    // Classifying an email only labels it (type, issuer, password format); extraction decides what
+    // is booked. Kept local by default so a free Gemini quota is spent on extraction alone.
+    @Value("${app.llm.email-classification-provider:ollama}") String envEmailClassificationProvider = "ollama";
     @Value("${app.llm.fallback-enabled:true}") boolean envFallback = true;
     @Value("${app.gemini.api-key:}") String envGeminiKey = "";
     @Value("${app.gemini.base-url:https://generativelanguage.googleapis.com/v1beta}") String geminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta";
@@ -136,6 +139,9 @@ public class LlmConfigService {
             if (email != null && (t == LlmTask.EMAIL_CLASSIFICATION || t == LlmTask.EMAIL_EXTRACTION
                 || t == LlmTask.DOCUMENT_EXTRACTION)) p = email;
             // Scans were only ever read by Gemini, the one configured provider that took images.
+            if (t == LlmTask.EMAIL_CLASSIFICATION && LlmProviderId.parse(envEmailClassificationProvider) != null) {
+                p = LlmProviderId.parse(envEmailClassificationProvider);
+            }
             if (t == LlmTask.DOCUMENT_TRANSCRIPTION) p = LlmProviderId.GEMINI;
             routes.put(t, new Route(t, p, (p == LlmProviderId.GEMINI ? gemini : ollama).defaultModel()));
         }

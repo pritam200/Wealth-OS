@@ -106,13 +106,31 @@ public class SyncJobRunner {
      * already-judged guard) prevents a successful retry from double-booking anything.
      */
     private GmailSyncResult runRetryBacklog(Long userId) {
-        List<String> messageIds = processedEmailRepo.findRetryableMessageIds(userId);
+        List<String> messageIds = backlogInPriorityOrder(userId);
         if (messageIds.isEmpty()) {
             log.info("No backlog emails to retry for user {}", userId);
             return null;
         }
         log.info("Retrying {} backlog email(s) for user {}", messageIds.size(), userId);
         return gmailSyncService.syncSpecificMessages(userId, messageIds);
+    }
+
+    /**
+     * A free-tier Gemini key reads a limited number of emails a day, so the backlog is ordered
+     * by what is worth that budget: mail from a known bank, broker, fund house or RTA first, then
+     * other mail that was queued for review, then the rest; newest first within each.
+     */
+    private List<String> backlogInPriorityOrder(Long userId) {
+        List<com.marketai.gmail.entity.ProcessedEmail> rows = new java.util.ArrayList<>(processedEmailRepo.findRetryable(userId));
+        rows.sort(java.util.Comparator.comparingInt(SyncJobRunner::backlogRank)); // stable: keeps newest first
+        return rows.stream().map(com.marketai.gmail.entity.ProcessedEmail::getGmailMessageId).toList();
+    }
+
+    static int backlogRank(com.marketai.gmail.entity.ProcessedEmail e) {
+        String domain = com.marketai.document.classify.ClassificationCandidate.email(e.getSender(), e.getSubject(), null).senderDomain();
+        if (domain != null && com.marketai.document.classify.IssuerDomainRegistry.issuerFor(domain).isPresent()) return 0;
+        if ("UNKNOWN".equals(e.getType()) || "FAILED".equals(e.getStatus())) return 1;
+        return 2;
     }
 
     /** Full window scan. Captures a fresh baseline watermark so later runs can go incremental. */

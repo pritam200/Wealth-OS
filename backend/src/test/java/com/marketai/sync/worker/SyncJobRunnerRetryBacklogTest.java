@@ -14,6 +14,7 @@ import com.marketai.sync.service.SyncJobService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 import java.util.Optional;
@@ -59,8 +60,9 @@ class SyncJobRunnerRetryBacklogTest {
     @Test
     @DisplayName("a retry-failed job replays exactly the backlog message ids, not a window rescan")
     void retryFailedJobReplaysBacklogIdsDirectly() {
-        when(processedEmailRepo.findRetryableMessageIds(USER_ID))
-            .thenReturn(List.of("msg-failed-1", "msg-review-2"));
+        when(processedEmailRepo.findRetryable(USER_ID)).thenReturn(List.of(
+            row("msg-failed-1", "FAILED", "ERROR", "someone@example.com"),
+            row("msg-review-2", "SKIPPED", "UNKNOWN", "someone@example.com")));
         when(gmailSyncService.syncSpecificMessages(eq(USER_ID), anyList()))
             .thenReturn(GmailSyncResult.builder().imported(1).skipped(1).failed(0).build());
 
@@ -74,7 +76,7 @@ class SyncJobRunnerRetryBacklogTest {
     @Test
     @DisplayName("an empty backlog succeeds as a no-op instead of falling back to a full scan")
     void emptyBacklogIsANoOp() {
-        when(processedEmailRepo.findRetryableMessageIds(USER_ID)).thenReturn(List.of());
+        when(processedEmailRepo.findRetryable(USER_ID)).thenReturn(List.of());
 
         runner.run(JOB_ID);
 
@@ -97,5 +99,22 @@ class SyncJobRunnerRetryBacklogTest {
             .isEqualTo(com.marketai.sync.entity.SyncJobStatus.PARTIAL_SUCCESS);
         org.assertj.core.api.Assertions.assertThat(SyncJobRunner.outcomeOf(result(0, "ACTION_REQUIRED")))
             .isEqualTo(com.marketai.sync.entity.SyncJobStatus.RECONCILIATION_REQUIRED);
+    }
+
+    private static com.marketai.gmail.entity.ProcessedEmail row(String id, String status, String type, String sender) {
+        return com.marketai.gmail.entity.ProcessedEmail.builder().gmailMessageId(id).status(status).type(type).sender(sender).build();
+    }
+
+    @Test
+    @DisplayName("bank and fund-house mail is retried before the rest, so a small daily quota goes to it")
+    void financialMailComesFirst() {
+        when(processedEmailRepo.findRetryable(USER_ID)).thenReturn(List.of(
+            row("newsletter", "SKIPPED", "NO_TRANSACTION", "news@example.com"),
+            row("review", "SKIPPED", "UNKNOWN", "someone@example.com"),
+            row("sbi-mf", "SKIPPED", "NO_TRANSACTION", "SBI Mutual Fund <enq_sbimf@camsonline.com>")));
+        assertThat(SyncJobRunner.backlogRank(row("x", "SKIPPED", "NO_TRANSACTION", "SBI Mutual Fund <enq_sbimf@camsonline.com>")))
+            .isZero();
+        assertThat(SyncJobRunner.backlogRank(row("x", "SKIPPED", "UNKNOWN", "someone@example.com"))).isEqualTo(1);
+        assertThat(SyncJobRunner.backlogRank(row("x", "SKIPPED", "NO_TRANSACTION", "news@example.com"))).isEqualTo(2);
     }
 }

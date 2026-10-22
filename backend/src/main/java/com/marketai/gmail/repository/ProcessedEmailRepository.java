@@ -41,6 +41,14 @@ public interface ProcessedEmailRepository extends JpaRepository<ProcessedEmail, 
         + "and (p.matchedParser is null or p.matchedParser <> 'PendingPdf')")
     List<String> findRetryableMessageIds(@Param("userId") Long userId);
 
+    /** The same backlog as {@link #findRetryableMessageIds}, whole rows, newest first. */
+    @Query("select p from ProcessedEmail p where p.userId = :userId "
+        + "and p.status <> 'IMPORTED' "
+        + "and not (p.status = 'SKIPPED' and p.type = 'EXCLUDED') "
+        + "and (p.matchedParser is null or p.matchedParser <> 'PendingPdf') "
+        + "order by p.processedAt desc")
+    List<ProcessedEmail> findRetryable(@Param("userId") Long userId);
+
     List<ProcessedEmail> findByUserIdAndCounts_TotalsCheck(Long userId, String totalsCheck);
 
     /** Totals across every email read for this user: count, then extracted, imported, duplicate,

@@ -713,7 +713,7 @@ public class GmailSyncService {
      */
     private boolean worthRereading(ProcessedEmail e) {
         if (RULES.equals(e.getReadBy()) || llmService == null) return false;
-        String now = llmService.preferredProvider(com.marketai.ai.llm.LlmTask.EMAIL_CLASSIFICATION);
+        String now = llmService.preferredProvider(com.marketai.ai.llm.LlmTask.EMAIL_EXTRACTION);
         if (now == null || "ollama".equals(now)) return false;   // nothing better to read it with
         return e.getReadBy() == null || !e.getReadBy().contains(now);
     }
@@ -777,6 +777,9 @@ public class GmailSyncService {
             row.setProcessedAt(LocalDateTime.now());
             String readBy = "EXCLUDED".equals(type) || RULES.equals(matchedParser) ? RULES
                 : com.marketai.ai.llm.LlmService.tracedProviders();
+            // Screened out with no model call (no amount, account or financial sender in it):
+            // a model would not change that, so it is not queued for a re-read.
+            if (readBy == null && NO_TRANSACTION.equals(type)) readBy = RULES;
             if (readBy != null) row.setReadBy(readBy.length() > 40 ? readBy.substring(0, 40) : readBy);
             if (subject != null) row.setSubject(subject.length() > 500 ? subject.substring(0, 500) : subject);
             if (counts != null) row.setCounts(counts);
