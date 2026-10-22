@@ -57,6 +57,21 @@ public class GmailSyncService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setLlmService(com.marketai.ai.llm.LlmService llmService) { this.llmService = llmService; }
 
+    private com.marketai.ai.client.GeminiClient geminiClient;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setGeminiClient(com.marketai.ai.client.GeminiClient geminiClient) { this.geminiClient = geminiClient; }
+
+    /**
+     * Re-reading an email already on record is only worth it with the model it was queued for.
+     * With Gemini's daily quota spent, every retry fell back to the local model and re-made the
+     * same uncertain reading — hundreds of slow calls that changed nothing. Those wait for the reset.
+     */
+    private boolean holdRetriesForGemini() {
+        if (geminiClient == null || llmService == null || !geminiClient.dailyQuotaSpent()) return false;
+        return "gemini".equals(llmService.preferredProvider(com.marketai.ai.llm.LlmTask.EMAIL_EXTRACTION));
+    }
+
     /** Beyond this a text attachment is not sent to the extractor (25 extraction calls); it is flagged instead. */
     static final int MAX_TEXT_ATTACHMENT_CHARS = 200_000;
 
@@ -142,7 +157,7 @@ public class GmailSyncService {
 
         int imported = 0, skipped = 0, failed = 0;
         int totalEmails = 0, totalAttachments = 0, totalTransactionsFound = 0, duplicatesSkipped = 0;
-        int queuedForReview = 0, conflicts = 0;
+        int queuedForReview = 0, conflicts = 0, deferredRetries = 0;
         BOOKKEEPING_FAILURES.get()[0] = 0;
         com.marketai.gmail.ledger.FinancialEventLedger.resetFailures();
         LocalDateTime runStart = LocalDateTime.now();
@@ -227,6 +242,11 @@ public class GmailSyncService {
                     if (permanentlyResolved) {
                         skipped++;
                         duplicatesSkipped++;
+                        continue;
+                    }
+                    if (holdRetriesForGemini()) {
+                        deferredRetries++;
+                        skipped++;
                         continue;
                     }
                     // saveProcessed() below updates this same row rather than inserting a new one
@@ -537,6 +557,14 @@ public class GmailSyncService {
                         .gmailMessageId(msgId).status("FAILED").detail("Sync error: " + firstLine(e))
                         .build());
                 }
+            }
+
+            if (deferredRetries > 0) {
+                actionItems.add(deferredRetries + " email(s) waiting to be re-read by Gemini: its daily quota is used up"
+                    + (geminiClient.dailyQuotaResetsAt() != null ? " until " + geminiClient.dailyQuotaResetsAt()
+                        .atZone(java.time.ZoneId.of("Asia/Kolkata")).toLocalTime().withSecond(0).withNano(0) + " IST" : "")
+                    + ". They are picked up on the next sync after that.");
+                log.info("Held {} re-read(s) for user {} until Gemini's daily quota resets", deferredRetries, userId);
             }
 
             // After processing all emails, try to auto-unlock any remaining locked PDFs

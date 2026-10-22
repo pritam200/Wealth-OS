@@ -114,6 +114,11 @@ public class GeminiClient {
 
         String uri = settings.endpoint() + "/models/" + stripPrefix(request.model()) + ":generateContent";
         JsonNode response = null;
+        if (dailyQuotaSpent()) {
+            // Every call until the reset would be refused; sending them only adds latency.
+            throw new LlmUnavailableException(LlmErrorCategory.RATE_LIMITED,
+                "Gemini daily quota used up — resets " + quotaResetsAt);
+        }
         for (int attempt = 1; ; attempt++) {
             awaitTurn();
             try {
@@ -136,7 +141,10 @@ public class GeminiClient {
                     String detail = e.getResponseBodyAsString();
                     // A daily quota does not come back within minutes: fail now and let the
                     // configured fallback take the call, instead of stalling the sync for hours.
-                    if (detail != null && detail.contains("PerDay")) throw failure(e);
+                    if (detail != null && detail.contains("PerDay")) {
+                        markDailyQuotaSpent(detail);
+                        throw failure(e);
+                    }
                     long wait = rateLimitWait(detail, attempt);
                     log.info("Gemini rate limited — waiting {}s before retry {} of {}", wait / 1000, attempt, RATE_LIMIT_ATTEMPTS - 1);
                     backOff(wait);
@@ -279,6 +287,31 @@ public class GeminiClient {
             if (t.getClass().getSimpleName().contains("Timeout")) return true;
         }
         return false;
+    }
+
+    // Google resets per-day quotas at midnight Pacific time.
+    private static final java.time.ZoneId QUOTA_ZONE = java.time.ZoneId.of("America/Los_Angeles");
+    private static final java.util.regex.Pattern QUOTA_ID =
+        java.util.regex.Pattern.compile("\"quotaId\"\\s*:\\s*\"([^\"]+)\"");
+    private static final java.util.regex.Pattern QUOTA_VALUE =
+        java.util.regex.Pattern.compile("\"quotaValue\"\\s*:\\s*\"(\\d+)\"");
+    private volatile java.time.Instant quotaResetsAt;
+
+    /** True until the daily reset once Google has said this key's daily quota is spent. */
+    public boolean dailyQuotaSpent() {
+        java.time.Instant until = quotaResetsAt;
+        return until != null && java.time.Instant.now().isBefore(until);
+    }
+
+    public java.time.Instant dailyQuotaResetsAt() { return quotaResetsAt; }
+
+    private void markDailyQuotaSpent(String body) {
+        java.time.ZonedDateTime reset = java.time.ZonedDateTime.now(QUOTA_ZONE).toLocalDate().plusDays(1).atStartOfDay(QUOTA_ZONE);
+        quotaResetsAt = reset.toInstant();
+        java.util.regex.Matcher id = QUOTA_ID.matcher(body), value = QUOTA_VALUE.matcher(body);
+        log.warn("Gemini daily quota used up ({}{}) — not calling Gemini again until {}",
+            id.find() ? id.group(1) : "per-day limit", value.find() ? ", limit " + value.group(1) + " requests" : "",
+            reset.withZoneSameInstant(java.time.ZoneId.of("Asia/Kolkata")).toLocalDateTime());
     }
 
     /** How long to wait after a 429: what Gemini asked for, but never less than a quarter minute. */
