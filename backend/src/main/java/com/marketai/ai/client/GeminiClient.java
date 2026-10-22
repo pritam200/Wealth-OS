@@ -48,6 +48,22 @@ public class GeminiClient {
     }
 
     private static final int MAX_ATTEMPTS = 4;
+    /** A per-minute quota needs waits measured in tens of seconds, not the 2-8s of a 503 backoff. */
+    private static final int RATE_LIMIT_ATTEMPTS = 6;
+    private static final long MIN_RATE_LIMIT_WAIT_MS = 15_000;
+    private static final long MAX_RATE_LIMIT_WAIT_MS = 65_000;
+    /** After a 429, calls are spaced this far apart for {@link #PACING_WINDOW_MS}. */
+    private static final long PACED_INTERVAL_MS = 6_000;
+    private static final long PACING_WINDOW_MS = 10 * 60_000;
+    private static final java.util.regex.Pattern RETRY_DELAY =
+        java.util.regex.Pattern.compile("\"retryDelay\"\\s*:\\s*\"(\\d+)(?:\\.\\d+)?s\"");
+
+    // Shared across sync workers: one 429 means the key's quota is spent for everyone, so every
+    // caller waits rather than each hammering the API and falling back to the local model.
+    private final Object pacingLock = new Object();
+    private long notBefore;          // epoch ms before which no call is sent
+    private long pacedUntil;         // epoch ms until which calls are spaced PACED_INTERVAL_MS apart
+    private long lastCallAt;
 
     /**
      * @throws LlmUnavailableException when no key is configured, the call fails, or the model
@@ -99,6 +115,7 @@ public class GeminiClient {
         String uri = settings.endpoint() + "/models/" + stripPrefix(request.model()) + ":generateContent";
         JsonNode response = null;
         for (int attempt = 1; ; attempt++) {
+            awaitTurn();
             try {
                 response = webClientBuilder.build()
                         .post()
@@ -115,7 +132,17 @@ public class GeminiClient {
                 int status = e.getStatusCode().value();
                 // Rate limits and overload are expected during a full-mailbox backfill: back off
                 // and retry a few times before giving up on this call.
-                if ((status == 429 || status == 503) && attempt < MAX_ATTEMPTS) {
+                if (status == 429 && attempt < RATE_LIMIT_ATTEMPTS) {
+                    String detail = e.getResponseBodyAsString();
+                    // A daily quota does not come back within minutes: fail now and let the
+                    // configured fallback take the call, instead of stalling the sync for hours.
+                    if (detail != null && detail.contains("PerDay")) throw failure(e);
+                    long wait = rateLimitWait(detail, attempt);
+                    log.info("Gemini rate limited — waiting {}s before retry {} of {}", wait / 1000, attempt, RATE_LIMIT_ATTEMPTS - 1);
+                    backOff(wait);
+                    continue;
+                }
+                if (status == 503 && attempt < MAX_ATTEMPTS) {
                     sleep(1000L << attempt);
                     continue;
                 }
@@ -252,6 +279,44 @@ public class GeminiClient {
             if (t.getClass().getSimpleName().contains("Timeout")) return true;
         }
         return false;
+    }
+
+    /** How long to wait after a 429: what Gemini asked for, but never less than a quarter minute. */
+    static long rateLimitWait(String body, int attempt) {
+        long asked = 0;
+        if (body != null) {
+            java.util.regex.Matcher m = RETRY_DELAY.matcher(body);
+            if (m.find()) asked = Long.parseLong(m.group(1)) * 1000 + 1000;
+        }
+        long floor = MIN_RATE_LIMIT_WAIT_MS * attempt;
+        return Math.min(MAX_RATE_LIMIT_WAIT_MS, Math.max(asked, floor));
+    }
+
+    private void backOff(long waitMs) {
+        long now = System.currentTimeMillis();
+        synchronized (pacingLock) {
+            notBefore = Math.max(notBefore, now + waitMs);
+            pacedUntil = Math.max(pacedUntil, now + waitMs + PACING_WINDOW_MS);
+        }
+    }
+
+    /** Blocks until this caller may send: past any shared back-off, and spaced out while pacing. */
+    private void awaitTurn() {
+        while (true) {
+            long wait;
+            synchronized (pacingLock) {
+                long now = System.currentTimeMillis();
+                long earliest = notBefore;
+                if (now < pacedUntil) earliest = Math.max(earliest, lastCallAt + PACED_INTERVAL_MS);
+                wait = earliest - now;
+                if (wait <= 0) {
+                    lastCallAt = now;
+                    return;
+                }
+            }
+            sleep(Math.min(wait, 5_000));
+            if (Thread.currentThread().isInterrupted()) return;
+        }
     }
 
     private static void sleep(long ms) {

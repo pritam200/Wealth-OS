@@ -72,6 +72,7 @@ public class AmfiNavService {
             // because nothing said so.
             if (raw == null) {
                 log.warn("AMFI NAV refresh: empty response from {}", NAV_URL);
+                loadLastGoodCopy();
                 return;
             }
             List<AmfiNavResult> parsed = parse(raw);
@@ -79,12 +80,45 @@ public class AmfiNavService {
                 log.warn("AMFI NAV refresh: {} bytes returned but no scheme rows parsed — "
                        + "the feed format or URL has probably changed. First 120 chars: {}",
                     raw.length(), raw.substring(0, Math.min(120, raw.length())).replaceAll("\\s+", " "));
+                loadLastGoodCopy();
                 return;
             }
             cache.set(parsed);
             log.info("AMFI NAV refresh: loaded {} schemes", parsed.size());
+            saveLastGoodCopy(raw);
         } catch (Exception e) {
             log.warn("AMFI NAV fetch failed: {}", e.getMessage());
+            loadLastGoodCopy();
+        }
+    }
+
+    // The scheme list only lived in memory, so a restart while AMFI was down (it serves 404s and
+    // maintenance pages for hours at a time) left funds unlinked and every category comparison
+    // empty. The last list that parsed is kept on disk and used until AMFI answers again.
+    private static final java.nio.file.Path LAST_GOOD = java.nio.file.Path.of("data", "amfi-navall.txt");
+
+    private void saveLastGoodCopy(String raw) {
+        try {
+            java.nio.file.Files.createDirectories(LAST_GOOD.getParent());
+            java.nio.file.Path tmp = LAST_GOOD.resolveSibling("amfi-navall.txt.tmp");
+            java.nio.file.Files.writeString(tmp, raw);
+            java.nio.file.Files.move(tmp, LAST_GOOD, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception e) {
+            log.warn("Could not keep a copy of the AMFI list: {}", e.getMessage());
+        }
+    }
+
+    private void loadLastGoodCopy() {
+        if (!cache.get().isEmpty() || !java.nio.file.Files.exists(LAST_GOOD)) return;
+        try {
+            List<AmfiNavResult> parsed = parse(java.nio.file.Files.readString(LAST_GOOD));
+            if (parsed.isEmpty()) return;
+            cache.set(parsed);
+            log.info("AMFI unavailable — using the last downloaded list ({} schemes, saved {})", parsed.size(),
+                java.nio.file.Files.getLastModifiedTime(LAST_GOOD));
+        } catch (Exception e) {
+            log.warn("Could not read the saved AMFI list: {}", e.getMessage());
         }
     }
 

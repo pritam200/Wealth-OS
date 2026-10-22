@@ -69,3 +69,6 @@ deploy/backups/
 
 # Claude Code scratch worktrees
 .claude/worktrees/
+
+# Local cache of the AMFI scheme list (backend/data/amfi-navall.txt)
+backend/data/
