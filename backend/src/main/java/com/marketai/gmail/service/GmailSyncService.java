@@ -52,6 +52,10 @@ public class GmailSyncService {
     private final com.marketai.sync.service.SyncLockService syncLockService;
     private final com.marketai.gmail.ledger.FinancialEventLedger ledger;
     private final com.marketai.gmail.ledger.EmailManifestService manifestService;
+    private com.marketai.ai.llm.LlmService llmService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setLlmService(com.marketai.ai.llm.LlmService llmService) { this.llmService = llmService; }
 
     /** Beyond this a text attachment is not sent to the extractor (25 extraction calls); it is flagged instead. */
     static final int MAX_TEXT_ATTACHMENT_CHARS = 200_000;
@@ -195,6 +199,7 @@ public class GmailSyncService {
                 // their own inner try/catch (PDF auto-unlock, bulk unlock) and are unaffected.
                 try {
                 emailReviewService.beginReread();
+                com.marketai.ai.llm.LlmService.beginTrace();
                 ProcessedEmail existing = processedRepo.findByUserIdAndGmailMessageId(userId, msgId).orElse(null);
                 if (existing != null) {
                     // Only two outcomes are genuinely terminal: a completed import, and a sender
@@ -216,7 +221,7 @@ public class GmailSyncService {
                     // same LLM calls on every sync would only cost time on a full-mailbox backfill.
                     boolean permanentlyResolved = "IMPORTED".equals(existing.getStatus())
                         || "EXCLUDED".equals(existing.getType())
-                        || NO_TRANSACTION.equals(existing.getType())
+                        || (NO_TRANSACTION.equals(existing.getType()) && !worthRereading(existing))
                         || "PendingPdf".equals(existing.getMatchedParser())
                         || ("SKIPPED".equals(existing.getStatus()) && emailReviewService.isFullyResolved(userId, msgId));
                     if (permanentlyResolved) {
@@ -253,6 +258,17 @@ public class GmailSyncService {
                         .gmailMessageId(msgId).sender(from).subject(subject)
                         .status("EXCLUDED").detail("Matches excluded sender filter")
                         .pipelineSteps(steps).build());
+                    skipped++;
+                    continue;
+                }
+
+                if (isNonFinancialSender(from) && gmailClient.findPdfAttachments(message).isEmpty()) {
+                    String summary = "Social, job or course notification — not read for transactions: " + subject;
+                    steps.add(summary);
+                    saveProcessed(userId, msgId, NO_TRANSACTION, "SKIPPED", summary, from, RULES, subject, null);
+                    logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                        .gmailMessageId(msgId).sender(from).subject(subject)
+                        .status("SKIPPED").detail(summary).pipelineSteps(steps).build());
                     skipped++;
                     continue;
                 }
@@ -502,12 +518,23 @@ public class GmailSyncService {
                             .build());
                     }
                 } catch (Exception e) {
+                    if (isGoneFromGmail(e)) {
+                        // Reached here wrapped rather than as GoogleJsonResponseException, so it was
+                        // recorded as FAILED and retried, and counted as a failure, on every sync.
+                        log.warn("Message {} for user {} no longer exists in Gmail — skipping", msgId, userId);
+                        skipped++;
+                        saveProcessed(userId, msgId, "DELETED", "SKIPPED", "Message was deleted from Gmail before it could be read", null, null);
+                        logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                            .gmailMessageId(msgId).status("SKIPPED").detail("Deleted from Gmail before it could be read")
+                            .build());
+                        continue;
+                    }
                     log.error("Failed to process message {} for user {}: {}", msgId, userId, e.getMessage(), e);
                     failed++;
-                    saveProcessed(userId, msgId, "ERROR", "FAILED", "Sync error: " + e.getMessage(), null, null, null,
+                    saveProcessed(userId, msgId, "ERROR", "FAILED", "Sync error: " + firstLine(e), null, null, null,
                         com.marketai.gmail.entity.DocumentCounts.builder().outcome(com.marketai.gmail.entity.DocumentCounts.FAILED).build());
                     logEntries.add(GmailSyncResult.SyncLogEntry.builder()
-                        .gmailMessageId(msgId).status("FAILED").detail("Sync error: " + e.getMessage())
+                        .gmailMessageId(msgId).status("FAILED").detail("Sync error: " + firstLine(e))
                         .build());
                 }
             }
@@ -649,6 +676,58 @@ public class GmailSyncService {
 
     // Upsert, not insert: a retried FAILED email already has a row, and (user_id,
     // gmail_message_id) is unique — a blind insert would throw and lose the new outcome.
+    static final String RULES = "rules";
+
+    /**
+     * A "no transaction" verdict is final only when it came from the model that would read the
+     * email now. The local fallback marked 259 bank, AMC and broker emails "nothing to book" and,
+     * since that verdict was terminal, Gemini never saw them once it was configured.
+     */
+    private boolean worthRereading(ProcessedEmail e) {
+        if (RULES.equals(e.getReadBy()) || llmService == null) return false;
+        String now = llmService.preferredProvider(com.marketai.ai.llm.LlmTask.EMAIL_CLASSIFICATION);
+        if (now == null || "ollama".equals(now)) return false;   // nothing better to read it with
+        return e.getReadBy() == null || !e.getReadBy().contains(now);
+    }
+
+    // Mail from these senders is never a transaction: social, job, dating and course
+    // notifications. Recognised without a model call, so a rate-limited Gemini quota goes to
+    // bank, fund and broker mail instead of LinkedIn digests.
+    private static final List<String> NON_FINANCIAL_DOMAINS = List.of(
+        "linkedin.com", "github.com", "jeevansathi.com", "shaadi.com", "naukri.com", "instahyre.com",
+        "freelancer.com", "nptel.iitm.ac.in", "crio.in", "quora.com", "medium.com", "youtube.com",
+        "facebookmail.com", "instagram.com", "twitter.com", "x.com", "glassdoor.com", "indeed.com",
+        "unstop.com", "coursera.org", "udemy.com", "stackoverflow.email", "discord.com", "reddit.com");
+
+    static boolean isNonFinancialSender(String from) {
+        if (from == null) return false;
+        String f = from.toLowerCase(java.util.Locale.ROOT);
+        int at = f.lastIndexOf('@');
+        if (at < 0) return false;
+        String domain = f.substring(at + 1).replaceAll("[>\\s]", "");
+        for (String d : NON_FINANCIAL_DOMAINS) {
+            if (domain.equals(d) || domain.endsWith("." + d)) return true;
+        }
+        return false;
+    }
+
+    /** Gmail's "not found" — the message was deleted — however deeply the client wrapped it. */
+    static boolean isGoneFromGmail(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof com.google.api.client.http.HttpResponseException h && h.getStatusCode() == 404) return true;
+            if (t.getCause() == t) break;
+        }
+        return false;
+    }
+
+    /** First line of an error, without the response body Google appends to it. */
+    private static String firstLine(Throwable e) {
+        String m = e.getMessage();
+        if (m == null) return e.getClass().getSimpleName();
+        int nl = m.indexOf('\n');
+        return nl > 0 ? m.substring(0, nl) : m;
+    }
+
     private void saveProcessed(Long userId, String msgId, String type, String status, String summary, String sender, String matchedParser) {
         saveProcessed(userId, msgId, type, status, summary, sender, matchedParser, null, null);
     }
@@ -668,6 +747,9 @@ public class GmailSyncService {
             row.setSender(sender != null && sender.length() > 320 ? sender.substring(0, 320) : sender);
             row.setResultSummary(summary != null && summary.length() > 900 ? summary.substring(0, 900) : summary);
             row.setProcessedAt(LocalDateTime.now());
+            String readBy = "EXCLUDED".equals(type) || RULES.equals(matchedParser) ? RULES
+                : com.marketai.ai.llm.LlmService.tracedProviders();
+            if (readBy != null) row.setReadBy(readBy.length() > 40 ? readBy.substring(0, 40) : readBy);
             if (subject != null) row.setSubject(subject.length() > 500 ? subject.substring(0, 500) : subject);
             if (counts != null) row.setCounts(counts);
             processedRepo.save(row);

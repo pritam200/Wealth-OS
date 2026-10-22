@@ -354,6 +354,8 @@ function ReconciliationReportPanel() {
               sub={report.reconciled == null ? 'Not determinable — see note' : 'Recovered by a recent fix'} />
             <StatTile label="Excluded" value={String(report.excluded)} Icon={UserX} tone="neutral" sensitive={false}
               sub="Intentional — not a gap" />
+            <StatTile label="Not financial" value={String(report.notFinancial ?? 0)} Icon={MinusCircle} tone="neutral" sensitive={false}
+              sub="Read in full, no transaction" />
             <StatTile label="PDFs awaiting password" value={String(report.pdfsAwaitingPassword)}
               Icon={Lock} tone="gold" sensitive={false} />
             <StatTile label="Generated" value={new Date(report.generatedAt).toLocaleTimeString()}

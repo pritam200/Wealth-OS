@@ -60,6 +60,8 @@ public class ReconciliationReportDto {
     // Emails skipped because they matched a user-defined excluded-sender pattern —
     // intentional, not a parsing gap.
     private int excluded;
+    /** Emails read in full that hold no transaction — not a gap. */
+    private int notFinancial;
 
     // PDF attachments still waiting on a password (NEEDS_PASSWORD) — not yet attempted,
     // so neither "failed" nor "unparsed" applies to them yet.

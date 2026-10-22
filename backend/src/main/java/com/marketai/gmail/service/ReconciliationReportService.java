@@ -74,7 +74,11 @@ public class ReconciliationReportService {
         long skippedTotal = processedRepo.countByUserIdAndStatus(userId, "SKIPPED");
         long excludedEmails = processedRepo.countByUserIdAndStatusAndType(userId, "SKIPPED", "EXCLUDED");
         long pdfQueuedEmails = processedRepo.countByUserIdAndStatusAndMatchedParser(userId, "SKIPPED", "PendingPdf");
-        long unparsedEmails = Math.max(0, skippedTotal - excludedEmails - pdfQueuedEmails);
+        // Read in full and nothing to book (newsletters, OTPs, alerts) or deleted from Gmail — not
+        // gaps. Counting them as "unparsed" showed ~900 apparent parse failures on a healthy mailbox.
+        long notFinancialEmails = processedRepo.countByUserIdAndStatusAndType(userId, "SKIPPED", GmailSyncService.NO_TRANSACTION);
+        long deletedEmails = processedRepo.countByUserIdAndStatusAndType(userId, "SKIPPED", "DELETED");
+        long unparsedEmails = Math.max(0, skippedTotal - excludedEmails - pdfQueuedEmails - notFinancialEmails - deletedEmails);
 
         long importedPdfs = pendingPdfRepo.countByUserIdAndStatus(userId, "IMPORTED");
         // A scanned PDF that couldn't be read is a gap, not a success.
@@ -95,6 +99,7 @@ public class ReconciliationReportService {
             .reconciled(null)
             .reconciledNote(RECONCILED_NOTE)
             .excluded((int) excludedEmails)
+            .notFinancial((int) notFinancialEmails)
             .pdfsAwaitingPassword((int) needsPasswordPdfs)
             .details(details)
             .generatedAt(LocalDateTime.now())
@@ -110,10 +115,11 @@ public class ReconciliationReportService {
             if ("SKIPPED".equals(pe.getStatus())) {
                 if ("EXCLUDED".equals(pe.getType())) continue; // intentional, not a gap
                 if ("PendingPdf".equals(pe.getMatchedParser())) continue; // tracked via PendingPdf below
+                if (GmailSyncService.NO_TRANSACTION.equals(pe.getType()) || "DELETED".equals(pe.getType())) continue;
             }
             details.add(ReconciliationReportDto.DetailRow.builder()
                 .gmailMessageId(pe.getGmailMessageId())
-                .subject(null) // ProcessedEmail does not persist the email subject
+                .subject(pe.getSubject())
                 .sender(pe.getSender())
                 .matchedParser(pe.getMatchedParser())
                 .status("FAILED".equals(pe.getStatus()) ? "Failed" : "Unparsed")

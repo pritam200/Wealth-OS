@@ -208,6 +208,8 @@ export interface ReconciliationReportDto {
   reconciled: number | null;
   reconciledNote: string;
   excluded: number;
+  /** Read in full, no transaction in them — not a gap. */
+  notFinancial?: number;
   pdfsAwaitingPassword: number;
   details: ReconciliationDetailRow[];
   generatedAt: string;

@@ -123,6 +123,31 @@ public class LlmService {
             .orElse(r.provider() == LlmProviderId.GEMINI);
     }
 
+    // Providers that answered on this thread since beginTrace(): lets the mail sync note which model
+    // actually read an email, so a verdict from the local fallback can be re-read by a better one.
+    private static final ThreadLocal<java.util.Set<String>> ANSWERED_BY = new ThreadLocal<>();
+
+    public static void beginTrace() {
+        ANSWERED_BY.set(new java.util.TreeSet<>());
+    }
+
+    /** Providers that answered since {@link #beginTrace()}, comma-joined; null when none did. */
+    public static String tracedProviders() {
+        java.util.Set<String> p = ANSWERED_BY.get();
+        return p == null || p.isEmpty() ? null : String.join(",", p);
+    }
+
+    /** The provider a call for this task would go to first, or null when none can take it. */
+    public String preferredProvider(LlmTask task) {
+        Snapshot s = config.current();
+        if (!s.aiEnabled()) return null;
+        Route primary = s.route(task);
+        if (primary.enabled() && s.permits(primary.provider()) && s.provider(primary.provider()).configured()) {
+            return primary.provider().key();
+        }
+        return s.fallback(task).map(r -> r.provider().key()).orElse(null);
+    }
+
     private LlmCompletion run(LlmTask task, PromptTemplate prompt, String userPrompt,
                               List<GeminiClient.InlineImage> images) {
         Snapshot s = config.current();
@@ -175,6 +200,8 @@ public class LlmService {
             long started = System.currentTimeMillis();
             try {
                 LlmCompletion c = provider.generate(settings, request);
+                java.util.Set<String> traced = ANSWERED_BY.get();
+                if (traced != null) traced.add(providerKey);
                 usage.record(task, providerKey, route.model(), prompt.tag(), System.currentTimeMillis() - started,
                     true, null, fallback, c.getPromptTokens(), c.getCompletionTokens());
                 return c.toBuilder().provider(providerKey).model(route.model())

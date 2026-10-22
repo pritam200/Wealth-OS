@@ -101,6 +101,13 @@ function SyncStatusDashboard() {
                   tone={(report?.failed ?? 0) > 0 ? 'bear' : 'muted'} />
       </div>
 
+      {(report?.notFinancial ?? 0) > 0 && (
+        <div className="mt-2.5 text-2xs text-gray-500">
+          <span className="font-mono tabular-nums">{report!.notFinancial}</span> emails were read in full and hold no
+          transaction (newsletters, OTPs, social and job mail) — not counted as unparsed.
+        </div>
+      )}
+
       {(report?.pdfsAwaitingPassword ?? 0) > 0 && (
         <div className="mt-2.5 flex items-center gap-2 text-2xs text-neutral">
           <Lock size={11} />

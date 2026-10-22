@@ -30,6 +30,11 @@ public class ProcessedEmail {
     // if no parser matched — lets sync issues be debugged per-bank/source, not just by type.
     private String matchedParser;
 
+    // Which LLM provider(s) read this email ("gemini", "ollama", "rules"). A "no transaction"
+    // verdict from a weaker model than the one now configured is read once more.
+    @Column(name = "read_by", length = 40)
+    private String readBy;
+
     // The email's From address — lets the sync-history UI offer a one-click "Exclude this
     // sender" action (e.g. for a shared inbox that also receives a parent's account emails).
     @Column(length = 320)
