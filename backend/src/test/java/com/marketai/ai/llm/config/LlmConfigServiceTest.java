@@ -45,9 +45,33 @@ class LlmConfigServiceTest {
 
         assertThat(s.saved()).isFalse();
         assertThat(s.route(LlmTask.EMAIL_EXTRACTION).provider()).isEqualTo(LlmProviderId.GEMINI);
-        assertThat(s.route(LlmTask.AI_ADVISOR).provider()).isEqualTo(LlmProviderId.OLLAMA);
+        // With a key, what would have run on the local model runs on Flash-Lite instead.
+        assertThat(s.route(LlmTask.AI_ADVISOR).provider()).isEqualTo(LlmProviderId.GEMINI);
+        assertThat(s.route(LlmTask.AI_ADVISOR).model()).isEqualTo("gemini-3.5-flash-lite");
         assertThat(s.keySource()).isEqualTo(LlmConfigService.KeySource.ENVIRONMENT);
         assertThat(s.gemini().toString()).doesNotContain(KEY);
+    }
+
+    @Test
+    @DisplayName("without a key, local-model tasks stay on the local model")
+    void noKeyKeepsLocalRoutes() {
+        service.envProvider = "ollama";
+        service.envEmailProvider = "gemini";
+        assertThat(service.current().route(LlmTask.AI_ADVISOR).provider()).isEqualTo(LlmProviderId.OLLAMA);
+    }
+
+    @Test
+    @DisplayName("Flash falls back to Flash-Lite, and Flash-Lite has no fallback of its own")
+    void flashFallsBackToLite() {
+        service.envProvider = "ollama";
+        service.envEmailProvider = "gemini";
+        service.envGeminiKey = KEY;
+        var s = service.current();
+
+        var fallback = s.fallback(LlmTask.EMAIL_EXTRACTION).orElseThrow();
+        assertThat(fallback.provider()).isEqualTo(LlmProviderId.GEMINI);
+        assertThat(fallback.model()).isEqualTo("gemini-3.5-flash-lite");
+        assertThat(s.fallback(LlmTask.AI_ADVISOR)).isEmpty();
     }
 
     @Test

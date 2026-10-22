@@ -68,8 +68,10 @@ public class GmailSyncService {
      * same uncertain reading — hundreds of slow calls that changed nothing. Those wait for the reset.
      */
     private boolean holdRetriesForGemini() {
-        if (geminiClient == null || llmService == null || !geminiClient.dailyQuotaSpent()) return false;
-        return "gemini".equals(llmService.preferredProvider(com.marketai.ai.llm.LlmTask.EMAIL_EXTRACTION));
+        if (geminiClient == null || llmService == null) return false;
+        // Held only while every Gemini model the extraction can use (Flash, then Flash-Lite) is spent.
+        java.util.List<String> models = llmService.geminiModelsFor(com.marketai.ai.llm.LlmTask.EMAIL_EXTRACTION);
+        return !models.isEmpty() && models.stream().allMatch(geminiClient::dailyQuotaSpent);
     }
 
     /** Beyond this a text attachment is not sent to the extractor (25 extraction calls); it is flagged instead. */

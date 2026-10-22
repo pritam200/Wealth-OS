@@ -35,9 +35,13 @@ public class LlmConfigService {
     @Value("${app.llm.provider:ollama}") String envProvider = "ollama";
     @Value("${app.llm.email-provider:}") String envEmailProvider = "";
     // Classifying an email only labels it (type, issuer, password format); extraction decides what
-    // is booked. Kept local by default so a free Gemini quota is spent on extraction alone.
+    // is booked. Kept off Flash by default so its quota is spent on extraction alone; with a key
+    // on hand the "local" route below becomes Flash-Lite.
     @Value("${app.llm.email-classification-provider:ollama}") String envEmailClassificationProvider = "ollama";
     @Value("${app.llm.fallback-enabled:true}") boolean envFallback = true;
+    // Free-tier Gemini quotas are per model. With a key on hand, Flash-Lite takes every task that
+    // would otherwise run on the local model, and is the fallback when Flash's quota is spent.
+    @Value("${app.gemini.lite-model:gemini-3.5-flash-lite}") String envGeminiLiteModel = "gemini-3.5-flash-lite";
     @Value("${app.gemini.api-key:}") String envGeminiKey = "";
     @Value("${app.gemini.base-url:https://generativelanguage.googleapis.com/v1beta}") String geminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta";
     @Value("${app.gemini.model:gemini-2.5-flash}") String envGeminiModel = "gemini-2.5-flash";
@@ -67,7 +71,15 @@ public class LlmConfigService {
     /** The resolved configuration. Immutable; replaced as a whole on save. */
     public record Snapshot(boolean aiEnabled, PrivacyMode privacyMode, boolean fallbackEnabled, int maxRetries,
                            ProviderSettings gemini, ProviderSettings ollama, Map<LlmTask, Route> routes,
-                           boolean saved, KeySource keySource, String keyLast4, LocalDateTime updatedAt) {
+                           boolean saved, KeySource keySource, String keyLast4, LocalDateTime updatedAt,
+                           String geminiLiteModel) {
+
+        public Snapshot(boolean aiEnabled, PrivacyMode privacyMode, boolean fallbackEnabled, int maxRetries,
+                        ProviderSettings gemini, ProviderSettings ollama, Map<LlmTask, Route> routes,
+                        boolean saved, KeySource keySource, String keyLast4, LocalDateTime updatedAt) {
+            this(aiEnabled, privacyMode, fallbackEnabled, maxRetries, gemini, ollama, routes, saved, keySource,
+                keyLast4, updatedAt, null);
+        }
 
         public ProviderSettings provider(LlmProviderId id) {
             return id == LlmProviderId.GEMINI ? gemini : ollama;
@@ -86,6 +98,12 @@ public class LlmConfigService {
         public Optional<Route> fallback(LlmTask task) {
             Route primary = route(task);
             if (!fallbackEnabled || !primary.enabled()) return Optional.empty();
+            if (primary.provider() == LlmProviderId.GEMINI && geminiLiteModel != null && !geminiLiteModel.isBlank()
+                    && gemini.configured() && privacyMode.allowsCloud()) {
+                // Flash falls back to Flash-Lite (a separate free quota); Flash-Lite is the last resort.
+                return geminiLiteModel.equals(primary.model()) ? Optional.empty()
+                    : Optional.of(new Route(task, LlmProviderId.GEMINI, geminiLiteModel));
+            }
             LlmProviderId other = primary.provider().other();
             if (other.cloud() && !privacyMode.allowsCloud()) return Optional.empty();
             ProviderSettings s = provider(other);
@@ -133,6 +151,7 @@ public class LlmConfigService {
         ProviderSettings ollama = new ProviderSettings(LlmProviderId.OLLAMA, envOllamaUrl, null, envOllamaModel,
             envOllamaTemperature, null, envOllamaTimeout);
 
+        String liteModel = blankToNull(envGeminiLiteModel);
         Map<LlmTask, Route> routes = new EnumMap<>(LlmTask.class);
         for (LlmTask t : LlmTask.values()) {
             LlmProviderId p = main == null ? LlmProviderId.OLLAMA : main;
@@ -143,11 +162,15 @@ public class LlmConfigService {
                 p = LlmProviderId.parse(envEmailClassificationProvider);
             }
             if (t == LlmTask.DOCUMENT_TRANSCRIPTION) p = LlmProviderId.GEMINI;
+            if (p == LlmProviderId.OLLAMA && envKey != null && liteModel != null) {
+                routes.put(t, new Route(t, LlmProviderId.GEMINI, liteModel));
+                continue;
+            }
             routes.put(t, new Route(t, p, (p == LlmProviderId.GEMINI ? gemini : ollama).defaultModel()));
         }
         return new Snapshot(!"none".equalsIgnoreCase(envProvider), PrivacyMode.CUSTOM, envFallback, DEFAULT_RETRIES,
             gemini, ollama, Collections.unmodifiableMap(routes), false,
-            envKey != null ? KeySource.ENVIRONMENT : KeySource.NONE, last4(envKey), null);
+            envKey != null ? KeySource.ENVIRONMENT : KeySource.NONE, last4(envKey), null, liteModel);
     }
 
     Snapshot fromRow(LlmSettings row) {
@@ -181,7 +204,8 @@ public class LlmConfigService {
         }
         return new Snapshot(row.isAiEnabled(), row.getPrivacyMode(), row.isFallbackEnabled(), row.getMaxRetries(),
             gemini, ollama, Collections.unmodifiableMap(routes), true, source,
-            savedKey != null ? row.getGeminiApiKeyLast4() : last4(envKey), row.getUpdatedAt());
+            savedKey != null ? row.getGeminiApiKeyLast4() : last4(envKey), row.getUpdatedAt(),
+            blankToNull(envGeminiLiteModel));
     }
 
     private String decryptKey(LlmSettings row) {

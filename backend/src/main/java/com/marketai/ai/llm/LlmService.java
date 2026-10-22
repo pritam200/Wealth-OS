@@ -148,6 +148,17 @@ public class LlmService {
         return s.fallback(task).map(r -> r.provider().key()).orElse(null);
     }
 
+    /** The Gemini models this task can reach, primary route first then its fallback. */
+    public List<String> geminiModelsFor(LlmTask task) {
+        Snapshot s = config.current();
+        List<String> models = new java.util.ArrayList<>();
+        if (!s.aiEnabled()) return models;
+        Route primary = s.route(task);
+        if (primary.enabled() && primary.provider() == LlmProviderId.GEMINI) models.add(primary.model());
+        s.fallback(task).filter(r -> r.provider() == LlmProviderId.GEMINI).ifPresent(r -> models.add(r.model()));
+        return models;
+    }
+
     private LlmCompletion run(LlmTask task, PromptTemplate prompt, String userPrompt,
                               List<GeminiClient.InlineImage> images) {
         Snapshot s = config.current();

@@ -107,6 +107,8 @@ app:
     api-key: ${GEMINI_API_KEY:}
     base-url: https://generativelanguage.googleapis.com/v1beta
     model: ${GEMINI_MODEL:gemini-3.6-flash}
+    # Takes every task that would run on the local model, and is Flash's fallback (its own free quota).
+    lite-model: ${GEMINI_LITE_MODEL:gemini-3.5-flash-lite}
 
   sync:
     worker:
