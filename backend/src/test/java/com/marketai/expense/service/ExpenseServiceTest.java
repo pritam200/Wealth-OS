@@ -21,11 +21,15 @@ class ExpenseServiceTest {
 
     private ExpenseRepository expenseRepository;
     private ExpenseService service;
+    private com.marketai.card.repository.CardStatementLineRepository cardLines;
+    private com.marketai.expense.repository.MerchantCategoryRuleRepository ruleRepo;
 
     @BeforeEach
     void setUp() {
         expenseRepository = mock(ExpenseRepository.class);
-        service = new ExpenseService(expenseRepository);
+        cardLines = mock(com.marketai.card.repository.CardStatementLineRepository.class);
+        ruleRepo = mock(com.marketai.expense.repository.MerchantCategoryRuleRepository.class);
+        service = new ExpenseService(expenseRepository, cardLines, new MerchantCategoryRuleService(ruleRepo, expenseRepository));
         when(expenseRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         when(expenseRepository.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(any(), any(), any()))
                 .thenReturn(Collections.emptyList());
@@ -144,5 +148,74 @@ class ExpenseServiceTest {
 
         assertThat(resp.isAlreadyRecorded()).isFalse();
         verify(expenseRepository).save(any());
+    }
+
+    @Test
+    void editingARefundKeepsItNegative() {
+        Expense refund = Expense.builder().id(5L).userId(1L).description("Refund").amount(new BigDecimal("-300"))
+                .refundOfExpenseId(4L).category(ExpenseCategory.SHOPPING).expenseDate(LocalDate.of(2026, 9, 2)).build();
+        when(expenseRepository.findById(5L)).thenReturn(Optional.of(refund));
+        ExpenseRequest req = new ExpenseRequest();
+        req.setDescription("Refund");
+        req.setAmount(new BigDecimal("350"));
+
+        ExpenseResponse res = service.updateExpense(1L, 5L, req);
+
+        assertThat(res.getAmount()).isEqualByComparingTo("-350");
+        assertThat(res.getRefundOfExpenseId()).isEqualTo(4L);
+    }
+
+    @Test
+    void deletingAPurchaseTakesItsRefundsAndFreesItsCardLine() {
+        Expense purchase = Expense.builder().id(4L).userId(1L).amount(new BigDecimal("300")).build();
+        Expense refund = Expense.builder().id(5L).userId(1L).amount(new BigDecimal("-300")).refundOfExpenseId(4L).build();
+        var line = com.marketai.card.entity.CardStatementLine.builder().id(9L).userId(1L).matchedExpenseId(4L)
+                .status(com.marketai.card.entity.CardStatementLine.Status.MATCHED).build();
+        when(expenseRepository.existsByIdAndUserId(4L, 1L)).thenReturn(true);
+        when(expenseRepository.findById(4L)).thenReturn(Optional.of(purchase));
+        when(expenseRepository.findByRefundOfExpenseId(4L)).thenReturn(java.util.List.of(refund));
+        when(cardLines.findByUserIdAndMatchedExpenseId(1L, 4L)).thenReturn(java.util.List.of(line));
+        when(cardLines.findByUserIdAndMatchedExpenseId(1L, 5L)).thenReturn(java.util.List.of());
+
+        service.deleteExpense(1L, 4L);
+
+        verify(expenseRepository).deleteAll(java.util.List.of(refund));
+        verify(expenseRepository).deleteById(4L);
+        assertThat(line.getMatchedExpenseId()).isNull();
+        assertThat(line.getStatus()).isEqualTo(com.marketai.card.entity.CardStatementLine.Status.MISSING);
+    }
+
+    @Test
+    void aCategoryRememberedForAMerchantMovesItsOtherExpensesAndIsUsedForNewOnes() {
+        Expense edited = Expense.builder().id(1L).userId(1L).description("x").merchant("SWIGGY*BLR")
+                .amount(new BigDecimal("200")).category(ExpenseCategory.UNCATEGORIZED).expenseDate(LocalDate.of(2026, 9, 1)).build();
+        Expense older = Expense.builder().id(2L).userId(1L).merchant("Swiggy").amount(new BigDecimal("150"))
+                .category(ExpenseCategory.UPI).expenseDate(LocalDate.of(2026, 8, 1)).build();
+        Expense other = Expense.builder().id(3L).userId(1L).merchant("Zomato").amount(new BigDecimal("150"))
+                .category(ExpenseCategory.UPI).expenseDate(LocalDate.of(2026, 8, 1)).build();
+        when(expenseRepository.findById(1L)).thenReturn(Optional.of(edited));
+        when(expenseRepository.findByUserIdOrderByExpenseDateDesc(1L)).thenReturn(java.util.List.of(edited, older, other));
+        when(ruleRepo.findByUserIdAndMerchantKey(1L, "swiggyblr")).thenReturn(Optional.empty());
+
+        ExpenseRequest req = new ExpenseRequest();
+        req.setDescription("x");
+        req.setAmount(new BigDecimal("200"));
+        req.setCategory("Food Delivery");
+        req.setMerchant("SWIGGY*BLR");
+        req.setRememberForMerchant(true);
+        ExpenseResponse res = service.updateExpense(1L, 1L, req);
+
+        // "swiggyblr" is not "swiggy": only the same normalised merchant moves.
+        assertThat(res.getAlsoRecategorised()).isZero();
+        verify(ruleRepo).save(argThat(r -> r.getCategory() == ExpenseCategory.FOOD_DELIVERY && r.getMerchantKey().equals("swiggyblr")));
+
+        when(ruleRepo.findByUserIdAndMerchantKey(1L, "swiggyblr")).thenReturn(Optional.of(
+                com.marketai.expense.entity.MerchantCategoryRule.builder().userId(1L).merchantKey("swiggyblr")
+                        .category(ExpenseCategory.FOOD_DELIVERY).build()));
+        ExpenseRequest add = new ExpenseRequest();
+        add.setDescription("order");
+        add.setAmount(new BigDecimal("90"));
+        add.setMerchant("SWIGGY*BLR");
+        assertThat(service.addExpense(1L, add).getCategory()).isEqualTo("Food Delivery");
     }
 }

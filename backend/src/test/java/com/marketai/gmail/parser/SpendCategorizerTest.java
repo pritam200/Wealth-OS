@@ -112,4 +112,26 @@ class SpendCategorizerTest {
         assertThat(SpendCategorizer.categorize("Self transfer to own account")).isEqualTo(ExpenseCategory.ACCOUNT_TRANSFER);
         assertThat(SpendCategorizer.categorize("Fixed deposit booked")).isEqualTo(ExpenseCategory.ACCOUNT_TRANSFER);
     }
+
+    @Test
+    void aFundHousesSipMandateIsAnInvestmentNotAnEmi() {
+        assertThat(SpendCategorizer.categorize("ACH D- ICICI PRUDENTIAL MF-SIP 123")).isEqualTo(ExpenseCategory.INVESTMENT);
+        assertThat(SpendCategorizer.categorize("NACH DR SBIMF 4455")).isEqualTo(ExpenseCategory.INVESTMENT);
+        assertThat(SpendCategorizer.categorize("NACH-DR NIPPON INDIA MUTUAL")).isEqualTo(ExpenseCategory.INVESTMENT);
+        assertThat(SpendCategorizer.categorize("NACH DR HDFC HOME LOAN EMI")).isEqualTo(ExpenseCategory.EMI);
+    }
+
+    @Test
+    void payingTheCardBillIsATransferButSpendingOnTheCardIsNot() {
+        assertThat(SpendCategorizer.categorize("Payment to HDFC Credit Card XX1234 via BillDesk")).isEqualTo(ExpenseCategory.ACCOUNT_TRANSFER);
+        assertThat(SpendCategorizer.categorize("BBPS payment for ICICI credit card")).isEqualTo(ExpenseCategory.ACCOUNT_TRANSFER);
+        assertThat(SpendCategorizer.categorize("Rs 499 spent on your HDFC Credit Card at NETFLIX")).isEqualTo(ExpenseCategory.ENTERTAINMENT);
+    }
+
+    @Test
+    void creditedIsNotTheMerchantCred() {
+        assertThat(SpendCategorizer.extractMerchant("Rs 500 credited to your account by NEFT")).isNotEqualTo("CRED");
+        assertThat(SpendCategorizer.extractMerchant("Paid to CRED club")).isEqualTo("CRED");
+        assertThat(SpendCategorizer.extractMerchant("Transfer to Ravi Kumar on 2 Oct")).isNotEqualTo("Vi");
+    }
 }

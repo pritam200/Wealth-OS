@@ -11,6 +11,7 @@ import { StatTile } from '../../components/shared/StatTile';
 import { useMaskedText } from '../../components/shared/Amount';
 import { LoadFailure } from '../../components/shared/LoadFailure';
 import { formatINR } from '../../utils/currency';
+import { localToday, errorText } from '../../utils/dates';
 
 const fmtINR = formatINR;
 
@@ -209,8 +210,7 @@ export function RemindersPanel() {
 }
 
 /* ── Goals ── */
-const today = () => new Date().toISOString().slice(0, 10);
-const errorText = (e: any, fallback: string) => e?.response?.data?.message || fallback;
+const today = localToday;
 type GoalForm = {
   name: string; category: string; targetAmount: string; currentSaved: string; monthlyContribution: string;
   expectedReturn: string; inflationRate: string; targetDate: string; linkedHoldingIds: number[]; linkedSipIds: number[];

@@ -1564,6 +1564,13 @@ public class EmailLLMParserService {
         }
         if ("DEBIT".equals(transactionType)) {
             ExpenseCategory category = SpendCategorizer.categorize(lineText);
+            // The extractor is told to call a card-bill payment "Account Transfer"; trusted when
+            // the line itself is about a card, so a payment to a person can't be dropped from spend.
+            if (category != ExpenseCategory.INVESTMENT
+                    && ExpenseCategory.fromLabel(json.str(t, "category")) == ExpenseCategory.ACCOUNT_TRANSFER
+                    && lineText.toLowerCase(Locale.ROOT).contains("card")) {
+                category = ExpenseCategory.ACCOUNT_TRANSFER;
+            }
             if (category == ExpenseCategory.INVESTMENT) {
                 // Booking it as spend would double-count the investment once the AMC/RTA or
                 // broker confirmation books the fund/stock side, which is the one booking source

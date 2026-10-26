@@ -18,6 +18,7 @@ const fmtINR = (n: number) =>
 function MiscategorizedInvestmentsBanner() {
   const [rows, setRows] = useState<ExpenseResponse[] | null>(null);
   const [purging, setPurging] = useState(false);
+  const [purgeError, setPurgeError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try { const { data } = await expenseApi.listMiscategorizedInvestments(); setRows(data); } catch {}
@@ -26,8 +27,11 @@ function MiscategorizedInvestmentsBanner() {
   useEffect(() => { load(); }, [load]);
 
   const purge = async () => {
-    setPurging(true);
-    try { await expenseApi.purgeMiscategorizedInvestments(); await load(); } catch {} finally { setPurging(false); }
+    if (!window.confirm(`Remove ${rows?.length ?? 0} investment entries from Expenses?`)) return;
+    setPurging(true); setPurgeError(null);
+    try { await expenseApi.purgeMiscategorizedInvestments(); await load(); }
+    catch { setPurgeError("Couldn't remove them. Try again."); }
+    finally { setPurging(false); }
   };
 
   const maskText = useMaskedText();
@@ -43,8 +47,9 @@ function MiscategorizedInvestmentsBanner() {
             <p className="text-sm text-ink font-medium">{rows.length} investment-related entries were mis-imported as expenses</p>
             <p className="text-xs text-gray-500 mt-0.5">
               {maskText(fmtINR(total))} total — SIP/mutual fund/broker debits that were incorrectly booked here before a Gmail-sync fix.
-              These aren't real spending. Removing them won't affect your portfolio; re-run "Sync now" to import them correctly there.
+              These aren't counted as spending. Removing them won't affect your portfolio; re-run "Sync now" to import them correctly there.
             </p>
+            {purgeError && <p className="text-xs text-bear mt-1">{purgeError}</p>}
           </div>
         </div>
         <button onClick={purge} disabled={purging}
@@ -58,6 +63,15 @@ function MiscategorizedInvestmentsBanner() {
 }
 
 export function Tab10Expenses() {
+  // One month and one refresh signal for every card, so they agree after a change.
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const onChanged = useCallback(() => setRefreshKey(k => k + 1), []);
+  const onPrev = () => { if (month === 1) { setYear(y => y - 1); setMonth(12); } else setMonth(m => m - 1); };
+  const onNext = () => { if (month === 12) { setYear(y => y + 1); setMonth(1); } else setMonth(m => m + 1); };
+  const shared = { year, month, onPrev, onNext, refreshKey, onChanged };
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
@@ -72,11 +86,11 @@ export function Tab10Expenses() {
 
       <MiscategorizedInvestmentsBanner />
 
-      <SavingsRatioCard />
+      <SavingsRatioCard year={year} month={month} refreshKey={refreshKey} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <IncomeSection />
-        <ExpenseSection />
+        <IncomeSection {...shared} />
+        <ExpenseSection {...shared} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -86,7 +100,7 @@ export function Tab10Expenses() {
 
       <RentCard />
 
-      <MerchantSpendSection />
+      <MerchantSpendSection year={year} month={month} refreshKey={refreshKey} />
     </div>
   );
 }

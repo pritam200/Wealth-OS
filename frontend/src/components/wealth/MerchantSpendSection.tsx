@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Store } from 'lucide-react';
-import { expenseApi } from '../../api/expense';
+import { expenseApi, NOT_SPENDING } from '../../api/expense';
 import type { ExpenseResponse } from '../../api/expense';
 import { useMaskedText } from '../shared/Amount';
 
@@ -22,21 +22,25 @@ interface MerchantTotal {
  * email-import path and manual entry now normalise the merchant name, and this view groups on
  * that — falling back to the description only when no merchant could be derived.
  */
-export function MerchantSpendSection() {
+export function MerchantSpendSection({ year, month, refreshKey }: { year: number; month: number; refreshKey: number }) {
   const maskText = useMaskedText();
   const [rows, setRows] = useState<ExpenseResponse[] | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    const now = new Date();
-    expenseApi.list(now.getFullYear(), now.getMonth() + 1)
+    setFailed(false);
+    expenseApi.list(year, month)
       .then(r => setRows(r.data))
-      .catch(() => setRows([]));
-  }, []);
+      .catch(() => { setRows([]); setFailed(true); });
+  }, [year, month, refreshKey]);
 
   if (rows == null) return <div className="card animate-pulse h-40 bg-surface-hover" />;
+  const monthLabel = new Date(year, month - 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
 
   const byMerchant = new Map<string, MerchantTotal>();
   for (const e of rows) {
+    // Transfers, card bills and investment debits aren't spending; refunds net against the merchant.
+    if (e.spending === false || NOT_SPENDING.has(e.category)) continue;
     const label = (e.merchant || e.description || 'Unlabelled').trim();
     const key = label.toLowerCase();
     const existing = byMerchant.get(key);
@@ -54,7 +58,7 @@ export function MerchantSpendSection() {
     }
   }
 
-  const sorted = [...byMerchant.values()].sort((a, b) => b.total - a.total);
+  const sorted = [...byMerchant.values()].filter(m => m.total > 0).sort((a, b) => b.total - a.total);
   const grandTotal = sorted.reduce((s, m) => s + m.total, 0);
   const top = sorted.slice(0, 12);
 
@@ -63,12 +67,14 @@ export function MerchantSpendSection() {
       <div className="flex items-start justify-between mb-3 flex-wrap gap-2">
         <h3 className="section-title mb-0"><Store size={15} className="text-brand-light" /> Where It Goes</h3>
         <span className="text-2xs text-gray-500">
-          <span className="font-mono tabular-nums">{sorted.length}</span> merchants this month
+          <span className="font-mono tabular-nums">{sorted.length}</span> merchants · {monthLabel}
         </span>
       </div>
 
-      {sorted.length === 0 ? (
-        <p className="text-xs text-gray-600 py-3">No expenses recorded this month.</p>
+      {failed ? (
+        <p className="text-xs text-bear py-3">Couldn't load this month's expenses.</p>
+      ) : sorted.length === 0 ? (
+        <p className="text-xs text-gray-600 py-3">No spending recorded for {monthLabel}.</p>
       ) : (
         <div className="space-y-2">
           {top.map(m => {

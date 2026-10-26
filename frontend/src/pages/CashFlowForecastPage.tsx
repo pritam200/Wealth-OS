@@ -14,6 +14,7 @@ const EVENT_TONE: Record<ProjectedEvent['type'], string> = {
   RD_MATURITY: 'text-bull',
   EXPENSE: 'text-bear',
   SIP: 'text-bear',
+  RENT: 'text-bear',
 };
 
 function eventSign(e: ProjectedEvent) {

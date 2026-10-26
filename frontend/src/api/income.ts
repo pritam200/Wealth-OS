@@ -26,10 +26,12 @@ export interface IncomeResponse {
 export interface IncomeSummary {
   total: number;
   bySource: Record<string, number>;
+  /** Proceeds of sales not yet matched to a holding: not counted in total. */
+  unmatchedSales?: number;
 }
 
 export const INCOME_SOURCES = [
-  'Salary', 'Freelance', 'Dividend', 'Interest', 'Rental', 'Business', 'Other',
+  'Salary', 'Bonus', 'Freelance', 'Dividend', 'Interest', 'Capital Gain', 'Rental', 'Business', 'Other',
 ];
 
 export const incomeApi = {

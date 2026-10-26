@@ -143,7 +143,7 @@ public class CashFlowForecastService {
         for (Expense e : history) {
             // Same exclusion as ExpenseRepository.sumByUserIdAndDateRange — a CC-bill settlement
             // isn't new spend, it's paying off spend already counted elsewhere.
-            if (e.getCategory() == ExpenseCategory.ACCOUNT_TRANSFER) continue;
+            if (e.getCategory() != null && !e.getCategory().isSpending()) continue;
             totalsByCategory.merge(e.getCategory(), nz(e.getAmount()), BigDecimal::add);
         }
 

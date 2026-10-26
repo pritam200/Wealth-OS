@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Inbox, Check, X, Pencil, Quote, ChevronDown, ChevronUp } from 'lucide-react';
 import { reviewApi } from '../api/review';
+import { EXPENSE_CATEGORIES, categoryLabel } from '../api/expense';
 import type { EmailReviewItem, ReviewRule } from '../api/review';
 import { useMaskedText } from './shared/Amount';
 import { LoadFailure } from './shared/LoadFailure';
@@ -41,6 +42,7 @@ function ReviewRow({ item, similar, onResolved }: {
   const [date, setDate] = useState(item.transactionDate ?? '');
   const [counterparty, setCounterparty] = useState(item.counterparty ?? '');
   const [note, setNote] = useState('');
+  const [category, setCategory] = useState('');
   const [remember, setRemember] = useState(true);
 
   const decide = async (decision: 'ACCEPT' | 'EDIT' | 'REJECT') => {
@@ -52,6 +54,8 @@ function ReviewRow({ item, similar, onResolved }: {
         correctedAmount: decision === 'EDIT' && amount ? Number(amount) : undefined,
         correctedDate: decision === 'EDIT' && date ? date : undefined,
         correctedCounterparty: decision === 'EDIT' ? counterparty || undefined : undefined,
+        // Without one, a spend approved here landed as Uncategorized.
+        correctedCategory: isExpense && category ? category : undefined,
         note: note || undefined,
         rememberForSimilar: remember,
       });
@@ -65,6 +69,7 @@ function ReviewRow({ item, similar, onResolved }: {
   const conf = item.confidence != null ? item.confidence * 100 : null;
   const confPill = conf == null ? 'pill-muted' : conf >= 70 ? 'pill-neutral' : 'pill-bear';
   const willBook = !NON_BOOKING.has(type);
+  const isExpense = type.endsWith('_EXPENSE') || type === 'EMI_PAYMENT' || type === 'BILL_PAYMENT' || type === 'ATM_WITHDRAWAL';
 
   return (
     <div className="rounded-xl border border-surface-border bg-surface-hover/40 p-3">
@@ -122,6 +127,12 @@ function ReviewRow({ item, similar, onResolved }: {
                  className="input-field text-2xs py-1 font-mono" style={{ minHeight: 30 }} />
           <input value={counterparty} onChange={e => setCounterparty(e.target.value)} placeholder="Merchant / payer"
                  className="input-field text-2xs py-1" style={{ minHeight: 30 }} />
+          {isExpense && (
+            <select value={category} onChange={e => setCategory(e.target.value)} className="input-field text-2xs py-1 sm:col-span-2" style={{ minHeight: 30 }} aria-label="Expense category">
+              <option value="">Category: decide from the merchant</option>
+              {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{categoryLabel(c)}</option>)}
+            </select>
+          )}
           {!willBook && (
             <p className="sm:col-span-2 text-2xs text-gray-500">
               {type.includes('TRANSFER')

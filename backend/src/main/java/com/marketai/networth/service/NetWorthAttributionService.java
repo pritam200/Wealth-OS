@@ -123,12 +123,14 @@ public class NetWorthAttributionService {
 
     private BigDecimal sumIncome(Long userId, LocalDate from, LocalDate to) {
         return incomeRepo.findByUserIdAndIncomeDateBetweenOrderByIncomeDateDesc(userId, from, to).stream()
+            .filter(i -> i.getSource() != com.marketai.income.entity.IncomeSource.UNMATCHED_SALE)
             .map(i -> i.getAmount() == null ? BigDecimal.ZERO : i.getAmount())
             .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private BigDecimal sumExpense(Long userId, LocalDate from, LocalDate to) {
         return expenseRepo.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(userId, from, to).stream()
+            .filter(e -> e.getCategory() == null || e.getCategory().isSpending())
             .map(e -> e.getAmount() == null ? BigDecimal.ZERO : e.getAmount())
             .reduce(BigDecimal.ZERO, BigDecimal::add);
     }

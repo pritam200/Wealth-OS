@@ -39,6 +39,8 @@ public class CardStatementTallyService {
 
     private final CardStatementLineRepository lineRepo;
     private final ExpenseRepository expenseRepo;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.marketai.expense.service.MerchantCategoryRuleService merchantRules;
 
     public record Summary(int lines, int matched, int added, int missing, int credits) {}
 
@@ -140,7 +142,7 @@ public class CardStatementTallyService {
         for (Expense e : near) {
             if (claimed.contains(e.getId()) || e.getAmount() == null) continue;
             // A card-bill payment settles spends already counted; it is never one of them.
-            if (e.getCategory() == ExpenseCategory.ACCOUNT_TRANSFER) continue;
+            if (e.getCategory() != null && !e.getCategory().isSpending()) continue;
             if (e.getAmount().subtract(line.getAmount()).abs().compareTo(AMOUNT_TOLERANCE) > 0) continue;
             double score = -Math.abs(ChronoUnit.DAYS.between(d, e.getExpenseDate()));
             if (statementEmailId != null && statementEmailId.equals(e.getSourceEmailId())) score += 5;
@@ -173,7 +175,7 @@ public class CardStatementTallyService {
             .userId(line.getUserId())
             .description(merchant != null ? merchant : "Card spend")
             .amount(line.getAmount())
-            .category(ExpenseCategory.fromLabel(line.getCategory()))
+            .category(categoryFor(line))
             .expenseDate(line.getTxnDate())
             .merchant(merchant)
             .paymentMethod(trim("Credit Card · " + cardLabel, 100))
@@ -183,6 +185,22 @@ public class CardStatementTallyService {
                 + (st.getStatementDate() != null ? " of " + st.getStatementDate() : "")
                 + " — no earlier sync had this charge.", 500))
             .build();
+    }
+
+    /**
+     * The user's remembered category for the merchant, else the issuer's label when it is one of
+     * ours, else a guess from the line's own text: issuer labels like "Dining" or "Retail" are not
+     * our categories and used to land every added line in Uncategorized.
+     */
+    private ExpenseCategory categoryFor(CardStatementLine line) {
+        if (merchantRules != null) {
+            var remembered = merchantRules.categoryFor(line.getUserId(), line.getMerchant());
+            if (remembered.isPresent()) return remembered.get();
+        }
+        ExpenseCategory issuer = ExpenseCategory.fromLabel(line.getCategory());
+        if (issuer != ExpenseCategory.UNCATEGORIZED) return issuer;
+        String text = (line.getMerchant() != null ? line.getMerchant() : "") + " " + (line.getEvidence() != null ? line.getEvidence() : "");
+        return com.marketai.gmail.parser.SpendCategorizer.categorize(text);
     }
 
     private static String trim(String s, int max) {

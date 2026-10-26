@@ -25,5 +25,11 @@ public class ExpenseResponse {
     private boolean alreadyRecorded;
     private String note;
     private String planCategoryOverride;
+    /** The purchase this refund reverses; the amount is then negative. */
+    private Long refundOfExpenseId;
+    /** False for a transfer, card-bill payment or investment: shown, but not counted as spend. */
+    private boolean spending;
+    /** After an edit with rememberForMerchant: how many of the merchant's other expenses moved to the category. */
+    private Integer alsoRecategorised;
     private LocalDateTime createdAt;
 }

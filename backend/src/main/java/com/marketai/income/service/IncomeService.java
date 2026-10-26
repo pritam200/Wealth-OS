@@ -72,7 +72,9 @@ public class IncomeService {
         Income i = repo.findById(id).filter(x -> x.getUserId().equals(userId))
             .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND));
         if (req.getDescription() != null) i.setDescription(req.getDescription());
-        if (req.getAmount() != null) i.setAmount(req.getAmount());
+        // A capital loss is stored negative; the form edits its size and the sign is kept.
+        boolean negative = i.getAmount() != null && i.getAmount().signum() < 0;
+        if (req.getAmount() != null) i.setAmount(negative ? req.getAmount().abs().negate() : req.getAmount());
         if (req.getSource() != null) i.setSource(IncomeSource.fromLabel(req.getSource()));
         if (req.getIncomeDate() != null) i.setIncomeDate(req.getIncomeDate());
         i.setNote(req.getNote());
@@ -98,6 +100,10 @@ public class IncomeService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("total", total);
         result.put("bySource", bySource);
+        // Shown apart: sale proceeds waiting to be matched to the holding they came from.
+        bySource.remove(IncomeSource.UNMATCHED_SALE.getLabel());
+        BigDecimal unmatched = repo.sumUnmatchedSales(userId, from, to);
+        result.put("unmatchedSales", unmatched != null ? unmatched : BigDecimal.ZERO);
         return result;
     }
 

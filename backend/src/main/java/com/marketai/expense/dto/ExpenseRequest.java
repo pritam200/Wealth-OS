@@ -22,6 +22,8 @@ public class ExpenseRequest {
     @Size(max = 200, message = "Description must be 200 characters or fewer")
     private String description;
 
+    // Positive for a purchase. A refund is stored negative, but edited as its positive size:
+    // ExpenseService keeps the sign from the row being edited.
     @NotNull(message = "An expense needs an amount")
     @Positive(message = "An expense amount must be greater than zero")
     private BigDecimal amount;
@@ -45,4 +47,7 @@ public class ExpenseRequest {
     /** Set when the user has been told an identical transaction is already recorded (usually
      *  from their email) and says this is a separate one. */
     private boolean confirmSeparate;
+
+    /** On an edit that changes the category: use it for this merchant's other and future expenses too. */
+    private boolean rememberForMerchant;
 }

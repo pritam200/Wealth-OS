@@ -21,16 +21,37 @@ import java.util.Map;
 public class ExpenseController {
 
     private final ExpenseService expenseService;
+    private final com.marketai.expense.service.MerchantCategoryRuleService merchantRules;
 
     @GetMapping
     public ResponseEntity<List<ExpenseResponse>> listExpenses(
             @AuthenticationPrincipal User user,
             @RequestParam(required = false) Integer year,
-            @RequestParam(required = false) Integer month) {
+            @RequestParam(required = false) Integer month,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String q) {
+        if (from != null || to != null || category != null || q != null) {
+            return ResponseEntity.ok(expenseService.search(user.getId(), from, to, category, q));
+        }
         if (year != null && month != null) {
             return ResponseEntity.ok(expenseService.getMonthly(user.getId(), year, month));
         }
         return ResponseEntity.ok(expenseService.listExpenses(user.getId()));
+    }
+
+    @GetMapping("/merchant-rules")
+    public ResponseEntity<List<Map<String, Object>>> merchantRules(@AuthenticationPrincipal User user) {
+        // Category by its label, as everywhere else in the API (the enum's name is internal).
+        return ResponseEntity.ok(merchantRules.list(user.getId()).stream().map(r -> Map.<String, Object>of(
+            "id", r.getId(), "merchant", r.getMerchant() != null ? r.getMerchant() : r.getMerchantKey(),
+            "category", r.getCategory().getLabel(), "updatedAt", r.getUpdatedAt())).toList());
+    }
+
+    @DeleteMapping("/merchant-rules/{id}")
+    public ResponseEntity<Void> forgetMerchantRule(@AuthenticationPrincipal User user, @PathVariable Long id) {
+        return merchantRules.forget(user.getId(), id) ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 
     @PostMapping

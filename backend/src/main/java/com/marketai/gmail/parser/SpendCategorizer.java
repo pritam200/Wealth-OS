@@ -24,12 +24,17 @@ public final class SpendCategorizer {
                  "camsonline", "kfintech", "flexi cap", "small cap", "mid cap", "large cap", "small ca/",
                  "index fund", "amc ltd", "asset management"))
             return ExpenseCategory.INVESTMENT;
+        // A fund house's SIP mandate, debited as "ACH D- ICICI PRUDENTIAL MF" or "NACH SBIMF":
+        // checked before EMI, which a bare "nach" would otherwise make it.
+        if (has(t, "mf", "sbimf", "sbi mf", "prudential mf", "pru mf", "nippon india", "nextbillion", "kfin", "cams"))
+            return ExpenseCategory.INVESTMENT;
 
         // Checked before EMI's generic "credit card payment" phrase, and before every other
         // spend bucket: a CRED/CC-bill debit settles a debt already spent against elsewhere, so
         // it must never be counted as spend under any other category either.
         if (has(t, "cred", "credit card bill", "credit card payment", "cc bill", "card bill payment",
-                 "self transfer", "own account", "to self", "fixed deposit", "recurring deposit"))
+                 "self transfer", "own account", "to self", "fixed deposit", "recurring deposit")
+                || CARD_BILL.matcher(t).find())
             return ExpenseCategory.ACCOUNT_TRANSFER;
 
         // Sub-brand disambiguation, checked before the generic grocery/restaurant keywords below:
@@ -85,6 +90,14 @@ public final class SpendCategorizer {
         return ExpenseCategory.UNCATEGORIZED;
     }
 
+    // "Payment to HDFC Credit Card XX1234 via BillDesk", "credit card dues", "BBPS ... credit card":
+    // paying the card, not spending on it. A purchase made with a card ("spent on your credit
+    // card at Amazon") names no payment to the card, so it doesn't match.
+    private static final java.util.regex.Pattern CARD_BILL = java.util.regex.Pattern.compile(
+        "(?:payment|paid|pay)\\s+(?:to|towards)\\s+(?:your\\s+)?[a-z ]{0,25}credit\\s*card"
+            + "|credit\\s*card\\s+(?:bill|dues|outstanding)"
+            + "|bbps.{0,40}credit\\s*card|credit\\s*card.{0,40}bbps");
+
     /** Extract a human merchant name from bank/UPI narration text. */
     public static String extractMerchant(String text) {
         if (text == null) return null;
@@ -92,7 +105,7 @@ public final class SpendCategorizer {
         // 0. Known merchant names first (highest confidence, matches branded names)
         String lc = text.toLowerCase();
         for (String[] pair : KNOWN_MERCHANTS) {
-            if (lc.contains(pair[0])) return pair[1];
+            if (has(lc, pair[0])) return pair[1];
         }
 
         // 1. Try "at/to/towards/for MERCHANT" pattern (most bank narrations)

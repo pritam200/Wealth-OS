@@ -42,6 +42,10 @@ public class ParsedEmailImporter {
     private final com.marketai.document.identity.ReferenceHarvester referenceHarvester;
     private final TransactionMatchScorer matchScorer;
     private final com.marketai.rent.service.RentService rentService;
+    // Field-injected and optional, like the other late additions, so tests built on the
+    // constructor keep working; null means no remembered categories.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.marketai.expense.service.MerchantCategoryRuleService merchantRules;
 
     /**
      * Records the email as a signal in the canonical ledger (a candidate awaiting institution
@@ -562,7 +566,7 @@ public class ParsedEmailImporter {
             .userId(userId)
             .description(desc)
             .amount(pe.getAmount())
-            .category(com.marketai.expense.entity.ExpenseCategory.fromLabel(pe.getCategory()))
+            .category(categoryFor(userId, pe.getCategory(), merchant))
             .expenseDate(date)
             .merchant(merchant)
             .paymentMethod(pe.getPaymentMethod())
@@ -581,8 +585,22 @@ public class ParsedEmailImporter {
         return containsRent(merchant) || containsRent(description) || containsRent(category);
     }
 
+    // "rent" as a word: as a substring it matched "Torrent Power", "current" and "parent", and
+    // sent those payments to the rent ledger.
+    private static final java.util.regex.Pattern RENT_WORD = java.util.regex.Pattern.compile("\\brent\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
+
     private boolean containsRent(String s) {
-        return s != null && s.toLowerCase().contains("rent");
+        return s != null && RENT_WORD.matcher(s).find();
+    }
+
+    /**
+     * The merchant's remembered category when the user chose one, else the keyword guess. Never
+     * moves money the guess calls a transfer or investment into spending: those stay out of totals.
+     */
+    private com.marketai.expense.entity.ExpenseCategory categoryFor(Long userId, String label, String merchant) {
+        var guess = com.marketai.expense.entity.ExpenseCategory.fromLabel(label);
+        if (merchantRules == null || !guess.isSpending()) return guess;
+        return merchantRules.categoryFor(userId, merchant).orElse(guess);
     }
 
     /**

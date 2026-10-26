@@ -37,6 +37,14 @@ public enum ExpenseCategory {
 
     public String getLabel() { return label; }
 
+    /**
+     * Whether money booked under this category is spending. A card-bill payment or own-account
+     * transfer moves money already spent or still the user's; an investment is booked from the
+     * fund or broker confirmation. Counting either as spend double-counts it, so every spend
+     * total uses this one rule.
+     */
+    public boolean isSpending() { return this != ACCOUNT_TRANSFER && this != INVESTMENT; }
+
     /** Looks up by display label (case-insensitive), falling back to UNCATEGORIZED
      *  for legacy free-text values (e.g. "Utilities", "Health", "Other") that predate this enum. */
     public static ExpenseCategory fromLabel(String label) {

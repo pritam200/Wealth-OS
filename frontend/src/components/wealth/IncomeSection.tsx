@@ -5,21 +5,29 @@ import type { IncomeResponse, IncomeSummary } from '../../api/income';
 import { useMaskedText } from '../shared/Amount';
 import { TransactionDetail } from '../shared/TransactionDetail';
 import { AiProvenanceButton } from '../shared/AiProvenanceButton';
+import { LoadFailure } from '../shared/LoadFailure';
 import { categoryColor } from '../../theme/chartTheme';
+import { localToday, errorText } from '../../utils/dates';
+import { rentApi } from '../../api/rent';
 
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
-const today = () => new Date().toISOString().slice(0, 10);
+const today = localToday;
 
-export function IncomeSection() {
+/** The month's income; month and refresh are shared with the other cards on the tab (see ExpenseSection). */
+export function IncomeSection({ year, month, onPrev, onNext, refreshKey, onChanged }: {
+  year: number; month: number; onPrev: () => void; onNext: () => void; refreshKey: number; onChanged: () => void;
+}) {
   const maskText = useMaskedText();
-  const now = new Date();
-  const [year, setYear]   = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
   const [items, setItems] = useState<IncomeResponse[]>([]);
   const [summary, setSummary] = useState<IncomeSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [open, setOpen]   = useState(false);
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [editingSource, setEditingSource] = useState<string | null>(null);
 
   const blank = { description: '', amount: '', source: 'Salary', incomeDate: today(), note: '' };
   const [f, setF] = useState(blank);
@@ -27,6 +35,7 @@ export function IncomeSection() {
   const [detail, setDetail] = useState<IncomeResponse | null>(null);
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       const [listRes, sumRes] = await Promise.all([
         incomeApi.list(year, month),
@@ -34,13 +43,12 @@ export function IncomeSection() {
       ]);
       setItems(listRes.data);
       setSummary(sumRes.data);
-    } catch {}
+      setFailed(false);
+    } catch { setFailed(true); }
+    finally { setLoading(false); }
   }, [year, month]);
 
-  useEffect(() => { load(); }, [load]);
-
-  const prevMonth = () => { if (month === 1) { setYear(y => y - 1); setMonth(12); } else setMonth(m => m - 1); };
-  const nextMonth = () => { if (month === 12) { setYear(y => y + 1); setMonth(1); } else setMonth(m => m + 1); };
+  useEffect(() => { load(); }, [load, refreshKey]);
   const monthLabel = new Date(year, month - 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
 
   const [alreadyRecorded, setAlreadyRecorded] = useState<string | null>(null);
@@ -48,9 +56,12 @@ export function IncomeSection() {
   // so "Add anyway" can't confirm an entry the server never checked.
   useEffect(() => { setAlreadyRecorded(null); }, [f, editId, open]);
 
+  const close = () => { setF(blank); setOpen(false); setEditId(null); setEditingSource(null); setFormError(null); };
+
   const submit = async (confirmSeparate = false) => {
-    if (!f.description || !f.amount) return;
-    setSaving(true);
+    if (!f.description.trim()) { setFormError('Add a description.'); return; }
+    if (!(Number(f.amount) > 0)) { setFormError('Enter an amount above zero.'); return; }
+    setSaving(true); setFormError(null);
     try {
       const req = {
         description: f.description,
@@ -70,20 +81,31 @@ export function IncomeSection() {
         }
       }
       setAlreadyRecorded(null);
-      setF(blank); setOpen(false); setEditId(null);
-      await load();
-    } catch {} finally { setSaving(false); }
+      close();
+      onChanged();
+    } catch (e) {
+      setFormError(errorText(e, "Couldn't save the income. Try again."));
+    } finally { setSaving(false); }
   };
 
   const startEdit = (e: IncomeResponse) => {
-    setEditId(e.id); setOpen(true);
-    setF({ description: e.description, amount: String(e.amount), source: e.source,
+    setEditId(e.id); setOpen(true); setEditingSource(e.source); setFormError(null);
+    // A capital loss is stored negative; the form edits its size and the server keeps the sign.
+    setF({ description: e.description, amount: String(Math.abs(e.amount)), source: e.source,
       incomeDate: e.incomeDate, note: e.note || '' });
   };
 
-  const del = async (id: number) => {
-    try { await incomeApi.delete(id); await load(); } catch {}
+  const del = async (e: IncomeResponse) => {
+    if (!window.confirm(`Delete "${e.description}" (${fmtINR(Math.abs(e.amount))})?`)) return;
+    setActionError(null);
+    try { await incomeApi.delete(e.id); onChanged(); }
+    catch (err) { setActionError(errorText(err, `Couldn't delete "${e.description}".`)); }
   };
+
+  // Keep the row's own source selectable even when it isn't one a user picks (Unmatched Sale).
+  const sourceOptions = editingSource && !INCOME_SOURCES.includes(editingSource)
+    ? [...INCOME_SOURCES, editingSource] : INCOME_SOURCES;
+  const unmatched = summary?.unmatchedSales ?? 0;
 
   const total = summary?.total ?? 0;
   const bySource = summary?.bySource ?? {};
@@ -98,10 +120,10 @@ export function IncomeSection() {
           {items.length > 0 && <span className="badge-bull">{items.length}</span>}
         </div>
         <div className="flex items-center gap-2">
-          <button aria-label="Previous" onClick={prevMonth} className="btn-icon"><ChevronLeft size={12} /></button>
+          <button aria-label="Previous" onClick={onPrev} className="btn-icon"><ChevronLeft size={12} /></button>
           <span className="text-xs text-gray-400 w-28 text-center">{monthLabel}</span>
-          <button aria-label="Next" onClick={nextMonth} className="btn-icon"><ChevronRight size={12} /></button>
-          <button onClick={() => setOpen(o => !o)} className="btn-secondary text-xs flex items-center gap-1 ml-1"><Plus size={11} /> Add</button>
+          <button aria-label="Next" onClick={onNext} className="btn-icon"><ChevronRight size={12} /></button>
+          <button onClick={() => (open && !editId ? close() : (close(), setOpen(true)))} className="btn-secondary text-xs flex items-center gap-1 ml-1"><Plus size={11} /> Add</button>
         </div>
       </div>
 
@@ -115,7 +137,7 @@ export function IncomeSection() {
             </div>
             <div>
               <label className="stat-label block mb-1 text-2xs">Amount (₹) *</label>
-              <input type="number" value={f.amount} onChange={e => setF(x => ({ ...x, amount: e.target.value }))}
+              <input type="number" min="0" value={f.amount} onChange={e => setF(x => ({ ...x, amount: e.target.value }))}
                 placeholder="80000" className="input-field text-xs" />
             </div>
           </div>
@@ -123,7 +145,7 @@ export function IncomeSection() {
             <div>
               <label className="stat-label block mb-1 text-2xs">Source</label>
               <select value={f.source} onChange={e => setF(x => ({ ...x, source: e.target.value }))} className="input-field text-xs">
-                {INCOME_SOURCES.map(s => <option key={s}>{s}</option>)}
+                {sourceOptions.map(s => <option key={s}>{s}</option>)}
               </select>
             </div>
             <div>
@@ -139,14 +161,17 @@ export function IncomeSection() {
               <button onClick={() => submit(true)} disabled={saving} className="text-ink underline shrink-0">Add anyway</button>
             </div>
           )}
+          {formError && <p className="text-2xs text-bear">{formError}</p>}
           <div className="flex gap-2">
-            <button onClick={() => submit()} disabled={saving} className="btn-primary text-xs py-1.5 flex-1">{saving ? 'Saving…' : 'Save Income'}</button>
-            <button onClick={() => { setF(blank); setOpen(false); setEditId(null); }} className="btn-ghost text-xs py-1.5 flex-1">Cancel</button>
+            <button onClick={() => submit()} disabled={saving} className="btn-primary text-xs py-1.5 flex-1">{saving ? 'Saving…' : editId ? 'Update Income' : 'Save Income'}</button>
+            <button onClick={close} className="btn-ghost text-xs py-1.5 flex-1">Cancel</button>
           </div>
         </div>
       )}
 
-      {total > 0 && (
+      {actionError && <p className="text-2xs text-bear mb-2">{actionError}</p>}
+
+      {(total !== 0 || unmatched > 0) && !failed && (
         <div className="mb-3 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-2xs text-gray-500">Total earned</span>
@@ -171,10 +196,22 @@ export function IncomeSection() {
               })}
             </div>
           )}
+          {unmatched > 0 && (
+            <div className="flex items-center justify-between text-2xs text-gray-500 pt-1 border-t border-surface-border/40">
+              <span title="Money from selling shares or funds whose purchase isn't recorded yet. It's the sale value, not earnings, so it isn't counted. It's matched once the purchase is imported.">
+                Sale proceeds not yet matched (not counted)
+              </span>
+              <span className="font-mono">{maskText(fmtINR(unmatched))}</span>
+            </div>
+          )}
         </div>
       )}
 
-      {!items.length
+      {loading && !items.length
+        ? <div className="h-10 animate-pulse bg-surface-hover rounded" />
+        : failed
+        ? <LoadFailure what="your income" onRetry={load} />
+        : !items.length
         ? <p className="text-gray-600 text-xs text-center py-4">No income recorded for {monthLabel}.</p>
         : (
           <div className="max-h-64 overflow-y-auto divide-y divide-surface-border/30">
@@ -195,7 +232,7 @@ export function IncomeSection() {
                     <span className="text-bull text-xs font-mono font-semibold">{maskText(fmtINR(e.amount))}</span>
                     <AiProvenanceButton referenceId={e.sourceEmailId} record={{ kind: 'income', id: e.id }} />
                     <button onClick={(ev) => { ev.stopPropagation(); startEdit(e); }} className="btn-icon text-gray-500 hover:text-ink p-0.5" title="Edit income"><Edit2 size={11} /></button>
-                    <button aria-label="Delete" onClick={(ev) => { ev.stopPropagation(); del(e.id); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                    <button aria-label="Delete" onClick={(ev) => { ev.stopPropagation(); del(e); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
                   </div>
                 </div>
               );
@@ -227,24 +264,28 @@ export function IncomeSection() {
   );
 }
 
-export function SavingsRatioCard() {
+export function SavingsRatioCard({ year, month, refreshKey }: { year: number; month: number; refreshKey: number }) {
   const maskText = useMaskedText();
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
   const [income, setIncome] = useState(0);
-  const [expense, setExpense] = useState(0);
+  const [spent, setSpent] = useState(0);
+  const [rent, setRent] = useState(0);
 
   useEffect(() => {
+    const ym = `${year}-${String(month).padStart(2, '0')}`;
     Promise.all([
       incomeApi.summary(year, month),
       import('../../api/expense').then(m => m.expenseApi.summary(year, month)),
-    ]).then(([inc, exp]) => {
+      // Rent has its own ledger, so it isn't in the expense total; it is still money out.
+      rentApi.list().catch(() => ({ data: [] as Awaited<ReturnType<typeof rentApi.list>>['data'] })),
+    ]).then(([inc, exp, rents]) => {
       setIncome(inc.data?.total ?? 0);
-      setExpense(exp.data?.total ?? 0);
+      setSpent(exp.data?.total ?? 0);
+      setRent(rents.data.filter(r => r.status === 'PAID' && r.month?.startsWith(ym))
+        .reduce((sum, r) => sum + (r.amount || 0), 0));
     }).catch(() => {});
-  }, []);
+  }, [year, month, refreshKey]);
 
+  const expense = spent + rent;
   const saved = income - expense;
   const ratio = income > 0 ? (saved / income * 100) : 0;
   const monthLabel = new Date(year, month - 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
@@ -257,6 +298,7 @@ export function SavingsRatioCard() {
         <div className="icon-badge-brand"><Wallet size={15} /></div>
         <h3 className="font-bold text-ink text-sm">Savings — {monthLabel}</h3>
       </div>
+      {rent > 0 && <p className="text-2xs text-gray-600 -mt-2 mb-2">Expenses include {maskText(fmtINR(rent))} rent paid.</p>}
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div className="bg-surface-hover rounded p-2">
           <div className="stat-label text-2xs">Income</div>

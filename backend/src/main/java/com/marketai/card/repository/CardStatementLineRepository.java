@@ -19,6 +19,8 @@ public interface CardStatementLineRepository extends JpaRepository<CardStatement
 
     boolean existsByStatementId(Long statementId);
 
+    List<CardStatementLine> findByUserIdAndMatchedExpenseId(Long userId, Long matchedExpenseId);
+
     /** Expenses already claimed by a statement line, so one expense never ticks off two lines. */
     @Query("SELECT l.matchedExpenseId FROM CardStatementLine l WHERE l.userId = :userId AND l.matchedExpenseId IS NOT NULL")
     Set<Long> claimedExpenseIds(@Param("userId") Long userId);

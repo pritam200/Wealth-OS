@@ -23,6 +23,8 @@ import java.util.stream.Collectors;
 public class ExpenseService {
 
     private final ExpenseRepository expenseRepository;
+    private final com.marketai.card.repository.CardStatementLineRepository cardLines;
+    private final MerchantCategoryRuleService merchantRules;
 
     @Transactional
     public ExpenseResponse addExpense(Long userId, ExpenseRequest req) {
@@ -50,7 +52,7 @@ public class ExpenseService {
                 .userId(userId)
                 .description(req.getDescription())
                 .amount(req.getAmount())
-                .category(ExpenseCategory.fromLabel(req.getCategory()))
+                .category(categoryFor(userId, req.getCategory(), merchant))
                 .expenseDate(date)
                 .merchant(merchant)
                 .paymentMethod(req.getPaymentMethod())
@@ -103,14 +105,48 @@ public class ExpenseService {
         Expense e = expenseRepository.findById(id).filter(x -> x.getUserId().equals(userId))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Expense not found"));
         if (req.getDescription() != null) e.setDescription(req.getDescription());
-        if (req.getAmount() != null) e.setAmount(req.getAmount());
-        if (req.getCategory() != null) e.setCategory(ExpenseCategory.fromLabel(req.getCategory()));
+        // A refund is stored negative so it reduces the month's spend; the form edits its size.
+        boolean refund = e.getRefundOfExpenseId() != null || (e.getAmount() != null && e.getAmount().signum() < 0);
+        if (req.getAmount() != null) e.setAmount(refund ? req.getAmount().abs().negate() : req.getAmount());
+        ExpenseCategory chosen = req.getCategory() != null ? ExpenseCategory.fromLabel(req.getCategory()) : null;
+        if (chosen != null) e.setCategory(chosen);
         if (req.getExpenseDate() != null) e.setExpenseDate(req.getExpenseDate());
-        if (req.getMerchant() != null) e.setMerchant(req.getMerchant());
+        // Sent blank to clear: a merchant that was wrong can be removed, not only replaced.
+        if (req.getMerchant() != null) e.setMerchant(req.getMerchant().isBlank() ? null : req.getMerchant().trim());
         e.setPaymentMethod(req.getPaymentMethod());
         e.setCashAccountId(req.getCashAccountId());
         e.setNote(req.getNote());
-        return toResponse(expenseRepository.save(e));
+        ExpenseResponse saved = toResponse(expenseRepository.save(e));
+        if (req.isRememberForMerchant() && chosen != null && e.getMerchant() != null) {
+            saved.setAlsoRecategorised(merchantRules.remember(userId, e.getMerchant(), chosen));
+        }
+        return saved;
+    }
+
+    /** A category the user typed wins; left blank, the merchant's remembered category is used. */
+    private ExpenseCategory categoryFor(Long userId, String label, String merchant) {
+        ExpenseCategory c = ExpenseCategory.fromLabel(label);
+        if (c != ExpenseCategory.UNCATEGORIZED) return c;
+        return merchantRules.categoryFor(userId, merchant).orElse(c);
+    }
+
+    /** Expenses in a date range (default: the last 90 days), optionally of one category or matching text. */
+    public List<ExpenseResponse> search(Long userId, LocalDate from, LocalDate to, String category, String q) {
+        LocalDate end = to != null ? to : LocalDate.now();
+        LocalDate start = from != null ? from : end.minusDays(90);
+        if (start.isAfter(end)) throw new IllegalArgumentException("The start date is after the end date");
+        ExpenseCategory cat = category != null && !category.isBlank() ? ExpenseCategory.fromLabel(category) : null;
+        String text = q != null && !q.isBlank() ? q.trim().toLowerCase(java.util.Locale.ROOT) : null;
+        return expenseRepository.findByUserIdAndExpenseDateBetweenOrderByExpenseDateDesc(userId, start, end).stream()
+                .filter(e -> cat == null || e.getCategory() == cat)
+                .filter(e -> text == null || contains(e.getMerchant(), text) || contains(e.getDescription(), text)
+                        || contains(e.getPaymentMethod(), text) || contains(e.getNote(), text))
+                .map(this::toResponse)
+                .collect(Collectors.toList());
+    }
+
+    private static boolean contains(String s, String lowerNeedle) {
+        return s != null && s.toLowerCase(java.util.Locale.ROOT).contains(lowerNeedle);
     }
 
     /**
@@ -128,12 +164,33 @@ public class ExpenseService {
         return toResponse(expenseRepository.save(e));
     }
 
+    /**
+     * Removes the expense with the refunds booked against it, which otherwise went on reducing
+     * the month's spend for a purchase no longer there, and frees any card-statement line it
+     * ticked off so the statement tally shows that line as missing again.
+     */
     @Transactional
     public void deleteExpense(Long userId, Long id) {
         if (!expenseRepository.existsByIdAndUserId(id, userId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Expense not found");
         }
+        List<Expense> refunds = expenseRepository.findByRefundOfExpenseId(id).stream()
+                .filter(r -> userId.equals(r.getUserId())).toList();
+        for (Expense gone : concat(refunds, expenseRepository.findById(id).orElseThrow())) {
+            for (var line : cardLines.findByUserIdAndMatchedExpenseId(userId, gone.getId())) {
+                line.setMatchedExpenseId(null);
+                line.setStatus(com.marketai.card.entity.CardStatementLine.Status.MISSING);
+                cardLines.save(line);
+            }
+        }
+        expenseRepository.deleteAll(refunds);
         expenseRepository.deleteById(id);
+    }
+
+    private static List<Expense> concat(List<Expense> a, Expense b) {
+        List<Expense> all = new java.util.ArrayList<>(a);
+        all.add(b);
+        return all;
     }
 
     // Stray Expense rows imported before BankTransactionParser started refusing to book
@@ -189,6 +246,8 @@ public class ExpenseService {
                 .sourceEmailId(e.getSourceEmailId())
                 .note(e.getNote())
                 .planCategoryOverride(e.getPlanCategoryOverride())
+                .refundOfExpenseId(e.getRefundOfExpenseId())
+                .spending(e.getCategory() == null || e.getCategory().isSpending())
                 .createdAt(e.getCreatedAt())
                 .build();
     }

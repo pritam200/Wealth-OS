@@ -5,10 +5,11 @@ import type { RentResponse } from '../../api/rent';
 import { ledgerApi } from '../../api/ledger';
 import type { CashAccount } from '../../api/ledger';
 import { useMaskedText } from '../shared/Amount';
+import { localToday, errorText } from '../../utils/dates';
 
 const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
-const today = () => new Date().toISOString().slice(0, 10);
+const today = localToday;
 
 /**
  * Rent's dedicated quick-entry flow (spec §2): "September Rent ₹31,000 ✓ Paid / October Rent
@@ -25,6 +26,7 @@ export function RentCard() {
   const [payingKey, setPayingKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const scheduleBlank = { amount: '', dueDayOfMonth: '1', paidTo: '', cashAccountId: '' };
   const [sf, setSf] = useState(scheduleBlank);
@@ -33,15 +35,17 @@ export function RentCard() {
   const [pf, setPf] = useState(payBlank);
 
   const load = useCallback(async () => {
-    try { const { data } = await rentApi.list(); setRows(data); } catch {}
+    try { const { data } = await rentApi.list(); setRows(data); }
+    catch { setError("Couldn't load your rent payments."); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { ledgerApi.accounts().then(r => setAccounts(r.data)).catch(() => {}); }, []);
 
   const addSchedule = async () => {
-    if (!sf.amount || !sf.dueDayOfMonth) return;
-    setSaving(true);
+    if (!(Number(sf.amount) > 0)) { setError('Enter the monthly rent.'); return; }
+    if (!(Number(sf.dueDayOfMonth) >= 1 && Number(sf.dueDayOfMonth) <= 31)) { setError('The due day must be between 1 and 31.'); return; }
+    setSaving(true); setError(null);
     try {
       await rentApi.addSchedule({
         amount: Number(sf.amount), dueDayOfMonth: Number(sf.dueDayOfMonth),
@@ -50,11 +54,11 @@ export function RentCard() {
       });
       setSf(scheduleBlank); setOpenSchedule(false);
       await load();
-    } catch {} finally { setSaving(false); }
+    } catch (e) { setError(errorText(e, "Couldn't save the rent schedule.")); } finally { setSaving(false); }
   };
 
   const markPaid = async (row: RentResponse) => {
-    setSaving(true);
+    setSaving(true); setError(null);
     try {
       const { data } = await rentApi.recordPayment({
         month: row.month, amount: row.amount, paidDate: pf.paidDate,
@@ -67,11 +71,14 @@ export function RentCard() {
         : null);
       setPayingKey(null); setPf(payBlank);
       await load();
-    } catch {} finally { setSaving(false); }
+    } catch (e) { setError(errorText(e, "Couldn't record the payment.")); } finally { setSaving(false); }
   };
 
   const del = async (id: number) => {
-    try { await rentApi.delete(id); await load(); } catch {}
+    if (!window.confirm('Delete this rent payment?')) return;
+    setError(null);
+    try { await rentApi.delete(id); await load(); }
+    catch (e) { setError(errorText(e, "Couldn't delete the payment.")); }
   };
 
   const rowKey = (r: RentResponse) => r.id != null ? `r${r.id}` : `s${r.scheduleId}-${r.month}`;
@@ -119,6 +126,7 @@ export function RentCard() {
         </div>
       )}
 
+      {error && <p className="text-2xs text-bear py-1.5">{error}</p>}
       {!rows.length
         ? <p className="text-gray-600 text-xs text-center py-4">No rent schedule set up yet.</p>
         : (

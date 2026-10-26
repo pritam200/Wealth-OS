@@ -10,6 +10,8 @@ export interface ExpenseRequest {
   cashAccountId?: number;
   note?: string;
   confirmSeparate?: boolean;
+  /** On an edit: use this category for the merchant's other and future expenses too. */
+  rememberForMerchant?: boolean;
 }
 
 export interface ExpenseResponse {
@@ -25,25 +27,43 @@ export interface ExpenseResponse {
   alreadyRecorded?: boolean;
   note: string | null;
   createdAt: string;
+  /** The purchase this refund reverses; the amount is then negative. */
+  refundOfExpenseId: number | null;
+  /** False for transfers, card-bill payments and investment debits — listed, not counted. */
+  spending: boolean;
+  /** After an edit with rememberForMerchant: how many of the merchant's other expenses moved. */
+  alsoRecategorised?: number | null;
 }
 
 export interface ExpenseSummary {
   total: number;
   byCategory: Record<string, number>;
+  /** Card-bill payments, own-account transfers and investment debits: not counted in total. */
+  transfers: number;
 }
 
-// Matches backend ExpenseCategory enum labels. Investment and Account Transfer are
-// deliberately excluded here — both are system-derived-only classifications (Gmail parsing
-// flags/skips investment-flavoured debits and CRED/CC-bill-payment debits respectively); neither
-// should ever be a category a user picks for a manually-entered real expense.
+export interface MerchantCategoryRule {
+  id: number; merchant: string; category: string; updatedAt: string;
+}
+
+// Matches backend ExpenseCategory enum labels. Account Transfer is offered so an imported
+// card-bill payment or own-account transfer can be taken out of spending; Investment stays
+// system-only (such debits are booked from the fund or broker confirmation instead).
 export const EXPENSE_CATEGORIES = [
   'Food', 'Food Delivery', 'Groceries', 'Restaurant / Outing', 'Shopping', 'Travel', 'Fuel',
-  'Bills', 'Medical', 'Entertainment', 'EMI', 'UPI', 'Uncategorized',
+  'Bills', 'Medical', 'Entertainment', 'EMI', 'UPI', 'Bank Charges', 'Account Transfer', 'Uncategorized',
 ];
+/** Categories that are not spending: shown with their rows but left out of totals. */
+export const NOT_SPENDING = new Set(['Account Transfer', 'Investment']);
+export const categoryLabel = (c: string) => (c === 'Account Transfer' ? 'Transfer / card bill (not spending)' : c);
 
 export const expenseApi = {
   list: (year: number, month: number) =>
     apiClient.get<ExpenseResponse[]>(`/api/expenses?year=${year}&month=${month}`),
+  search: (p: { from?: string; to?: string; category?: string; q?: string }) =>
+    apiClient.get<ExpenseResponse[]>('/api/expenses', { params: p }),
+  merchantRules: () => apiClient.get<MerchantCategoryRule[]>('/api/expenses/merchant-rules'),
+  forgetMerchantRule: (id: number) => apiClient.delete(`/api/expenses/merchant-rules/${id}`),
   add: (r: ExpenseRequest) =>
     apiClient.post<ExpenseResponse>('/api/expenses', r),
   update: (id: number, r: ExpenseRequest) =>

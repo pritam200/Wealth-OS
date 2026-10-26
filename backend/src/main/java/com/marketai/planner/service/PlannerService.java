@@ -148,6 +148,9 @@ public class PlannerService {
         // Bucket every non-fund-linked expense under its effective category key.
         Map<String, List<Expense>> byKey = new HashMap<>();
         for (Expense e : monthExpenses) {
+            // A card-bill payment or investment debit isn't spend (ExpenseCategory.isSpending);
+            // bucketed as Miscellaneous it counted the month's card spend a second time.
+            if (e.getCategory() != null && !e.getCategory().isSpending()) continue;
             String key = effectiveKey(e, categories);
             byKey.computeIfAbsent(key, k -> new ArrayList<>()).add(e);
         }

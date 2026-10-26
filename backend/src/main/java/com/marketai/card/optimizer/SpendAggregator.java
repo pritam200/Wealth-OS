@@ -71,6 +71,8 @@ public class SpendAggregator {
         for (Expense e : expenses) {
             BigDecimal amt = e.getAmount();
             if (amt == null || amt.compareTo(BigDecimal.ZERO) <= 0) continue;
+            // Paying the card bill isn't card spend; counting it inflated the reward maths.
+            if (e.getCategory() != null && !e.getCategory().isSpending()) continue;
             total = total.add(amt);
 
             ExpenseCategory cat = e.getCategory();
