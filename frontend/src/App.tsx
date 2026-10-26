@@ -231,7 +231,7 @@ function TabContent({ tab, onNavigate }: { tab: number; onNavigate: (tabId: numb
     case 19: return <ReviewQueue />;
     case 20: return <CashFlowForecastPage />;
     case 21: return <SubscriptionsPage />;
-    case 22: return <ReconciliationCenterPage />;
+    case 22: return <ReconciliationCenterPage onNavigate={onNavigate} />;
     case 23: return <DataPlatformPage />;
     case 24: return <SetupChecklistPage />;
     default: return <Tab1MarketTrends />;

@@ -20,12 +20,13 @@ class ReconciliationIssueServiceTest {
 
     private final List<ReconciliationIssueRecord> stored = new ArrayList<>();
     private ReconciliationService checks;
+    private ReconciliationIssueRecordRepository repo;
     private ReconciliationIssueService service;
 
     @BeforeEach
     void setUp() {
         checks = mock(ReconciliationService.class);
-        ReconciliationIssueRecordRepository repo = mock(ReconciliationIssueRecordRepository.class);
+        repo = mock(ReconciliationIssueRecordRepository.class);
         when(repo.findByUserId(1L)).thenAnswer(i -> new ArrayList<>(stored));
         when(repo.save(any())).thenAnswer(i -> {
             ReconciliationIssueRecord r = i.getArgument(0);
@@ -88,5 +89,33 @@ class ReconciliationIssueServiceTest {
         found(backlog(2));
         service.refresh(1L);
         assertThat(r.getStatus()).isEqualTo("OPEN");
+    }
+
+    @Test
+    @DisplayName("an ignored issue stays out of the open list while it persists, and can be reopened")
+    void ignoreAndReopen() {
+        found(backlog(3));
+        service.refresh(1L);
+        ReconciliationIssueRecord r = stored.get(0);
+        r.setId(9L);
+        when(repo.findByIdAndUserId(9L, 1L)).thenReturn(java.util.Optional.of(r));
+
+        service.ignore(1L, 9L, "Known: old statement");
+        assertThat(service.refresh(1L)).isEmpty();
+        assertThat(r.getStatus()).isEqualTo("IGNORED");
+        assertThat(r.getNote()).isEqualTo("Known: old statement");
+
+        service.reopen(1L, 9L);
+        assertThat(service.current(1L)).singleElement().extracting(ReconciliationIssueRecord::getStatus).isEqualTo("OPEN");
+    }
+
+    @Test
+    @DisplayName("an issue keeps the check that found it")
+    void keepsTheCheck() {
+        ReconciliationIssue i = backlog(3);
+        i.setCheckId("INGESTION_REVIEW_BACKLOG");
+        found(i);
+        service.refresh(1L);
+        assertThat(stored.get(0).getCheckId()).isEqualTo("INGESTION_REVIEW_BACKLOG");
     }
 }

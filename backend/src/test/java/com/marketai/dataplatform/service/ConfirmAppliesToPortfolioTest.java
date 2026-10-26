@@ -80,6 +80,20 @@ class ConfirmAppliesToPortfolioTest extends DataPlatformTestSupport {
         assertThat(txns.findById(issue.getTransactionId()).orElseThrow().getLegacyTransactionId()).isNull();
     }
 
+    @Test @DisplayName("a manual adjustment to the institution's quantity is booked into the portfolio too, and says so")
+    void manualAdjustmentAppliesToPortfolio() {
+        ingest(SourceType.ACCOUNT_AGGREGATOR, "mock-aa", aaTxn("AA-1", "BUY", "2026-06-15", ISIN_A, "HDFC Flexi Cap", "100", "10000"));
+        ingest(SourceType.ACCOUNT_AGGREGATOR, "mock-aa", aaHolding(ISIN_A, "HDFC Flexi Cap", "112", "2026-10-05"));
+        LedgerIssue issue = issueRepo.findAll().stream().filter(i -> i.getType() == IssueType.HOLDING_MISMATCH).findFirst().orElseThrow();
+
+        var done = resolution.act(USER, issue.getId(), ResolutionAction.MARK_MANUAL_ADJUSTMENT, "opening balance", null);
+
+        ArgumentCaptor<AddHoldingRequest> req = ArgumentCaptor.forClass(AddHoldingRequest.class);
+        verify(portfolio, times(1)).addHolding(eq9(), eq(USER), req.capture());
+        assertThat(req.getValue().getQuantity()).isEqualByComparingTo("12");
+        assertThat(done.getResolutionNote()).contains("opening balance").contains("portfolio");
+    }
+
     @Test @DisplayName("rejecting never touches the portfolio")
     void rejectDoesNotApply() {
         LedgerIssue issue = missingAugust();

@@ -51,6 +51,7 @@ class HoldingDataCompletenessCheckTest {
     @Test
     void completeHoldingPasses() {
         Holding h = holding(1, "TCS.NS", "10", "4000", LocalDate.now(), LocalDate.now().minusYears(1), null);
+        h.setIsin("INE467B01029");
         assertThat(typesFor(List.of(h), List.of(buy(h, "10")))).isEmpty();
     }
 
@@ -60,6 +61,6 @@ class HoldingDataCompletenessCheckTest {
         Holding unpriced = holding(2, "XYZ.NS", "5", null, null, LocalDate.now().minusYears(1), null);
         assertThat(typesFor(List.of(partial, unpriced), List.of(buy(partial, "60"))))
             .containsExactlyInAnyOrder("LEDGER_INCOMPLETE", "NO_PURCHASE_DATE", "MF_NOT_LINKED",
-                                       "NO_TRANSACTION_HISTORY", "NO_CURRENT_PRICE");
+                                       "NO_TRANSACTION_HISTORY", "NO_CURRENT_PRICE", "MISSING_ISIN");
     }
 }

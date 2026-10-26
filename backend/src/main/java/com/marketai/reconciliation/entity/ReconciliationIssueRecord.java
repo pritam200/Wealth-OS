@@ -10,8 +10,10 @@ import java.time.LocalDateTime;
  * gone rather than existing only for the length of one report request.
  *
  * <p>OPEN when found; ACKNOWLEDGED when the user has seen it and accepts it for now (it stays
- * listed); RESOLVED automatically once the check no longer finds it. A resolved issue that
- * comes back is reopened.
+ * listed); IGNORED when the user says it isn't a problem (it is kept out of the open list for as
+ * long as the check keeps finding it); RESOLVED automatically once the check no longer finds it.
+ * A resolved issue that comes back is reopened, and the user can reopen an acknowledged or
+ * ignored one.
  */
 @Entity
 @Table(name = "reconciliation_issues",
@@ -23,6 +25,7 @@ public class ReconciliationIssueRecord {
     public static final String OPEN = "OPEN";
     public static final String ACKNOWLEDGED = "ACKNOWLEDGED";
     public static final String RESOLVED = "RESOLVED";
+    public static final String IGNORED = "IGNORED";
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -48,6 +51,10 @@ public class ReconciliationIssueRecord {
 
     @Column(name = "reference_id")
     private Long referenceId;
+
+    /** The check that found it, so each check's result can be shown. */
+    @Column(name = "check_id", length = 80)
+    private String checkId;
 
     @Column(nullable = false, length = 20)
     private String status;

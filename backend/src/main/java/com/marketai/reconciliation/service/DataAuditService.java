@@ -55,6 +55,7 @@ import java.util.*;
  */
 @Service
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class DataAuditService {
 
     public enum Classification { VERIFIED, DUPLICATE, MISREAD, CONFLICT, CORRUPTED, MISSING, REQUIRES_RECONCILIATION }
@@ -75,6 +76,33 @@ public class DataAuditService {
     private final com.marketai.gmail.repository.ProcessedEmailRepository processedEmailRepo;
     private final com.marketai.auth.repository.UserRepository userRepo;
     private final com.marketai.market.repository.PriceHistoryRepository priceHistoryRepo;
+    private final com.marketai.reconciliation.check.DepositoryHoldingMismatchCheck depositoryCheck;
+
+    /**
+     * A holding that matches its own trades can still disagree with the depository: the trades
+     * are then consistent but incomplete (a contract note never arrived) or wrong (an F&O trade
+     * read as shares). Such a holding is not VERIFIED; it needs reconciling against the demat
+     * statement, whose figures the reason gives.
+     */
+    private void markDepositoryDifferences(Long userId, List<Finding> all) {
+        Map<Long, String> differs = new HashMap<>();
+        try {
+            for (var issue : depositoryCheck.run(userId)) {
+                if (issue.getReferenceId() != null) differs.putIfAbsent(issue.getReferenceId(), issue.getDescription());
+            }
+        } catch (RuntimeException e) {
+            log.warn("Depository comparison skipped in the data audit: {}", e.toString());
+            return;
+        }
+        if (differs.isEmpty()) return;
+        for (int i = 0; i < all.size(); i++) {
+            Finding f = all.get(i);
+            String why = f.getEntity() == Entity.HOLDING ? differs.get(f.getId()) : null;
+            if (why != null && f.getClassification() == Classification.VERIFIED) {
+                all.set(i, f.toBuilder().classification(Classification.REQUIRES_RECONCILIATION).reason(why).build());
+            }
+        }
+    }
 
     @Data @Builder(toBuilder = true)
     public static class Finding {
@@ -87,6 +115,33 @@ public class DataAuditService {
         private BigDecimal amount;
         private LocalDate date;
         private String label;
+        /** A DUPLICATE or MISREAD a rebuild may remove; otherwise {@link #refusalReason} says why not. */
+        private boolean removable;
+        private String refusalReason;
+    }
+
+    /**
+     * Why a rebuild would refuse to remove a duplicate or misread record, or null when it may. The
+     * rebuild applies this same rule, so what the audit offers to remove is what it removes: a
+     * share sale or split read wrongly writes only its ledger row (gains are derived from the
+     * ledger), but a duplicated sale, or any fund sale, may also have written a redemption or tax
+     * record that removing the ledger row alone would leave behind.
+     */
+    public static String removalRefusal(Entity entity, Classification c, Transaction t) {
+        if (c != Classification.DUPLICATE && c != Classification.MISREAD) return "It is not a duplicate or misread";
+        return switch (entity) {
+            case EXPENSE, INCOME -> null;
+            case TRANSACTION -> {
+                boolean misread = c == Classification.MISREAD;
+                boolean fund = t != null && t.getHolding() != null && t.getHolding().getSymbol() != null
+                    && t.getHolding().getSymbol().endsWith(".MF");
+                boolean ok = t != null && (t.getType() == Transaction.TransactionType.BUY
+                    || misread && t.getType() == Transaction.TransactionType.SPLIT
+                    || misread && t.getType() == Transaction.TransactionType.SELL && !fund);
+                yield ok ? null : "A sale — remove it by hand with its redemption record";
+            }
+            default -> "A rebuild doesn't remove this kind of record";
+        };
     }
 
     @Data @Builder
@@ -143,9 +198,11 @@ public class DataAuditService {
         }
         all.addAll(auditExpenses(expenses.stream().filter(e -> !misreadExpenses.contains(e.getId())).toList(), conflicted, needsReview, lines, today));
         all.addAll(auditIncomes(incomes.stream().filter(i -> !misreadIncomes.contains(i.getId())).toList(), conflicted, needsReview, lines, today));
+        Map<Long, Transaction> trades = new HashMap<>();
         for (Portfolio p : portfolioRepo.findByUserIdOrderByIdAsc(userId)) {
             for (Holding h : holdingRepo.findByPortfolioId(p.getId())) {
                 List<Transaction> txns = transactionRepo.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId());
+                txns.forEach(t -> trades.put(t.getId(), t));
                 Map<Long, String> misread = misreadTrades(h, txns, closesFor(h, txns));
                 for (Finding f : auditHolding(h, txns, conflicted, today)) {
                     String why = f.getEntity() == Entity.TRANSACTION ? misread.get(f.getId()) : null;
@@ -155,6 +212,13 @@ public class DataAuditService {
         }
         all.addAll(auditFds(fdRepo.findByUserIdOrderByCreatedAtDesc(userId), today));
         all.addAll(auditRds(rdRepo.findByUserIdOrderByCreatedAtDesc(userId), today));
+        markDepositoryDifferences(userId, all);
+        for (Finding f : all) {
+            if (f.getClassification() != Classification.DUPLICATE && f.getClassification() != Classification.MISREAD) continue;
+            String refusal = removalRefusal(f.getEntity(), f.getClassification(), f.getEntity() == Entity.TRANSACTION ? trades.get(f.getId()) : null);
+            f.setRemovable(refusal == null);
+            f.setRefusalReason(refusal);
+        }
         return summarise(all);
     }
 

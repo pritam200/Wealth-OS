@@ -70,4 +70,25 @@ public class ReconciliationController {
             @RequestBody(required = false) java.util.Map<String, String> body) {
         return ResponseEntity.ok(issueService.acknowledge(user.getId(), id, body != null ? body.get("note") : null));
     }
+
+    /** The user says it isn't a problem; it stays out of the open list while the check keeps finding it. */
+    @PostMapping("/issues/{id}/ignore")
+    public ResponseEntity<com.marketai.reconciliation.entity.ReconciliationIssueRecord> ignore(
+            @AuthenticationPrincipal User user, @PathVariable Long id,
+            @RequestBody(required = false) java.util.Map<String, String> body) {
+        return ResponseEntity.ok(issueService.ignore(user.getId(), id, body != null ? body.get("note") : null));
+    }
+
+    /** Back to the open list, from acknowledged or ignored. */
+    @PostMapping("/issues/{id}/reopen")
+    public ResponseEntity<com.marketai.reconciliation.entity.ReconciliationIssueRecord> reopen(
+            @AuthenticationPrincipal User user, @PathVariable Long id) {
+        return ResponseEntity.ok(issueService.reopen(user.getId(), id));
+    }
+
+    /** Every check the Center runs, and what each looks for. */
+    @GetMapping("/checks")
+    public ResponseEntity<java.util.List<com.marketai.reconciliation.check.ReconciliationRegistry.CheckInfo>> checks() {
+        return ResponseEntity.ok(reconciliationService.describeChecks());
+    }
 }

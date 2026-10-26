@@ -15,7 +15,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -36,6 +35,7 @@ public class ReconciliationCenterService {
     private final ReconciliationIssueService issueService;
     private final ScheduledJobHealthRepository jobHealthRepo;
     private final SyncJobService syncJobService;
+    private final ReconciliationService reconciliationService;
 
     @Value @Builder
     public static class Ingestion {
@@ -67,28 +67,54 @@ public class ReconciliationCenterService {
         LocalDateTime processedAt;
     }
 
+    /** One check and how it came out on the last run: passed when none of its findings is open. */
+    @Value @Builder
+    public static class CheckStatus {
+        String id;
+        String domain;
+        String description;
+        /** Open or acknowledged findings from it. */
+        long openIssues;
+        /** Findings from it the user ignored. */
+        long ignoredIssues;
+        boolean failedToRun;
+    }
+
     @Value @Builder
     public static class Center {
         Ingestion ingestion;
         List<ReconciliationIssueRecord> openIssues;
+        List<ReconciliationIssueRecord> ignoredIssues;
         List<ReconciliationIssueRecord> recentlyResolved;
         List<FailedEmail> failedEmails;
         List<ScheduledJobHealth> backgroundJobs;
         com.marketai.sync.controller.SyncJobController.SyncJobDto lastSync;
+        List<CheckStatus> checks;
+        /** When the checks last actually ran; null if they never have. */
         LocalDateTime checkedAt;
     }
 
-    /** @param refresh re-run the checks first (otherwise the stored issues are shown) */
-    @Transactional
+    /**
+     * @param refresh re-run the checks first (otherwise the stored issues are shown). Not in one
+     *                transaction: the refresh runs in its own, so a refresh at the same moment
+     *                storing the same new issue first fails only that attempt, which is retried.
+     */
     public Center center(Long userId, boolean refresh) {
-        List<ReconciliationIssueRecord> open;
-        try {
-            open = refresh ? issueService.refresh(userId) : issueService.current(userId);
-        } catch (org.springframework.dao.DataIntegrityViolationException e) {
-            // A refresh running at the same moment (the one after a sync) stored the same new
-            // issue first; what it stored is current.
-            open = issueService.current(userId);
+        if (refresh) {
+            try {
+                issueService.refresh(userId);
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                // A refresh running at the same moment (the one after a sync) stored the same new
+                // issue first. Running again sees what it stored.
+                try {
+                    issueService.refresh(userId);
+                } catch (org.springframework.dao.DataIntegrityViolationException again) {
+                    // Still racing: what is stored is current enough to show.
+                }
+            }
         }
+        List<ReconciliationIssueRecord> open = issueService.current(userId);
+        List<ReconciliationIssueRecord> ignored = issueService.ignored(userId);
         List<ReconciliationIssueRecord> resolved = issueService.recentlyResolved(userId).stream().limit(20).toList();
 
         List<FailedEmail> failed = processedEmailRepo
@@ -102,13 +128,27 @@ public class ReconciliationCenterService {
         return Center.builder()
             .ingestion(ingestion(userId))
             .openIssues(open)
+            .ignoredIssues(ignored)
+            .checks(checkStatuses(open, ignored))
             .recentlyResolved(resolved)
             .failedEmails(failed)
             .backgroundJobs(jobHealthRepo.findAll(org.springframework.data.domain.Sort.by("jobName")).stream()
                 .map(ReconciliationCenterService::withoutErrorText).toList())
             .lastSync(recent.isEmpty() ? null : com.marketai.sync.controller.SyncJobController.SyncJobDto.from(recent.get(0)))
-            .checkedAt(LocalDateTime.now())
+            .checkedAt(issueService.lastRunAt(userId))
             .build();
+    }
+
+    List<CheckStatus> checkStatuses(List<ReconciliationIssueRecord> open, List<ReconciliationIssueRecord> ignored) {
+        List<CheckStatus> out = new ArrayList<>();
+        for (var c : reconciliationService.describeChecks()) {
+            out.add(CheckStatus.builder().id(c.id()).domain(c.domain()).description(c.description())
+                .openIssues(open.stream().filter(r -> c.id().equals(r.getCheckId())).count())
+                .ignoredIssues(ignored.stream().filter(r -> c.id().equals(r.getCheckId())).count())
+                .failedToRun(open.stream().anyMatch(r -> c.id().equals(r.getCheckId()) && "CHECK_FAILED".equals(r.getType())))
+                .build());
+        }
+        return out;
     }
 
     /**

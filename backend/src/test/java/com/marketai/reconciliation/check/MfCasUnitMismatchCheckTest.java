@@ -32,7 +32,11 @@ class MfCasUnitMismatchCheckTest {
     private void setUp() {
         snapshotRepo = mock(CasBalanceSnapshotRepository.class);
         holdingRepo = mock(HoldingRepository.class);
-        check = new MfCasUnitMismatchCheck(snapshotRepo, holdingRepo);
+        check = new MfCasUnitMismatchCheck(snapshotRepo, holdingRepo,
+            mock(com.marketai.portfolio.repository.TransactionRepository.class),
+            mock(com.marketai.dataplatform.repo.HoldingSnapshotRepository.class),
+            mock(com.marketai.dataplatform.repo.FinancialAccountRepository.class),
+            mock(com.marketai.dataplatform.repo.FinancialAssetRepository.class));
     }
 
     private static CasBalanceSnapshot snapshot(String folio, String schemeCode, LocalDate asOfDate, String units) {
@@ -110,6 +114,41 @@ class MfCasUnitMismatchCheckTest {
         ));
         when(holdingRepo.findByUserIdAndFolio(USER, "F1"))
             .thenReturn(List.of(holding(10L, "F1", "HDFC001", "1000.0000")));
+
+        assertThat(check.run(USER)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("two schemes in one folio are each compared with their own holding, not added together")
+    void schemesInOneFolioAreKeptApart() {
+        setUp();
+        CasBalanceSnapshot flexi = snapshot("F1", null, LocalDate.of(2026, 1, 31), "100.0000");
+        flexi.setIsin("INF179K01UT0");
+        CasBalanceSnapshot liquid = snapshot("F1", null, LocalDate.of(2026, 1, 31), "40.0000");
+        liquid.setIsin("INF179K01VK7");
+        when(snapshotRepo.findByUserIdOrderByAsOfDateDesc(USER)).thenReturn(List.of(flexi, liquid));
+        Holding a = holding(10L, "F1", "1001", "100.0000");
+        a.setIsin("INF179K01UT0");
+        Holding b = holding(11L, "F1", "1002", "25.0000");
+        b.setIsin("INF179K01VK7");
+        when(holdingRepo.findByUserIdAndFolio(USER, "F1")).thenReturn(List.of(a, b));
+
+        List<ReconciliationIssue> issues = check.run(USER);
+
+        assertThat(issues).singleElement().satisfies(i -> {
+            assertThat(i.getReferenceId()).isEqualTo(11L);
+            assertThat(i.getDescription()).contains("40").contains("25").contains("15");
+        });
+    }
+
+    @Test
+    @DisplayName("a line that can't be told apart from a folio's other schemes is not compared")
+    void ambiguousLineIsSkipped() {
+        setUp();
+        when(snapshotRepo.findByUserIdOrderByAsOfDateDesc(USER))
+            .thenReturn(List.of(snapshot("F1", null, LocalDate.of(2026, 1, 31), "999.0000")));
+        when(holdingRepo.findByUserIdAndFolio(USER, "F1"))
+            .thenReturn(List.of(holding(10L, "F1", "1001", "100"), holding(11L, "F1", "1002", "25")));
 
         assertThat(check.run(USER)).isEmpty();
     }

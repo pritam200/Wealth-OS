@@ -108,6 +108,13 @@ public class HoldingService {
                            List<CanonicalTransaction> entries, HoldingSnapshot reported) {
         String key = "HOLDING:" + account.getId() + ":" + asset.getId();
         if (reported == null || reported.getQuantity() == null) return;
+        if (entries.isEmpty() && com.marketai.cas.CasImportService.DEMAT_INSTITUTION.equalsIgnoreCase(account.getInstitution())) {
+            // A demat account's shares are bought through broker accounts, so its own ledger is empty and
+            // "0 calculated" says nothing. The portfolio's holdings are compared with the depository by
+            // ISIN in the Reconciliation Center instead (DepositoryHoldingMismatchCheck).
+            issues.autoResolve(userId, key, "Compared with your portfolio's trades in the Reconciliation Center instead.");
+            return;
+        }
         HoldingReconciler.Result r = reconciler.compare(p.quantity(), reported.getQuantity(), evidence(entries, p, reported));
         if (r.matches()) {
             issues.autoResolve(userId, key, "The ledger now matches the institution's reported holding of " + reported.getQuantity().stripTrailingZeros().toPlainString() + ".");

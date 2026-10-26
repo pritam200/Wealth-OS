@@ -34,7 +34,10 @@ public class ReconciliationRegistry {
 
         for (ReconciliationCheck check : checks) {
             try {
-                issues.addAll(check.run(userId));
+                for (ReconciliationIssue issue : check.run(userId)) {
+                    if (issue.getCheckId() == null) issue.setCheckId(check.id());
+                    issues.add(issue);
+                }
             } catch (RuntimeException e) {
                 log.warn("Reconciliation check {} failed: {}", check.id(), e.toString());
                 // A check that cannot run is itself a finding. Swallowing it would let the
@@ -42,6 +45,7 @@ public class ReconciliationRegistry {
                 issues.add(ReconciliationIssue.builder()
                     .domain(check.domain())
                     .type("CHECK_FAILED")
+                    .checkId(check.id())
                     .severity("MEDIUM")
                     .description(String.format(
                         "The '%s' check could not run, so nothing is known about whether this "
@@ -59,6 +63,13 @@ public class ReconciliationRegistry {
             described.put(c.id(), c.description());
         }
         return described;
+    }
+
+    /** One check: what it is called, its domain and what it looks for. */
+    public record CheckInfo(String id, String domain, String description) {}
+
+    public List<CheckInfo> checks() {
+        return checks.stream().map(c -> new CheckInfo(c.id(), c.domain(), c.description())).toList();
     }
 
     public int checkCount() { return checks.size(); }

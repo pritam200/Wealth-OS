@@ -13,15 +13,21 @@ export interface ReconciliationReport {
   issues: ReconciliationIssue[];
 }
 
-/** A finding kept until it goes away: OPEN → (ACKNOWLEDGED) → RESOLVED automatically. */
+/**
+ * A finding kept until it goes away: OPEN → (ACKNOWLEDGED | IGNORED) → RESOLVED automatically.
+ * An ignored finding stays out of the open list while the check keeps finding it.
+ */
 export interface StoredIssue {
   id: number;
   domain: string;
   type: string;
   severity: 'HIGH' | 'MEDIUM' | 'LOW';
   description: string;
+  /** The record it is about — for a PORTFOLIO issue, the holding id. */
   referenceId: number | null;
-  status: 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED';
+  /** The check that found it. */
+  checkId: string | null;
+  status: 'OPEN' | 'ACKNOWLEDGED' | 'IGNORED' | 'RESOLVED';
   firstSeenAt: string;
   lastSeenAt: string;
   resolvedAt: string | null;
@@ -55,14 +61,28 @@ export interface BackgroundJob {
   consecutiveFailures: number;
 }
 
+/** One check and how it came out on the last run: passed when none of its findings is open. */
+export interface CheckStatus {
+  id: string;
+  domain: string;
+  description: string;
+  openIssues: number;
+  ignoredIssues: number;
+  failedToRun: boolean;
+}
+
 export interface ReconciliationCenter {
   ingestion: IngestionTotals;
+  /** Open and acknowledged. */
   openIssues: StoredIssue[];
+  ignoredIssues: StoredIssue[];
   recentlyResolved: StoredIssue[];
   failedEmails: { gmailMessageId: string; sender: string | null; subject: string | null; reason: string | null; processedAt: string | null }[];
   backgroundJobs: BackgroundJob[];
   lastSync: { id: number; status: string; resultSummary: string | null; finishedAt: string | null } | null;
-  checkedAt: string;
+  checks: CheckStatus[];
+  /** When the checks last actually ran; null if they never have. */
+  checkedAt: string | null;
 }
 
 export type AuditClass = 'VERIFIED' | 'DUPLICATE' | 'MISREAD' | 'CONFLICT' | 'CORRUPTED' | 'MISSING' | 'REQUIRES_RECONCILIATION';
@@ -77,6 +97,9 @@ export interface AuditFinding {
   amount: number | null;
   date: string | null;
   label: string | null;
+  /** A DUPLICATE or MISREAD a rebuild will remove; otherwise refusalReason says why it won't. */
+  removable: boolean;
+  refusalReason: string | null;
 }
 
 export interface DataAuditReport {
@@ -113,6 +136,10 @@ export const reconciliationApi = {
   center: (refresh = true) => apiClient.get<ReconciliationCenter>('/api/reconciliation/center', { params: { refresh } }),
   acknowledge: (id: number, note?: string) =>
     apiClient.post<StoredIssue>(`/api/reconciliation/issues/${id}/acknowledge`, { note }),
+  ignore: (id: number, note?: string) =>
+    apiClient.post<StoredIssue>(`/api/reconciliation/issues/${id}/ignore`, { note }),
+  reopen: (id: number) => apiClient.post<StoredIssue>(`/api/reconciliation/issues/${id}/reopen`, {}),
+  checks: () => apiClient.get<{ id: string; domain: string; description: string }[]>('/api/reconciliation/checks'),
   dataAudit: () => apiClient.get<DataAuditReport>('/api/reconciliation/data-audit'),
   backups: () => apiClient.get<BackupInfo[]>('/api/reconciliation/backups'),
   createBackup: () => apiClient.post<BackupInfo>('/api/reconciliation/backups'),

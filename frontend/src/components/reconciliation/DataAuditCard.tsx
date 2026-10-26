@@ -47,9 +47,8 @@ export function DataAuditCard() {
   useEffect(() => { load(); }, [load]);
 
   const key = (f: AuditFinding) => `${f.entity}:${f.id}`;
-  const removable = (f: AuditFinding) =>
-    (f.classification === 'DUPLICATE' || f.classification === 'MISREAD')
-      && (f.entity === 'EXPENSE' || f.entity === 'INCOME' || f.entity === 'TRANSACTION');
+  // The server applies the same rule the rebuild does, so what can be ticked is what will be removed.
+  const removable = (f: AuditFinding) => f.removable;
   const usableBackup = backups.find(b => b.usable);
 
   const toggle = (f: AuditFinding) => setSelected(s => {
@@ -59,7 +58,7 @@ export function DataAuditCard() {
   });
 
   const takeBackup = async () => {
-    setBusy(true); setMessage(null);
+    setBusy(true); setMessage(null); setError(null);
     try {
       const { data } = await reconciliationApi.createBackup();
       setMessage(`Backup ${data.id} taken (${Object.values(data.rowCounts).reduce((s, n) => s + n, 0)} rows). Download it before rebuilding if you want a copy.`);
@@ -68,6 +67,7 @@ export function DataAuditCard() {
   };
 
   const download = async (id: number) => {
+    setError(null);
     try {
       const { data } = await reconciliationApi.downloadBackup(id);
       const url = URL.createObjectURL(data);
@@ -83,7 +83,7 @@ export function DataAuditCard() {
     const ok = window.confirm(`Remove ${remove.length} duplicate or misread record(s) and re-derive holdings from their trades?\n\n`
       + `Backup ${usableBackup.id} (${new Date(usableBackup.createdAt).toLocaleString('en-IN')}) will be used and can't be reused.`);
     if (!ok) return;
-    setBusy(true); setMessage(null);
+    setBusy(true); setMessage(null); setError(null);
     try {
       const { data } = await reconciliationApi.rebuild(usableBackup.id, remove);
       setMessage(data.summary);
@@ -101,6 +101,7 @@ export function DataAuditCard() {
   const classTotals = (Object.keys(CLASS_LABEL) as AuditClass[]).map(c => ({
     c, n: Object.values(report.counts).reduce((s, m) => s + (m[c] ?? 0), 0),
   }));
+  const removableMisreads = report.findings.filter(f => f.classification === 'MISREAD' && removable(f));
 
   return (
     <div className="card space-y-3">
@@ -123,11 +124,9 @@ export function DataAuditCard() {
         </p>
       )}
 
-      {report.findings.some(f => f.classification === 'MISREAD') && (
-        <button
-          onClick={() => setSelected(new Set(report.findings.filter(f => f.classification === 'MISREAD' && removable(f)).map(key)))}
-          className="btn-ghost text-2xs">
-          Tick all {report.findings.filter(f => f.classification === 'MISREAD').length} misreads
+      {removableMisreads.length > 0 && (
+        <button onClick={() => setSelected(new Set(removableMisreads.map(key)))} className="btn-ghost text-2xs">
+          Tick all {removableMisreads.length} removable misreads
         </button>
       )}
 
@@ -148,6 +147,7 @@ export function DataAuditCard() {
                     {f.amount != null && <span className="font-mono text-gray-400 ml-auto">{maskText(fmtINR(f.amount))}</span>}
                   </div>
                   <div className="text-gray-500">{f.date ? `${f.date} · ` : ''}{f.reason}</div>
+                  {f.refusalReason && <div className="text-neutral">Not removed by a rebuild: {f.refusalReason}</div>}
                 </div>
               </label>
             ))}

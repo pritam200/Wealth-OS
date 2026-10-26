@@ -53,6 +53,14 @@ public class CasBalanceSnapshot {
     @Column(name = "scheme_code", length = 20)
     private String schemeCode;
 
+    /**
+     * The scheme's ISIN as the statement prints it. A folio can hold several schemes, and the ISIN
+     * tells them apart even when the scheme name didn't resolve to a code. Nullable: lines read
+     * before it was captured, or statements that don't print it.
+     */
+    @Column(length = 20)
+    private String isin;
+
     @Column(name = "as_of_date", nullable = false)
     private LocalDate asOfDate;
 

@@ -76,6 +76,13 @@ public class HoldingDataCompletenessCheck implements ReconciliationCheck {
                     "%s has no purchase date, so short- vs long-term tax and the holding period are unknown. %s.", label, fix)));
             }
 
+            if (!mf && (h.getIsin() == null || h.getIsin().isBlank())) {
+                issues.add(issue("MISSING_ISIN", "LOW", h, String.format(
+                    "%s has no ISIN, so it can only be matched to your demat statement by its symbol or name. "
+                        + "Importing your NSDL/CDSL statement adds the ISIN where the name matches; the broker's contract note also carries it.",
+                    label)));
+            }
+
             if (mf && (h.getAmfiSchemeCode() == null || h.getAmfiSchemeCode().isBlank())) {
                 issues.add(issue("MF_NOT_LINKED", "MEDIUM", h, String.format(
                     "%s isn't matched to an AMFI scheme, so its NAV is not refreshed and it can't be compared with its "
