@@ -55,12 +55,17 @@ public class LearnedTemplateService {
 
     /** Learns the wording of one transaction the model read and the checks accepted. Never throws. */
     public void learn(Long userId, String senderDomain, String subject, String text, JsonNode t) {
+        learn(userId, senderDomain, subject, text, t, 1);
+    }
+
+    /** As above, for one of {@code transactionsInEmail}: a fund or share form is learned only from an email with one. */
+    public void learn(Long userId, String senderDomain, String subject, String text, JsonNode t, int transactionsInEmail) {
         try {
             if (userId == null || senderDomain == null) return;
             String shape = LearnedTemplates.subjectShape(subject);
             if (repo.findByUserIdAndSenderDomainAndSubjectShapeOrderByTimesUsedDesc(userId, senderDomain, shape).size()
                     >= MAX_PER_SENDER_SUBJECT) return;
-            Optional<LearnedTemplates.Shape> learned = LearnedTemplates.learn(text, t);
+            Optional<LearnedTemplates.Shape> learned = LearnedTemplates.learn(text, t, transactionsInEmail);
             if (learned.isEmpty()) return;
             String hash = sha256(senderDomain + "|" + shape + "|" + learned.get().pattern());
             if (repo.existsByUserIdAndPatternHash(userId, hash)) return;

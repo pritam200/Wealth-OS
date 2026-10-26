@@ -57,6 +57,9 @@ public class GmailSyncService {
     private com.marketai.ai.llm.LlmService llmService;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DepositoryMovementService depositoryMovements;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setLlmService(com.marketai.ai.llm.LlmService llmService) { this.llmService = llmService; }
 
     private com.marketai.ai.client.GeminiClient geminiClient;
@@ -279,18 +282,25 @@ public class GmailSyncService {
                     // be re-fetched and re-parsed on every sync indefinitely.
                     // NO_TRANSACTION is a completed read that found nothing to book — repeating the
                     // same LLM calls on every sync would only cost time on a full-mailbox backfill.
-                    boolean permanentlyResolved = "IMPORTED".equals(existing.getStatus())
+                    // A depository notice read before its movements were kept is read once more,
+                    // by rules alone, so the reconciliation can check the trades against it.
+                    boolean depositoryUnkept = depositoryMovements != null && !"IMPORTED".equals(existing.getStatus())
+                        && EmailLLMParserService.isDepositoryMovementNotice(
+                            com.marketai.document.classify.ClassificationCandidate.email(existing.getSender(), existing.getSubject(), null).senderDomain(),
+                            existing.getSubject())
+                        && !depositoryMovements.recorded(userId, msgId);
+                    boolean permanentlyResolved = !depositoryUnkept && ("IMPORTED".equals(existing.getStatus())
                         || ("EXCLUDED".equals(existing.getType()) && stillExcluded(existing, excludedPatterns))
                         || (NO_TRANSACTION.equals(existing.getType()) && !worthRereading(existing)
                             && !(skippedAsUnknownSender(existing) && financialSenderService.allows(userId, existing.getSender())))
                         || "PendingPdf".equals(existing.getMatchedParser())
-                        || ("SKIPPED".equals(existing.getStatus()) && emailReviewService.isFullyResolved(userId, msgId));
+                        || ("SKIPPED".equals(existing.getStatus()) && emailReviewService.isFullyResolved(userId, msgId)));
                     if (permanentlyResolved) {
                         skipped++;
                         duplicatesSkipped++;
                         continue;
                     }
-                    if (holdRetriesForGemini()) {
+                    if (!depositoryUnkept && holdRetriesForGemini()) {
                         deferredRetries++;
                         skipped++;
                         continue;

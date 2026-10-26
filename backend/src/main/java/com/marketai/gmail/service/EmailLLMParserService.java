@@ -95,6 +95,8 @@ public class EmailLLMParserService {
     // Optional so the extractor runs without it (tests, or a context without the table).
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LearnedTemplateService learnedTemplates;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DepositoryMovementService depositoryMovements;
 
     private static final TransactionFingerprinter FINGERPRINTER = new TransactionFingerprinter();
 
@@ -469,11 +471,17 @@ public class EmailLLMParserService {
         // The exchange's "trades executed" alert and the depository's "transactions in your demat
         // account" notice repeat what the contract note books, so they are recorded as read
         // without a model call; each used to be extracted and then set aside item by item.
-        if (isExchangeTradeAlert(domain, subject) || isDepositoryMovementNotice(domain, subject)) {
+        if (isExchangeTradeAlert(domain, subject)) {
+            return Result.builder().outcome(Outcome.NOT_FINANCIAL).readBy("rules").detail(EXCHANGE_ALERT_REASON).build();
+        }
+        if (isDepositoryMovementNotice(domain, subject)) {
+            // Kept, not booked: the reconciliation checks the booked trades against each row.
+            int rows = senderBlocked || depositoryMovements == null ? -1
+                : depositoryMovements.record(userId, gmailMessageId, sourceText);
             return Result.builder().outcome(Outcome.NOT_FINANCIAL).readBy("rules")
-                .detail(isExchangeTradeAlert(domain, subject) ? EXCHANGE_ALERT_REASON
-                    : "The depository's notice of shares moving in or out of the demat account — it confirms the "
-                        + "trades booked from the contract notes, so nothing is booked from it.").build();
+                .detail("The depository's notice of shares moving in or out of the demat account — it confirms the "
+                    + "trades booked from the contract notes, so nothing is booked from it"
+                    + (rows > 0 ? "; its " + rows + " movement(s) are kept to check the trades against." : ".")).build();
         }
         if (src.isDocument() && isBrokerConfirmationDocument(domain, subject)) {
             return Result.builder().outcome(Outcome.NOT_FINANCIAL).readBy("rules")
@@ -619,7 +627,7 @@ public class EmailLLMParserService {
                 }
 
                 if (extraction != null && extraction.resolved()) {
-                    if (learnable) learnedTemplates.learn(userId, domain, subject, sourceText, tNode);
+                    if (learnable) learnedTemplates.learn(userId, domain, subject, sourceText, tNode, txns.size());
                     // A failed or cancelled payment: nothing to book, and the reason is kept.
                     ledger.record(event.toBuilder().state(EventState.RESOLVED).reason(why)
                         .validationStatus(VERIFIED).dedupStatus(NOT_CHECKED).build());
@@ -660,7 +668,7 @@ public class EmailLLMParserService {
                     ParsedEmailImporter.ImportOutcome booked =
                         importer.importParsedEmail(userId, user, pe, gmailMessageId, referenceText);
                     if (booked == ParsedEmailImporter.ImportOutcome.DUPLICATE) {
-                        if (learnable) learnedTemplates.learn(userId, domain, subject, sourceText, tNode);
+                        if (learnable) learnedTemplates.learn(userId, domain, subject, sourceText, tNode, txns.size());
                         // Counted, never reported as a fresh import: a sync that re-reads a
                         // statement it already booked says "N already recorded", not "N imported".
                         duplicates++;
@@ -676,7 +684,7 @@ public class EmailLLMParserService {
                                 + "The recorded one was kept; compare them and mark this resolved.")
                             .validationStatus(VERIFIED).dedupStatus("CONFLICT").build());
                     } else {
-                        if (learnable) learnedTemplates.learn(userId, domain, subject, sourceText, tNode);
+                        if (learnable) learnedTemplates.learn(userId, domain, subject, sourceText, tNode, txns.size());
                         summaries.add(pe.getSourceDescription());
                         chunkImported++;
                         ledger.record(event.toBuilder().state(EventState.IMPORTED).reason(pe.getSourceDescription())
