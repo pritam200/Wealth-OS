@@ -175,6 +175,27 @@ class EmailLLMParserEventTypesTest {
     }
 
     @Test
+    @DisplayName("a CAMS purchase confirmation is booked without the model; an SIP that is only due is not booked")
+    void camsFundEmails() throws Exception {
+        when(mfLink.resolveSchemeCodeByFundName("SBI Aggressive Hybrid Fund - Direct Growth")).thenReturn(Optional.of("119609"));
+        service.process(USER_ID, user, "donotreply@camsonline.com", "SBI Mutual Fund - Purchase transaction confirmation",
+            com.marketai.gmail.parser.FundEmailParsersTest.PURCHASE, "msg-1", null);
+        service.process(USER_ID, user, "donotreply@camsonline.com", "SBI Mutual Fund- SIP-installment intimation",
+            com.marketai.gmail.parser.FundEmailParsersTest.SIP_DUE, "msg-2", null);
+
+        verify(llm, never()).complete(any(), any(), anyString());
+        ArgumentCaptor<ParsedEmail> pe = ArgumentCaptor.forClass(ParsedEmail.class);
+        verify(importer, times(1)).importParsedEmail(any(), any(), pe.capture(), any(), any());
+        ParsedEmail buy = pe.getValue();
+        assertThat(buy.getType()).isEqualTo(ParsedEmail.Type.MF_SIP);
+        assertThat(buy.getUnits()).isEqualByComparingTo("1.453");
+        assertThat(buy.getNav()).isEqualByComparingTo("344.1641");
+        assertThat(buy.getAmount()).isEqualByComparingTo("499.98");
+        assertThat(buy.getFolio()).isEqualTo("12345678");
+        verify(review, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("an exchange's trade alert is recorded as a confirmation, neither booked nor queued")
     void exchangeTradeAlert() throws Exception {
         when(llm.complete(any(), any(), anyString())).thenReturn(LlmCompletion.builder()

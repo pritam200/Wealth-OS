@@ -4,6 +4,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -113,5 +115,61 @@ class MfSchemeLinkServiceTest {
 
         assertThat(new MfSchemeLinkService(amfi, repo).resolve(h)).isEqualTo("118989");
         assertThat(h.getAmfiSchemeCode()).isEqualTo("118989");
+    }
+
+    private static com.marketai.amfi.dto.AmfiNavResult scheme(String code, String name) {
+        return com.marketai.amfi.dto.AmfiNavResult.builder().schemeCode(code).schemeName(name).build();
+    }
+
+    private MfSchemeLinkService over(List<com.marketai.amfi.dto.AmfiNavResult> schemes) {
+        var amfi = org.mockito.Mockito.mock(com.marketai.amfi.service.AmfiNavService.class);
+        org.mockito.Mockito.when(amfi.all()).thenReturn(schemes);
+        return new MfSchemeLinkService(amfi, org.mockito.Mockito.mock(com.marketai.portfolio.repository.HoldingRepository.class));
+    }
+
+    @Test
+    @DisplayName("a registrar's fund name picks the scheme with its plan and option out of all of the fund's schemes")
+    void picksThePlanAndOption() {
+        var svc = over(List.of(
+            scheme("119604", "SBI AGGRESSIVE HYBRID FUND - Direct Plan - IDCW"),
+            scheme("119609", "SBI AGGRESSIVE HYBRID FUND - Direct Plan - Growth"),
+            scheme("100940", "SBI AGGRESSIVE HYBRID FUND - Regular Plan - Growth"),
+            scheme("145075", "ICICI Prudential Manufacturing Fund - Direct Plan - Cumulative"),
+            scheme("149894", "Axis Nifty Smallcap 50 Index Fund - Direct Plan - Growth Option")));
+
+        assertThat(svc.resolveSchemeCodeByFundName("SBI Aggressive Hybrid Fund - Direct Growth")).contains("119609");
+        assertThat(svc.resolveSchemeCodeByFundName("SBI Aggressive Hybrid Fund Dir Growth")).contains("119609");
+        assertThat(svc.resolveSchemeCodeByFundName("SBI Aggressive Hybrid Fund - Direct Growth (formerly SBI Magnum Balanced Fund)"))
+            .contains("119609");
+        assertThat(svc.resolveSchemeCodeByFundName("ICICI Prudential Manufacturing Fund Direct Plan Growth")).contains("145075");
+        assertThat(svc.resolveSchemeCodeByFundName("AXIS Nifty Smallcap 50 Index Fund - Dir (G)")).contains("149894");
+        // No plan stated: Direct and Regular Growth are both candidates, so neither is taken.
+        assertThat(svc.resolveSchemeCodeByFundName("SBI Aggressive Hybrid Fund - Growth")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("two schemes that read the same are left unlinked rather than guessed between")
+    void aTieIsNotGuessed() {
+        var svc = over(List.of(
+            scheme("119836", "SBI CONSERVATIVE HYBRID FUND - Direct Plan - IDCW"),
+            scheme("119837", "SBI CONSERVATIVE HYBRID FUND - Direct Plan - IDCW")));
+        assertThat(svc.resolveSchemeCodeByFundName("SBI Conservative Hybrid Fund - Direct Plan - IDCW")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a holding's ISIN corrects a scheme code that was linked by name to the wrong plan")
+    void isinCorrectsAWrongLink() {
+        var amfi = org.mockito.Mockito.mock(com.marketai.amfi.service.AmfiNavService.class);
+        var repo = org.mockito.Mockito.mock(com.marketai.portfolio.repository.HoldingRepository.class);
+        org.mockito.Mockito.when(amfi.findByIsin("INF109K01AF8")).thenReturn(scheme("101228", "ICICI Prudential Multi Cap Fund - Regular Plan - Growth"));
+        com.marketai.portfolio.entity.Holding h = new com.marketai.portfolio.entity.Holding();
+        h.setSymbol("ICICIMULTICAP.MF");
+        h.setName("ICICI Prudential Multi Cap Fund - Growth");
+        h.setIsin("INF109K01AF8");
+        h.setAmfiSchemeCode("120599");
+        org.mockito.Mockito.when(repo.findLinkedMfHoldingsWithIsin()).thenReturn(List.of(h));
+
+        assertThat(new MfSchemeLinkService(amfi, repo).linkUnlinkedHoldings()).isEqualTo(1);
+        assertThat(h.getAmfiSchemeCode()).isEqualTo("101228");
     }
 }

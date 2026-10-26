@@ -140,7 +140,7 @@ public class AmfiNavService {
         String category = null;
         String schemeType = null;
         String amc = null;
-        int idxName = -1, idxNav = -1, idxDate = -1, skipped = 0;
+        int idxName = -1, idxNav = -1, idxDate = -1, idxPlan = -1, idxOption = -1, skipped = 0;
         int[] idxIsin = {1, 2};
 
         for (String rawLine : raw.split("\n")) {
@@ -171,6 +171,8 @@ public class AmfiNavService {
                 idxName = indexOf(f, "Scheme Name");
                 idxNav  = indexOf(f, "Net Asset Value");
                 idxDate = indexOf(f, "Date");
+                idxPlan = indexOf(f, "Plan");
+                idxOption = indexOf(f, "Option");
                 idxIsin = isinColumns(f);
                 continue;
             }
@@ -185,7 +187,7 @@ public class AmfiNavService {
                 BigDecimal nav = new BigDecimal(f[navCol].trim());
                 LocalDate date = LocalDate.parse(f[dateCol].trim(), AMFI_DATE);
                 out.add(AmfiNavResult.builder()
-                    .schemeCode(f[0].trim()).schemeName(f[nameCol].trim()).nav(nav).asOf(date)
+                    .schemeCode(f[0].trim()).schemeName(schemeName(f, nameCol, idxPlan, idxOption)).nav(nav).asOf(date)
                     .category(category)
                     .schemeType(schemeType)
                     .amc(amc)
@@ -261,6 +263,21 @@ public class AmfiNavService {
             if (!inner.isEmpty()) return inner;
         }
         return line; // no parentheses — keep the raw text as the category
+    }
+
+    /**
+     * The scheme's full name. Since AMFI moved plan and option into their own columns, the name
+     * column alone reads "SBI AGGRESSIVE HYBRID FUND" for all six of its schemes, so no fund
+     * could be told apart by plan or option; they are put back as "… - Direct Plan - Growth".
+     */
+    private static String schemeName(String[] f, int nameCol, int planCol, int optionCol) {
+        StringBuilder sb = new StringBuilder(f[nameCol].trim());
+        for (int c : new int[]{planCol, optionCol}) {
+            if (c < 0 || c >= f.length) continue;
+            String v = f[c].trim();
+            if (!v.isEmpty() && !v.equals("-")) sb.append(" - ").append(v);
+        }
+        return sb.toString();
     }
 
     /** Reads the scheme type off the prefix before "Schemes(...)"; null when absent. */

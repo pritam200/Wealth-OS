@@ -71,13 +71,15 @@ public class MfSchemeLinkService {
     @Transactional
     public String resolve(Holding holding) {
         if (holding == null) return null;
-        if (holding.getAmfiSchemeCode() != null) return holding.getAmfiSchemeCode();
-
         String symbol = holding.getSymbol();
-        if (symbol == null || !symbol.endsWith(".MF")) return null;
+        if (symbol == null || !symbol.endsWith(".MF")) return holding.getAmfiSchemeCode();
 
-        // An ISIN identifies exactly one plan and option, so it links without the name heuristics.
+        // An ISIN identifies exactly one plan and option, so it links without the name heuristics,
+        // and corrects a code linked by name to the wrong plan ("Multi Cap Fund - Growth" taken
+        // as the Direct plan when its ISIN is the Regular plan's).
         AmfiNavResult byIsin = amfiNavService.findByIsin(holding.getIsin());
+        if (byIsin != null && byIsin.getSchemeCode().equals(holding.getAmfiSchemeCode())) return byIsin.getSchemeCode();
+        if (byIsin == null && holding.getAmfiSchemeCode() != null) return holding.getAmfiSchemeCode();
         if (byIsin != null) {
             holding.setAmfiSchemeCode(byIsin.getSchemeCode());
             holdingRepository.save(holding);
@@ -88,7 +90,7 @@ public class MfSchemeLinkService {
         String name = holding.getName();
         if (name == null || name.trim().length() < 3) return null;
 
-        AmfiNavResult candidate = amfiNavService.findByName(name);
+        AmfiNavResult candidate = bestCandidate(name);
         if (candidate == null) {
             log.debug("No AMFI candidate for MF holding '{}'", name);
             return null;
@@ -123,7 +125,7 @@ public class MfSchemeLinkService {
     public java.util.Optional<String> resolveSchemeCodeByFundName(String fundName) {
         if (fundName == null || fundName.trim().length() < 3) return java.util.Optional.empty();
 
-        AmfiNavResult candidate = amfiNavService.findByName(fundName);
+        AmfiNavResult candidate = bestCandidate(fundName);
         if (candidate == null) return java.util.Optional.empty();
 
         double conf = confidence(fundName, candidate.getSchemeName());
@@ -133,6 +135,27 @@ public class MfSchemeLinkService {
             return java.util.Optional.empty();
         }
         return java.util.Optional.of(candidate.getSchemeCode());
+    }
+
+    /**
+     * The AMFI scheme scoring highest against {@code name} under {@link #confidence}, or null when
+     * two schemes tie for it — "SBI Aggressive Hybrid Fund Direct IDCW" names four IDCW schemes
+     * that AMFI lists under one option label, and guessing among them is the invisible error the
+     * rule exists to prevent. The first substring hit used to be taken instead, which picked a
+     * plan at random once AMFI's names stopped carrying the plan and option.
+     */
+    private AmfiNavResult bestCandidate(String name) {
+        List<AmfiNavResult> all = amfiNavService.all();
+        if (all == null || all.isEmpty()) return amfiNavService.findByName(name);
+        AmfiNavResult best = null;
+        double bestScore = 0d;
+        boolean tied = false;
+        for (AmfiNavResult r : all) {
+            double c = confidence(name, r.getSchemeName());
+            if (c > bestScore) { best = r; bestScore = c; tied = false; }
+            else if (c == bestScore && best != null && c > 0 && !best.getSchemeCode().equals(r.getSchemeCode())) tied = true;
+        }
+        return tied ? null : best;
     }
 
     /** Attempt to link every MF holding that has no scheme code yet. @return number newly linked */
@@ -149,6 +172,18 @@ public class MfSchemeLinkService {
         }
         if (!unlinked.isEmpty()) {
             log.info("MF scheme linking: {} of {} unlinked holdings resolved", linked, unlinked.size());
+        }
+        for (Holding h : holdingRepository.findLinkedMfHoldingsWithIsin()) {
+            String before = h.getAmfiSchemeCode();
+            try {
+                String after = resolve(h);
+                if (after != null && !after.equals(before)) {
+                    log.info("MF holding {} relinked from scheme {} to {} by its ISIN", h.getId(), before, after);
+                    linked++;
+                }
+            } catch (Exception e) {
+                log.warn("Scheme check failed for holding {}: {}", h.getId(), e.getMessage());
+            }
         }
         return linked;
     }
@@ -200,10 +235,21 @@ public class MfSchemeLinkService {
         return false;
     }
 
+    // "(formerly HDFC Large Cap Fund)", "(erstwhile Bluechip Fund)", "(Non -Demat)": history and
+    // holding form, not part of which scheme it is.
+    private static final java.util.regex.Pattern NAME_NOTES =
+        java.util.regex.Pattern.compile("\\((?:formerly|erstwhile|non\\s*-?\\s*demat)[^)]*\\)");
+    // Registrars shorten the plan and option, and AMFI calls some funds' growth option "Cumulative".
+    private static final java.util.Map<String, String> SYNONYMS = java.util.Map.of(
+        "dir", "direct", "reg", "regular", "g", "growth", "cumulative", "growth");
+
     private Set<String> tokens(String s) {
         Set<String> out = new LinkedHashSet<>();
-        for (String t : s.toLowerCase(Locale.ENGLISH).split("[^a-z0-9]+")) {
-            if (!t.isEmpty()) out.add(t);
+        String cleaned = NAME_NOTES.matcher(s.toLowerCase(Locale.ENGLISH)).replaceAll(" ");
+        for (String t : cleaned.split("[^a-z0-9]+")) {
+            // "Direct Plan - Growth Option" and "Direct Growth" say the same.
+            if (t.isEmpty() || t.equals("plan") || t.equals("option")) continue;
+            out.add(SYNONYMS.getOrDefault(t, t));
         }
         return out;
     }

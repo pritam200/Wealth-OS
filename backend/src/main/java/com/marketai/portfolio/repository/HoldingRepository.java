@@ -39,6 +39,10 @@ public interface HoldingRepository extends JpaRepository<Holding, Long> {
     @Query("SELECT h FROM Holding h WHERE h.amfiSchemeCode IS NULL AND h.symbol LIKE '%.MF'")
     List<Holding> findUnlinkedMfHoldings();
 
+    /** MF holdings linked to a scheme code that also carry an ISIN, which can confirm or correct it. */
+    @Query("SELECT h FROM Holding h WHERE h.amfiSchemeCode IS NOT NULL AND h.isin IS NOT NULL AND h.symbol LIKE '%.MF'")
+    List<Holding> findLinkedMfHoldingsWithIsin();
+
     /** Every holding linked to a given AMFI scheme code, across all users — for NAV write-back. */
     List<Holding> findByAmfiSchemeCode(String amfiSchemeCode);
 

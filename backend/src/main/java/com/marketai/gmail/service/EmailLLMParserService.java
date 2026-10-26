@@ -461,11 +461,12 @@ public class EmailLLMParserService {
             String prompt = "From: " + from + "\nSubject: " + subject + part + "\n\n" + chunks.get(c);
 
             LlmCompletion completion;
-            // A bank alert in a known template is read by its fixed parser: exact, the same every
-            // time, and no model call. Anything else goes to the extractor as before.
+            // A bank alert or registrar's fund email in a known template is read by its fixed
+            // parser: exact, the same every time, and no model call. Anything else goes to the extractor as before.
             Optional<BankAlertParsers.Result> fixed = fixedDocument.isPresent() ? fixedDocument
                 : src.isDocument() || chunks.size() != 1 ? Optional.empty()
-                : BankAlertParsers.parse(domain, subject, chunks.get(c), user != null ? user.getName() : null);
+                : BankAlertParsers.parse(domain, subject, chunks.get(c), user != null ? user.getName() : null)
+                    .or(() -> com.marketai.gmail.parser.FundEmailParsers.parse(domain, subject, chunks.get(0)));
             if (fixed.isPresent()) {
                 completion = LlmCompletion.builder().text(fixed.get().json())
                     .provider("rules").model(fixed.get().parser()).promptVersion("v1").build();

@@ -162,4 +162,19 @@ class AmfiNavParsingTest {
         assertThat(MfCategoryBucket.from(null)).isEqualTo(MfCategoryBucket.OTHER);
         assertThat(MfCategoryBucket.from("   ")).isEqualTo(MfCategoryBucket.OTHER);
     }
+
+    @Test
+    @DisplayName("today's layout, with plan and option in their own columns, keeps them in the scheme name")
+    void planAndOptionColumnsAreKept() {
+        List<AmfiNavResult> out = service.parse(
+            "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date\n"
+            + "Open Ended Schemes(Hybrid Scheme - Aggressive Hybrid Fund)\n"
+            + "SBI Mutual Fund\n"
+            + "119609;INF200K01RY0;-;SBI AGGRESSIVE HYBRID FUND;Direct Plan;Growth;331.7540;23-Oct-2026\n"
+            + "119604;INF200K01RW4;INF200K01RX2;SBI AGGRESSIVE HYBRID FUND;Direct Plan;IDCW;97.0776;23-Oct-2026\n");
+
+        assertThat(out).extracting(AmfiNavResult::getSchemeName).containsExactly(
+            "SBI AGGRESSIVE HYBRID FUND - Direct Plan - Growth", "SBI AGGRESSIVE HYBRID FUND - Direct Plan - IDCW");
+        assertThat(out.get(0).getNav()).isEqualByComparingTo("331.7540");
+    }
 }
