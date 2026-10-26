@@ -76,6 +76,11 @@ public class AnalystAssessment {
      */
     private String dataQuality;
     private Integer barsAvailable; // daily bars of real price history behind this assessment
+    /**
+     * INSUFFICIENT only because the price history is still downloading behind other symbols —
+     * not missing. The UI says "loading" and asks again rather than showing "no data".
+     */
+    private boolean historyPending;
 
     @Data @Builder @NoArgsConstructor @AllArgsConstructor
     public static class Factor {

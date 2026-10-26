@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, TrendingDown, Minus, Sparkles, Newspaper, Gauge, Loader2, ArrowRight, HelpCircle } from 'lucide-react';
-import { analystApi, isInsufficient, NON_CALL_LABEL } from '../../api/analyst';
+import { TrendingUp, TrendingDown, Minus, Sparkles, Newspaper, Gauge, Loader2, ArrowRight, HelpCircle, RotateCw } from 'lucide-react';
+import { analystApi, isInsufficient, NON_CALL_LABEL, PENDING_RETRY_MS } from '../../api/analyst';
 import type { AnalystAssessment } from '../../api/analyst';
 import { ViewPill } from '../research/ResearchPanel';
 
@@ -39,17 +39,46 @@ const nextActionLabel = (a: string) => a.replace(/_/g, ' ').replace(/\w\S*/g, w 
 export function AnalystPanel({ symbol, name, reloadKey }: { symbol: string; name?: string; reloadKey?: number }) {
   const [a, setA] = useState<AnalystAssessment | null>(null);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  // Bumped by "Try again", and on a back-off while the price history is still downloading.
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => { setA(null); setAttempt(0); }, [symbol]);
 
   useEffect(() => {
     let alive = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     setLoading(true);
-    analystApi.assess(symbol, name).then(r => { if (alive) setA(r.data); }).catch(() => {}).finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
+    setFailed(false);
+    analystApi.assess(symbol, name)
+      .then(r => {
+        if (!alive) return;
+        setA(r.data);
+        if (r.data.historyPending && attempt < PENDING_RETRY_MS.length) {
+          retry = setTimeout(() => { if (alive) setAttempt(n => n + 1); }, PENDING_RETRY_MS[attempt]);
+        }
+      })
+      .catch(() => { if (alive) setFailed(true); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; if (retry) clearTimeout(retry); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, reloadKey]);
+  }, [symbol, attempt, reloadKey]);
 
-  if (loading) return <div className="card h-32 flex items-center justify-center text-gray-500"><Loader2 size={15} className="animate-spin mr-2" /> Running analysis…</div>;
+  if (loading && !a) return <div className="card h-32 flex items-center justify-center text-gray-500"><Loader2 size={15} className="animate-spin mr-2" /> Running analysis…</div>;
+  if (failed) {
+    return (
+      <div className="card h-32 flex flex-col items-center justify-center gap-2 text-gray-500 text-xs">
+        <span>The analysis couldn't be loaded.</span>
+        <button type="button" onClick={() => setAttempt(n => n + 1)} className="btn-ghost inline-flex items-center gap-1 text-xs">
+          <RotateCw size={12} /> Try again
+        </button>
+      </div>
+    );
+  }
   if (!a) return null;
+  if (a.historyPending && attempt < PENDING_RETRY_MS.length) {
+    return <div className="card h-32 flex items-center justify-center text-gray-500 text-xs"><Loader2 size={15} className="animate-spin mr-2" /> Downloading price history for {a.displayName ?? symbol} — the analysis appears once it's in…</div>;
+  }
 
   // Only a BUY/SELL validated on this stock's own history is a call; everything else is a
   // labelled non-call (no actionable signal, stale or insufficient data), never a HOLD chip.

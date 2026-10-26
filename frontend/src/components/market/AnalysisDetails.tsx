@@ -4,6 +4,7 @@ import type { ResearchResult } from '../../api/research';
 import { ChevronDown, ChevronUp, FileSearch, AlertTriangle } from 'lucide-react';
 import { forecastApi } from '../../api/forecast';
 import type { ForecastResponse } from '../../api/forecast';
+import { tooShortLabel } from '../../api/analyst';
 import type { AnalystAssessment } from '../../api/analyst';
 import type { TechnicalAnalysis, PriceLevel } from '../../types';
 
@@ -83,13 +84,14 @@ function DataSection({ tech }: { tech: TechnicalAnalysis }) {
         <Row k="Bars rejected by validation" v={tech.barsRejected ?? 0} />
         <Row k="Last ingested" v={tech.dataUpdatedAt ? tech.dataUpdatedAt.replace('T', ' ').slice(0, 16) : '—'} />
       </div>
-      {[...warnings.slice(-6), ...info].map((i, k) => (
+      {[...warnings.slice(-6), ...info.slice(-4)].map((i, k) => (
         <div key={k} className={`mt-1 flex gap-1 ${i.warning ? 'text-amber-400/90' : 'text-gray-500'}`}>
           {i.warning && <AlertTriangle size={10} className="mt-0.5 shrink-0" />}
           <span><span className="font-mono">{i.code}</span>{i.date ? ` ${i.date}` : ''}: {i.detail}</span>
         </div>
       ))}
       {warnings.length > 6 && <div className="text-gray-600 mt-1">{warnings.length - 6} older warning(s) not shown.</div>}
+      {info.length > 4 && <div className="text-gray-600 mt-1">{info.length - 4} older note(s) not shown.</div>}
     </Section>
   );
 }
@@ -207,10 +209,18 @@ function SignalSection({ a }: { a: AnalystAssessment }) {
           <Row k="Past SELL calls: ended lower after 20 sessions" v={`${v.sellCalls} · ${pct(v.sellHitRate)} (95% CI low ${pct(v.sellHitRateCiLow)})`} />
           <Row k="Base rate: any session ended higher" v={pct(v.baseUpRate)} />
           <Row k="Current call validated" v={v.currentCallValidated ? 'yes' : 'no'} />
+          {v.barsNeededToValidate != null && (
+            <Row k="History (have / needed to validate)" v={`${v.barsAvailable ?? 0} / ${v.barsNeededToValidate} daily bars`} />
+          )}
         </>}
         <Row k="Prices as of" v={`${a.priceDate ?? '—'} · ${a.priceSource ?? '—'}`} />
       </div>
       {v?.summary && <p className="text-gray-500 mt-1.5">{v.summary}</p>}
+      {v?.historyTooShort && (
+        <p className="text-amber-400/90 mt-1">
+          Not enough history to validate any call yet: {tooShortLabel(v)}. Until then the result is always &quot;no actionable signal&quot;, whatever the rule reads.
+        </p>
+      )}
       <p className="text-gray-600 mt-1">
         A BUY or SELL is shown only when the lower 95% bound of that call&apos;s hit rate on this stock beats the base rate
         over at least 30 independent 20-session windows; otherwise the result is &quot;no actionable signal&quot;.

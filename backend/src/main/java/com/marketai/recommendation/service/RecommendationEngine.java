@@ -27,7 +27,7 @@ import com.marketai.common.quality.DataQuality;
  *
  * Wraps {@link AnalystService#assess} (reused, not reimplemented) and adds:
  *   - confidenceScore: 0..100, how strongly the composite score leans either way
- *   - nextAction: the portfolio-context action (ACCUMULATE/CONTINUE/BOOK_PROFIT/EXIT/REVIEW/HOLD),
+ *   - nextAction: the portfolio-context action (ACCUMULATE/CONTINUE/BOOK_PROFIT/AVOID/REVIEW/HOLD/REBALANCE),
  *     replacing the ad-hoc thresholds that used to live in the frontend's Tab9AiAdvisor.decide().
  */
 @Service
@@ -68,6 +68,18 @@ public class RecommendationEngine {
      *                   avoiding a DB lookup here.
      */
     public AnalystAssessment recommend(String symbol, String displayName, Double pnlPercent, Double holdingValue, Double totalPortfolioValue) {
+        if (symbol != null && symbol.toUpperCase().endsWith(".MF")) {
+            // A fund has no exchange price feed; the stock engine would only look for one. Funds
+            // are assessed by recommendMf (POST /api/recommendation/mf).
+            return AnalystAssessment.builder()
+                .symbol(symbol).displayName(displayName != null ? displayName : symbol)
+                .rating("NOT_RATED")
+                .factorBreakdown(new ArrayList<>()).positives(new ArrayList<>()).risks(new ArrayList<>())
+                .dataQuality(DataQuality.INSUFFICIENT.wire()).barsAvailable(0)
+                .nextAction("INSUFFICIENT_DATA")
+                .nextActionReason("Mutual funds are assessed by the fund engine, from NAVs and holding details — not from exchange prices.")
+                .build();
+        }
         AnalystAssessment a = analystService.assess(symbol, displayName);
         if (a == null) {
             log.warn("analystService.assess returned null for {}", symbol);
@@ -82,15 +94,19 @@ public class RecommendationEngine {
         if (!DataQuality.of(a.getDataQuality()).isUsable() || "INSUFFICIENT_DATA".equals(a.getRating())) {
             a.setConfidenceScore(null);
             a.setNextAction("INSUFFICIENT_DATA");
-            a.setNextActionReason(String.format(
-                "Not enough valid price history for %s (%d daily bar(s)). No recommendation is shown rather than guessing one.",
-                symbol, a.getBarsAvailable() != null ? a.getBarsAvailable() : 0));
+            a.setNextActionReason(a.isHistoryPending()
+                ? "Price history for " + symbol + " is still downloading behind other symbols. The analysis appears once it's in — usually within a minute."
+                : String.format("Not enough valid price history for %s (%d daily bar(s)). No recommendation is shown rather than guessing one.",
+                    symbol, a.getBarsAvailable() != null ? a.getBarsAvailable() : 0));
             return a;
         }
         if ("STALE_DATA".equals(a.getRating())) {
             a.setNextAction("STALE_DATA");
-            a.setNextActionReason("Price history for " + symbol + " is stale (newest bar " + a.getPriceDate()
-                + ") and could not be refreshed. No action is suggested from old data.");
+            a.setNextActionReason(marketDataService.isInactive(symbol)
+                ? "No new prices for " + symbol + " for several sessions (newest bar " + a.getPriceDate()
+                    + ") — it may be suspended or delisted. No action is suggested from old data."
+                : "Price history for " + symbol + " is stale (newest bar " + a.getPriceDate()
+                    + ") and could not be refreshed. No action is suggested from old data.");
             return a;
         }
 
@@ -172,23 +188,25 @@ public class RecommendationEngine {
         String ruleNote = a.getRuleOutput() != null && !AnalystService.NO_ACTIONABLE_SIGNAL.equals(a.getRuleOutput())
             && !"HOLD".equals(a.getRuleOutput())
             ? " The rule reads " + a.getRuleOutput() + ", but that call has not beaten the base rate on this stock." : "";
-        // No validated call: fall back to a position action read from the measured trend, as the
-        // engine did before 9ee742a. Removing this left every holding at "no signal", which gave
-        // the user nothing to act on. Each reason says it comes from the trend, not a backtest.
+        // No validated call: describe the position from the measured trend, so a holding isn't left
+        // at a bare "no signal". The trend label showed no edge on forward returns, so it never
+        // produces a trade call — no EXIT or AVOID without a validated SELL behind it. A downtrend
+        // asks the holder to review; with no position the trend is context only.
         String trend = a.getFundamentals() != null ? a.getFundamentals().getTrend() : null;
         String trendLabel = trend != null ? trend.toLowerCase().replace('_', ' ') : "unknown";
         String basis = " Trend-based, not a backtested signal." + ruleNote;
-        if (trend != null && trend.contains("STRONG_DOWNTREND")) {
-            return hasPosition
-                ? new NextActionDecision("EXIT", String.format("Strong downtrend while you're %s — consider exiting or a tight stop-loss to limit further downside.%s",
-                    pnlPercent >= 0 ? String.format("up %.1f%%", pnlPercent) : String.format("down %.1f%%", Math.abs(pnlPercent)), basis))
-                : new NextActionDecision("AVOID", "Strong downtrend — avoid entering until it stabilises." + basis);
+        boolean readable = trend != null && (trend.contains("UPTREND") || trend.contains("DOWNTREND") || trend.equals("SIDEWAYS"));
+        if (readable && !hasPosition) {
+            return new NextActionDecision(AnalystService.NO_ACTIONABLE_SIGNAL, "No validated signal. Trend is " + trendLabel
+                + " — context only, not a reason to buy or sell." + basis);
+        }
+        if (trend != null && trend.contains("DOWNTREND")) {
+            String where = pnlPercent >= 0 ? String.format("up %.1f%%", pnlPercent) : String.format("down %.1f%%", Math.abs(pnlPercent));
+            return new NextActionDecision("REVIEW", "Trend is " + trendLabel + " while you're " + where
+                + " — re-check your reason for holding and where your stop-loss is." + basis);
         }
         if (trend != null && trend.contains("UPTREND")) {
             return new NextActionDecision("CONTINUE", "Trend is " + trendLabel + " — stay invested, no new action needed." + basis);
-        }
-        if (trend != null && trend.contains("DOWNTREND")) {
-            return new NextActionDecision("REVIEW", "Trend is " + trendLabel + " — re-check your reason for holding and set a stop-loss." + basis);
         }
         if (trend != null && trend.equals("SIDEWAYS")) {
             return new NextActionDecision("HOLD", "Trend is sideways — nothing about this stock warrants action today." + basis);

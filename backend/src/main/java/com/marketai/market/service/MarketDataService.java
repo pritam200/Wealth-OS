@@ -198,9 +198,16 @@ public class MarketDataService {
         return found;
     }
 
+    /**
+     * Stored daily bars for the price chart, one per date, oldest first. Read under every name
+     * the instrument is stored as, and collapsed the way the validator does, so a duplicated
+     * history no longer draws each day twice.
+     */
     @Transactional(readOnly = true)
     public List<PriceHistory> getPriceHistory(String symbol, LocalDate from, LocalDate to) {
-        return priceHistoryRepository.findBySymbolAndDateBetweenOrderByDateAsc(symbol, from, to);
+        String s = canonicalSymbol(symbol);
+        return com.marketai.market.quality.PriceSeriesValidator.latestPerDate(
+                priceHistoryRepository.findDailyBySymbolsAndDateBetween(storedNames(s), from, to));
     }
 
     /** Resolve a stored/friendly symbol to the correct Yahoo Finance ticker. */
@@ -244,31 +251,102 @@ public class MarketDataService {
     public static final int SERIES_MAX_BARS = 2600;
 
     /**
+     * Calendar days read back from the newest bar to find {@link #SERIES_MAX_BARS} sessions
+     * (~248 a year, so about 10.5 years). The series is read by date range rather than by row
+     * count: duplicate rows used up a row-count allowance, so a history stored twice came back
+     * as ~1,300 days instead of 2,600.
+     */
+    static final int SERIES_WINDOW_DAYS = 3900;
+
+    /**
      * The canonical daily series for {@code symbol}: history topped up to the last completed
      * session, then validated (see {@link com.marketai.market.quality.PriceSeriesValidator}).
      * Every indicator, trend, level, forecast and signal is computed from this, so they all
      * see the same bars and the same data-quality verdict.
      *
+     * <p>When the top-up had to wait for other symbols and there is not yet enough history, the
+     * series carries a {@link com.marketai.market.quality.DailySeries#HISTORY_PENDING} issue: the
+     * download is queued, so "no data" here means "not yet", and callers can say so.
+     *
      * @param minBars fewer valid bars than this ⇒ status INSUFFICIENT_DATA
      */
     public com.marketai.market.quality.DailySeries getDailySeries(String symbol, int minBars) {
         String s = canonicalSymbol(symbol);
-        ensureFreshDailyHistory(s);
-        List<PriceHistory> rows = priceHistoryRepository.findDailyBySymbolOrderByDateDesc(
-                s, org.springframework.data.domain.PageRequest.of(0, SERIES_MAX_BARS));
+        Freshness freshness = ensureFreshDailyHistory(s);
+        List<PriceHistory> rows = dailyRows(s, SERIES_MAX_BARS);
         LocalDate expected = lastCompletedSession(java.time.ZonedDateTime.now(IST));
-        return com.marketai.market.quality.PriceSeriesValidator.validate(s, rows, expected, minBars);
+        com.marketai.market.quality.DailySeries series =
+                com.marketai.market.quality.PriceSeriesValidator.validate(s, rows, expected, minBars);
+        if (freshness == Freshness.DEFERRED && series.status() == com.marketai.market.quality.SeriesStatus.INSUFFICIENT_DATA) {
+            series = series.withIssue(new com.marketai.market.quality.DataIssue(
+                    com.marketai.market.quality.DailySeries.HISTORY_PENDING, com.marketai.market.quality.DataIssue.INFO, null,
+                    "Price history for " + s + " is still downloading behind other symbols — it will be ready shortly."));
+        }
+        return series;
     }
 
     /**
-     * One stored name per instrument: upper-cased, and index aliases (NIFTY50, BANKNIFTY …)
-     * resolved to their exchange ticker, so "NIFTY50" and "^NSEI" no longer keep two separate
-     * histories with different freshness.
+     * The newest {@code maxBars} sessions of daily rows stored under any of the symbol's names.
+     * Duplicate rows are left in for the validator, which keeps one per date and reports them.
+     */
+    List<PriceHistory> dailyRows(String canonical, int maxBars) {
+        List<String> names = storedNames(canonical);
+        PriceHistory newest = newestDaily(names);
+        if (newest == null) return List.of();
+        List<PriceHistory> rows = priceHistoryRepository.findDailyBySymbolsAndDateBetween(
+                names, newest.getDate().minusDays(SERIES_WINDOW_DAYS), newest.getDate());
+        java.util.TreeSet<LocalDate> dates = new java.util.TreeSet<>(java.util.Comparator.reverseOrder());
+        for (PriceHistory p : rows) dates.add(p.getDate());
+        if (dates.size() <= maxBars) return rows;
+        LocalDate cutoff = new ArrayList<>(dates).get(maxBars - 1);
+        return rows.stream().filter(p -> !p.getDate().isBefore(cutoff)).toList();
+    }
+
+    /** Newest stored daily bar under any of {@code names}; intraday rows never count. */
+    private PriceHistory newestDaily(List<String> names) {
+        List<PriceHistory> top = priceHistoryRepository.findNewestDaily(names,
+                org.springframework.data.domain.PageRequest.of(0, 1));
+        return top == null || top.isEmpty() ? null : top.get(0);
+    }
+
+    /**
+     * One stored name per instrument: upper-cased, index aliases (NIFTY50, BANKNIFTY …)
+     * resolved to their exchange ticker, and the NSE suffix dropped — NSE is the default
+     * listing, so "RELIANCE" and "RELIANCE.NS" are one history rather than two with different
+     * freshness. A BSE listing keeps its ".BO".
      */
     public static String canonicalSymbol(String symbol) {
         if (symbol == null) return null;
         String s = symbol.trim().toUpperCase();
-        return INDEX_SYMBOLS.getOrDefault(s, s);
+        s = INDEX_SYMBOLS.getOrDefault(s, s);
+        if (s.endsWith(".NS") && s.length() > 3) s = s.substring(0, s.length() - 3);
+        return s;
+    }
+
+    /**
+     * Every name a canonical symbol's daily history may be stored under. Rows written before
+     * {@link #canonicalSymbol} dropped ".NS" sit under "RELIANCE.NS"; they are read alongside the
+     * "RELIANCE" rows rather than rewritten, and new bars go under the canonical name.
+     */
+    public static List<String> storedNames(String canonical) {
+        if (canonical == null) return List.of();
+        boolean plainEquity = !canonical.startsWith("^") && !canonical.contains(".") && !canonical.contains("=");
+        return plainEquity ? List.of(canonical, canonical + ".NS") : List.of(canonical);
+    }
+
+    /** What a history top-up did. */
+    public enum Freshness {
+        /** Already had the last completed session. */
+        CURRENT,
+        /** Fetched, and the history moved forward. */
+        FETCHED,
+        /** Fetched, but the provider had nothing newer (a holiday, a suspension, an outage). */
+        NOTHING_NEW,
+        /** Other symbols held every download slot; this one is queued in the background. */
+        DEFERRED,
+        /** Not fetched: no price feed (funds), or a fetch for this session already found nothing. */
+        SKIPPED,
+        FAILED
     }
 
     /**
@@ -280,54 +358,190 @@ public class MarketDataService {
      * up whenever the newest bar is behind, fetching only as much range as the gap needs.
      * Failures are logged, never thrown: stale data is then reported as stale by the caller.
      */
-    public void ensureFreshDailyHistory(String symbol) {
+    public Freshness ensureFreshDailyHistory(String symbol) {
+        return freshen(canonicalSymbol(symbol), false);
+    }
+
+    /** @param waitForTurn wait for a download slot however long it takes (background fills) */
+    private Freshness freshen(String symbol, boolean waitForTurn) {
+        // Funds are priced from AMFI NAVs; there is no exchange feed to ask.
+        if (symbol == null || symbol.endsWith(".MF")) return Freshness.SKIPPED;
         try {
             LocalDate expected = lastCompletedSession(java.time.ZonedDateTime.now(IST));
-            PriceHistory newest = priceHistoryRepository.findTopBySymbolOrderByDateDesc(symbol).orElse(null);
-            if (newest != null && !newest.getDate().isBefore(expected)) return;
+            List<String> names = storedNames(symbol);
+            PriceHistory newest = newestDaily(names);
+            if (newest != null && !newest.getDate().isBefore(expected)) return Freshness.CURRENT;
+            if (recentlyFoundNothing(symbol, expected)) return Freshness.SKIPPED;
             String range;
             if (newest == null) range = "10y";
             else {
                 int gap = weekdaysBetween(newest.getDate(), expected);
                 range = gap <= 4 ? "5d" : gap <= 20 ? "1mo" : gap <= 60 ? "3mo" : "1y";
             }
-            // A first fetch writes ~2,500 rows one by one inside a single transaction, holding a
-            // pooled connection throughout. A holdings page asks for dozens of symbols at once, and
-            // letting them all run pinned the whole pool, so every other request waited behind them.
-            // Only a few run at a time; a symbol that cannot get a turn is simply picked up by the
-            // next request, and the caller reports it as having no data yet.
-            if (!historyBackfillGate.tryAcquire(45, java.util.concurrent.TimeUnit.SECONDS)) {
-                log.info("History top-up for {} deferred — other symbols are still loading", symbol);
-                return;
+            // A first fetch writes ~2,500 rows, holding a pooled connection throughout. A holdings
+            // page asks for dozens of symbols at once, and letting them all run pinned the whole
+            // pool, so every other request waited behind them. Only a few run at a time; a symbol
+            // that cannot get a turn is queued for a background download, and the caller reports
+            // its history as still loading.
+            if (waitForTurn) {
+                historyBackfillGate.acquire();
+            } else if (!historyBackfillGate.tryAcquire(45, java.util.concurrent.TimeUnit.SECONDS)) {
+                log.info("History top-up for {} deferred — other symbols are still loading; queued in the background", symbol);
+                queueBackfill(symbol);
+                return Freshness.DEFERRED;
             }
-            // One writer per symbol. Concurrent requests for the same symbol (every holding's
-            // analysis reads the Nifty) each saw the bar missing and each inserted it, which left
-            // tens of thousands of duplicate bars. The second caller now waits, re-checks, and
-            // finds the work already done.
-            Object symbolLock = historyLocks.computeIfAbsent(symbol, k -> new Object());
             try {
-                synchronized (symbolLock) {
-                    PriceHistory again = priceHistoryRepository.findTopBySymbolOrderByDateDesc(symbol).orElse(null);
-                    if (again == null || again.getDate().isBefore(expected)) fetchAndStorePriceHistory(symbol, range);
+                // One writer per symbol. Concurrent requests for the same symbol (every holding's
+                // analysis reads the Nifty) each saw the bar missing and each inserted it, which left
+                // tens of thousands of duplicate bars. The second caller now waits, re-checks, and
+                // finds the work already done.
+                synchronized (lockFor(symbol)) {
+                    PriceHistory again = newestDaily(names);
+                    if (again != null && !again.getDate().isBefore(expected)) return Freshness.CURRENT;
+                    storeWithRescaleCheck(symbol, range);
+                    PriceHistory after = newestDaily(names);
+                    boolean progressed = after != null && (again == null || after.getDate().isAfter(again.getDate()));
+                    recordAttempt(symbol, expected, progressed, after);
+                    return progressed ? Freshness.FETCHED : Freshness.NOTHING_NEW;
                 }
             } finally {
                 historyBackfillGate.release();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            return Freshness.FAILED;
         } catch (Exception e) {
             log.warn("Could not top up price history for {}: {}", symbol, e.getMessage());
+            return Freshness.FAILED;
         }
     }
 
-    /** How many symbols may download and store history at once; see {@link #ensureFreshDailyHistory}. */
+    /** How many symbols may download and store history at once; see {@link #freshen}. */
     private final java.util.concurrent.Semaphore historyBackfillGate = new java.util.concurrent.Semaphore(3);
 
-    /** Per-symbol monitors for {@link #ensureFreshDailyHistory}; one entry per symbol ever refreshed. */
+    /** Per-symbol monitors shared by every history writer; one entry per symbol ever written. */
     private final java.util.concurrent.ConcurrentHashMap<String, Object> historyLocks = new java.util.concurrent.ConcurrentHashMap<>();
 
-    @Transactional
+    private Object lockFor(String symbol) {
+        return historyLocks.computeIfAbsent(symbol, k -> new Object());
+    }
+
+    /** Downloads deferred by a busy gate, run as slots free up rather than waiting for the next request. */
+    private final java.util.concurrent.ExecutorService backfillPool = java.util.concurrent.Executors.newFixedThreadPool(2, r -> {
+        Thread t = new Thread(r, "history-backfill");
+        t.setDaemon(true);
+        return t;
+    });
+    private final java.util.Set<String> queuedBackfills = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private void queueBackfill(String symbol) {
+        if (!queuedBackfills.add(symbol)) return;
+        try {
+            backfillPool.execute(() -> {
+                try { freshen(symbol, true); } finally { queuedBackfills.remove(symbol); }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            queuedBackfills.remove(symbol);
+        }
+    }
+
+    @jakarta.annotation.PreDestroy
+    void stopBackfills() {
+        backfillPool.shutdownNow();
+    }
+
+    /**
+     * A fetch that brought nothing newer for a session. On an exchange holiday, and for a
+     * suspended or delisted symbol, the newest bar stays behind the expected session, and every
+     * request used to ask Yahoo again — slow badges, rate-limit risk, and the download slots
+     * taken from symbols that do have data.
+     *
+     * @param sessions distinct expected sessions in a row whose fetch found nothing
+     * @param inactive found nothing for long enough to treat the symbol as no longer trading
+     */
+    private record EmptyAttempt(LocalDate expected, LocalDateTime at, int sessions, boolean inactive) {}
+
+    private final java.util.concurrent.ConcurrentHashMap<String, EmptyAttempt> emptyAttempts = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** A session whose fetch found nothing is asked about again only after this many hours. */
+    static final int EMPTY_RETRY_HOURS = 3;
+    /**
+     * Empty sessions in a row, and how far behind the stored history must be, before a symbol
+     * is marked inactive. Both, so that a provider outage of a few days doesn't mark every
+     * holding as delisted. An inactive symbol is still asked about once a day.
+     */
+    static final int INACTIVE_AFTER_EMPTY_SESSIONS = 5;
+    static final int INACTIVE_MIN_SESSIONS_BEHIND = 10;
+
+    private boolean recentlyFoundNothing(String symbol, LocalDate expected) {
+        EmptyAttempt a = emptyAttempts.get(symbol);
+        if (a == null) return false;
+        LocalDateTime now = LocalDateTime.now(IST);
+        if (a.inactive()) return a.at().isAfter(now.minusHours(24));
+        return a.expected().equals(expected) && a.at().isAfter(now.minusHours(EMPTY_RETRY_HOURS));
+    }
+
+    private void recordAttempt(String symbol, LocalDate expected, boolean progressed, PriceHistory newest) {
+        if (progressed) {
+            emptyAttempts.remove(symbol);
+            setActive(symbol, true);
+            return;
+        }
+        EmptyAttempt prev = emptyAttempts.get(symbol);
+        int sessions = prev == null ? 1 : prev.expected().equals(expected) ? prev.sessions() : prev.sessions() + 1;
+        int behind = newest == null ? Integer.MAX_VALUE : weekdaysBetween(newest.getDate(), expected);
+        boolean inactive = sessions >= INACTIVE_AFTER_EMPTY_SESSIONS && behind >= INACTIVE_MIN_SESSIONS_BEHIND;
+        emptyAttempts.put(symbol, new EmptyAttempt(expected, LocalDateTime.now(IST), sessions, inactive));
+        if (inactive) setActive(symbol, false);
+    }
+
+    private void setActive(String symbol, boolean active) {
+        try {
+            stockRepository.findBySymbol(symbol).ifPresent(st -> {
+                if (st.isActive() == active) return;
+                st.setActive(active);
+                stockRepository.save(st);
+                if (active) log.info("{} is trading again — marked active", symbol);
+                else log.warn("{} has had no new prices for {} sessions — marked inactive (possibly suspended or delisted)",
+                        symbol, INACTIVE_AFTER_EMPTY_SESSIONS);
+            });
+        } catch (Exception e) {
+            log.debug("Could not update active flag for {}: {}", symbol, e.getMessage());
+        }
+    }
+
+    /**
+     * True when the symbol has stopped getting new prices — repeated empty fetches, or a stock
+     * row already marked inactive. Lets a stale result say "possibly suspended or delisted"
+     * rather than "could not be refreshed".
+     */
+    public boolean isInactive(String symbol) {
+        String s = canonicalSymbol(symbol);
+        if (s == null) return false;
+        EmptyAttempt a = emptyAttempts.get(s);
+        if (a != null && a.inactive()) return true;
+        try {
+            return stockRepository.findBySymbol(s).map(st -> !st.isActive()).orElse(false);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Download and store {@code range} of daily history. Every writer comes through here or
+     * {@link #freshen}: the symbol is canonicalised and the per-symbol lock taken, so the nightly
+     * index refresh, the manual fetch endpoint and request-time top-ups can no longer each insert
+     * the same bar. Deliberately not one transaction: the lock must outlive the write, or a
+     * second writer could read before the first commits.
+     */
     public void fetchAndStorePriceHistory(String symbol, String range) {
+        String s = canonicalSymbol(symbol);
+        synchronized (lockFor(s)) {
+            storeWithRescaleCheck(s, range);
+        }
+    }
+
+    private void storeWithRescaleCheck(String symbol, String range) {
         int rescaled = storeHistory(symbol, range);
         // A split or bonus inside a short top-up window means everything older than that
         // window is still on the old scale. Re-pull enough to cover every indicator window.
@@ -335,6 +549,18 @@ public class MarketDataService {
             log.warn("{}: price scale changed — re-fetching 2y of history", symbol);
             storeHistory(symbol, "2y");
         }
+    }
+
+    /**
+     * Set once the unique daily-bar index exists (see {@link PriceHistoryIntegrity}). New bars are
+     * then upserted, so even a writer this JVM's lock can't see — a second instance — cannot add
+     * a duplicate. Until then they are inserted as before, behind the lock.
+     */
+    private volatile boolean dailyKeyUnique;
+
+    // Public: this bean is proxied, and the call must reach the target rather than set a field on the proxy.
+    public void setDailyKeyUnique(boolean unique) {
+        this.dailyKeyUnique = unique;
     }
 
     /** @return how many stored bars had to be rescaled (a split or bonus since they were stored). */
@@ -362,12 +588,15 @@ public class MarketDataService {
         // are updated in place rather than skipped: Yahoo's history is split-adjusted, so after
         // a split or bonus (common in India) the stored pre-split prices would otherwise sit
         // next to post-split ones and read as a crash. Rewriting the fetched range keeps the
-        // series consistent, and also corrects any earlier partial bar.
+        // series consistent, and also corrects any earlier partial bar. Where a date is stored
+        // more than once — or under the older ".NS" name — the copy readers keep is the one
+        // rewritten, which also makes it the newest copy from then on.
         LocalDate from = bars.stream().map(YahooFinanceClient.OhlcvBar::date).min(LocalDate::compareTo).orElseThrow();
         LocalDate to = bars.stream().map(YahooFinanceClient.OhlcvBar::date).max(LocalDate::compareTo).orElseThrow();
         Map<LocalDate, PriceHistory> existing = new HashMap<>();
-        for (PriceHistory p : priceHistoryRepository.findDailyBySymbolAndDateBetween(symbol, from, to)) {
-            existing.putIfAbsent(p.getDate(), p);
+        for (PriceHistory p : com.marketai.market.quality.PriceSeriesValidator.latestPerDate(
+                priceHistoryRepository.findDailyBySymbolsAndDateBetween(storedNames(symbol), from, to))) {
+            existing.put(p.getDate(), p);
         }
 
         java.time.LocalDateTime now = java.time.LocalDateTime.now(IST);
@@ -405,8 +634,7 @@ public class MarketDataService {
         // for a first 10-year fetch, minutes per symbol against a remote database.
         List<PriceHistory> fresh = toSave.stream().filter(r -> r.getId() == null).toList();
         if (jdbc != null && !fresh.isEmpty()) {
-            jdbc.batchUpdate("insert into price_history (symbol, date, open, high, low, close, adj_close, volume, "
-                    + "exchange, provider, bar_interval, ingested_at, updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            jdbc.batchUpdate(dailyKeyUnique ? UPSERT_DAILY_BAR : INSERT_DAILY_BAR,
                 fresh, 500, (ps, r) -> {
                     ps.setString(1, r.getSymbol());
                     ps.setObject(2, r.getDate());
@@ -433,6 +661,15 @@ public class MarketDataService {
         log.info("Price history for {}: {} fetched, {} new, {} corrected", symbol, bars.size(), inserted, updated);
         return rescaled;
     }
+
+    private static final String INSERT_DAILY_BAR = "insert into price_history (symbol, date, open, high, low, close, adj_close, volume, "
+            + "exchange, provider, bar_interval, ingested_at, updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
+    /** The insert above, made safe against a bar another writer stored first: that bar is rewritten instead. */
+    static final String UPSERT_DAILY_BAR = INSERT_DAILY_BAR
+            + " on conflict (symbol, date) where bar_interval = '1d' do update set open = excluded.open, high = excluded.high,"
+            + " low = excluded.low, close = excluded.close, adj_close = excluded.adj_close, volume = excluded.volume,"
+            + " provider = excluded.provider, updated_at = excluded.updated_at";
 
     static final String PROVIDER = "yahoo-chart";
 
@@ -554,15 +791,36 @@ public class MarketDataService {
      * Top up the daily history of every symbol analysed in the last 90 days. Only sector
      * indices used to be refreshed, so holdings and watchlist stocks kept whatever history was
      * fetched the first time they were looked at.
+     *
+     * The technicals cache is cleared explicitly at the end: this runs as a call from
+     * {@link #scheduledSectorIndexHistoryRefresh} inside the same bean, which skips the proxy, so
+     * a {@code @CacheEvict} here never fired and the night's new bars waited up to 15 minutes.
      */
-    @CacheEvict(value = "technicals", allEntries = true)
     public void refreshTrackedSymbolHistory() {
-        List<String> symbols = priceHistoryRepository.findDailySymbolsSince(LocalDate.now().minusDays(90));
+        java.util.Set<String> symbols = new java.util.LinkedHashSet<>();
+        for (String s : priceHistoryRepository.findDailySymbolsSince(LocalDate.now().minusDays(90))) {
+            symbols.add(canonicalSymbol(s)); // legacy "X.NS" rows and new "X" rows are one symbol
+        }
         for (String s : symbols) {
             if (s.startsWith("^") || s.endsWith(".MF")) continue; // indices above; funds have no feed
             ensureFreshDailyHistory(s);
         }
+        evictTechnicals();
         log.info("Tracked-symbol history top-up checked {} symbol(s)", symbols.size());
+    }
+
+    /** Optional so the service works without a cache manager, as in unit tests. */
+    private org.springframework.cache.CacheManager cacheManager;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setCacheManager(org.springframework.cache.CacheManager cacheManager) {
+        this.cacheManager = cacheManager;
+    }
+
+    private void evictTechnicals() {
+        if (cacheManager == null) return;
+        org.springframework.cache.Cache c = cacheManager.getCache("technicals");
+        if (c != null) c.clear();
     }
 
     /**
@@ -586,16 +844,18 @@ public class MarketDataService {
         LocalDate to = LocalDate.now();
         LocalDate from = to.minusDays(lookbackDays);
 
-        List<PriceHistory> niftyBars = priceHistoryRepository
-                .findBySymbolAndDateBetweenOrderByDateAsc(NIFTY_SYMBOL, from, to);
+        // One bar per date: with a duplicated history a stale pre-split copy could come out as
+        // the first or last close and give a wrong return.
+        List<PriceHistory> niftyBars = com.marketai.market.quality.PriceSeriesValidator.latestPerDate(
+                priceHistoryRepository.findDailyBySymbolsAndDateBetween(List.of(NIFTY_SYMBOL), from, to));
         BigDecimal niftyReturn = returnPercentOrNull(niftyBars);
 
         for (Map.Entry<String, String> entry : SECTOR_SYMBOLS.entrySet()) {
             String sector = entry.getKey();
             String symbol = entry.getValue();
 
-            List<PriceHistory> bars = priceHistoryRepository
-                    .findBySymbolAndDateBetweenOrderByDateAsc(symbol, from, to);
+            List<PriceHistory> bars = com.marketai.market.quality.PriceSeriesValidator.latestPerDate(
+                    priceHistoryRepository.findDailyBySymbolsAndDateBetween(List.of(symbol), from, to));
             BigDecimal sectorReturn = returnPercentOrNull(bars);
 
             String reason = null;

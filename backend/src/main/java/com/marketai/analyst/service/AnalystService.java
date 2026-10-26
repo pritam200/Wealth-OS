@@ -63,8 +63,12 @@ public class AnalystService {
 
         if (!DataQuality.of(ta.getDataQuality()).isUsable()) {
             List<String> why = new ArrayList<>();
-            why.add(String.format("Only %d valid daily bar(s) stored for %s — indicators cannot be computed.",
-                    ta.getBarsAvailable() != null ? ta.getBarsAvailable() : 0, base));
+            if (ta.isHistoryPending()) {
+                why.add("Price history for " + base + " is still downloading behind other symbols — this fills in shortly.");
+            } else {
+                why.add(String.format("Only %d valid daily bar(s) stored for %s — indicators cannot be computed.",
+                        ta.getBarsAvailable() != null ? ta.getBarsAvailable() : 0, base));
+            }
             why.add("No rating is shown because it would not be based on verifiable data.");
             return AnalystAssessment.builder()
                     .symbol(symbol).displayName(name).price(ta.getPrice() != null ? ta.getPrice().doubleValue() : 0)
@@ -72,6 +76,7 @@ public class AnalystService {
                     .fundamentalFacts(facts(q, ta)).positives(new ArrayList<>()).risks(why)
                     .basis("Insufficient price history to compute technical indicators.")
                     .dataQuality(DataQuality.INSUFFICIENT.wire()).barsAvailable(ta.getBarsAvailable())
+                    .historyPending(ta.isHistoryPending())
                     .seriesStatus(ta.getSeriesStatus()).priceDate(ta.getLastBarDate()).priceSource(ta.getSource())
                     .build();
         }

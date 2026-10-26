@@ -50,6 +50,11 @@ public class SignalPayload {
         /** True when the current call's hit-rate lower bound beats the base rate on ≥30 independent calls. */
         private boolean currentCallValidated;
         private String summary;
+        /** Daily bars the replay had, and the fewest with which a call could be validated at all. */
+        private int barsAvailable;
+        private int barsNeededToValidate;
+        /** True when the history is too short for any BUY/SELL to pass validation, however the rule behaves. */
+        private boolean historyTooShort;
     }
 
     private String symbol;
@@ -119,7 +124,7 @@ public class SignalPayload {
 
     @Data @Builder
     public static class Guardrail {
-        private String rule;     // LOW_VOLUME_TRAP | COUNTER_TREND | INSUFFICIENT_BARS | STALE_DATA
+        private String rule;     // LOW_VOLUME_TRAP | COUNTER_TREND | INSUFFICIENT_BARS | HISTORY_PENDING | STALE_DATA | UNVALIDATED_RULE | UNADJUSTED_SPLIT
         private String action;   // SUPPRESSED | DOWNGRADED | FLAGGED
         private String detail;
     }

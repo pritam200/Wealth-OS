@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { ArrowUpRight, ArrowDownRight, Minus, Loader2, HelpCircle } from 'lucide-react';
-import { recommendationApi, isInsufficient, hitRateLabel } from '../../api/analyst';
+import { ArrowUpRight, ArrowDownRight, Minus, Loader2, HelpCircle, RotateCw } from 'lucide-react';
+import { recommendationApi, isInsufficient, hitRateLabel, tooShortLabel, PENDING_RETRY_MS } from '../../api/analyst';
 import type { AnalystAssessment } from '../../api/analyst';
 
 // Same next-action vocabulary AI Advisor and the Analyst panel use — this badge used to
@@ -42,21 +42,53 @@ export function HoldingTrendBadge({ symbol, pnlPercent, holdingValue, totalPortf
   const [data, setData] = useState<AnalystAssessment | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  // Bumped by the retry button, and on a back-off while the history is still downloading.
+  const [attempt, setAttempt] = useState(0);
+
+  // A new symbol or position starts clean — never show the previous row's result or failure.
+  useEffect(() => { setData(null); setFailed(false); setAttempt(0); }, [symbol, pnlPercent, holdingValue, totalPortfolioValue]);
 
   useEffect(() => {
     if (symbol.endsWith('.MF')) return; // MFs use a dedicated engine (MfTrendBadge)
     let alive = true;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     setLoading(true);
+    setFailed(false);
     recommendationApi.get(symbol, { pnlPercent, holdingValue, totalPortfolioValue })
-      .then(({ data }) => { if (alive) setData(data); })
+      .then(({ data }) => {
+        if (!alive) return;
+        setData(data);
+        if (data.historyPending && attempt < PENDING_RETRY_MS.length) {
+          retry = setTimeout(() => { if (alive) setAttempt(a => a + 1); }, PENDING_RETRY_MS[attempt]);
+        }
+      })
       .catch(() => { if (alive) setFailed(true); })
       .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [symbol, pnlPercent, holdingValue, totalPortfolioValue]);
+    return () => { alive = false; if (retry) clearTimeout(retry); };
+  }, [symbol, pnlPercent, holdingValue, totalPortfolioValue, attempt]);
 
   if (symbol.endsWith('.MF')) return <span className="text-2xs text-gray-700">—</span>;
-  if (loading) return <Loader2 size={11} className="animate-spin text-gray-600 inline" />;
-  if (failed || !data) return <span className="text-2xs text-gray-700">—</span>;
+  if (loading && !data) return <Loader2 size={11} className="animate-spin text-gray-600 inline" />;
+  if (failed) {
+    return (
+      <button type="button" onClick={() => setAttempt(a => a + 1)}
+        className="inline-flex items-center gap-1 text-2xs text-gray-500 hover:text-gray-300"
+        title="Couldn't load the trend for this holding — click to try again.">
+        <RotateCw size={11} /> Retry
+      </button>
+    );
+  }
+  if (!data) return <span className="text-2xs text-gray-700">—</span>;
+
+  // Still downloading and still re-asking; once the back-off runs out it falls through to "No data".
+  if (data.historyPending && attempt < PENDING_RETRY_MS.length) {
+    return (
+      <span className="inline-flex items-center gap-1 text-2xs text-gray-500"
+        title="Price history for this symbol is still downloading; the trend appears once it's in.">
+        <Loader2 size={11} className="animate-spin" /> Loading
+      </span>
+    );
+  }
 
   if (isInsufficient(data)) {
     const why = data.nextActionReason ?? data.risks?.join(' · ')
@@ -88,6 +120,7 @@ export function HoldingTrendBadge({ symbol, pnlPercent, holdingValue, totalPortf
     data.nextActionReason,
     data.rating === 'BUY' || data.rating === 'SELL' ? `validated ${data.rating}` : null,
     hitRateLabel(data),
+    tooShortLabel(data.signalValidation),
     data.priceDate ? `prices as of ${data.priceDate}` : null,
   ].filter(Boolean).join(' · ');
 

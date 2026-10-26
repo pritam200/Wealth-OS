@@ -106,4 +106,49 @@ class SignalEngineValidationTest {
         }
         assertThat(shown).as("at least one trending series should validate; before the fix none ever could").isGreaterThanOrEqualTo(1);
     }
+
+    @Test
+    @DisplayName("A possible unadjusted split inside the rule window suppresses any BUY/SELL")
+    void unadjustedSplitSuppressesCalls() {
+        int calls = 0;
+        for (long seed = 1; seed <= 12; seed++) {
+            List<PriceHistory> bars = trending(1200, seed);
+            // Everything before the last 10 sessions on the pre-split scale: a 2:1 split the provider didn't adjust.
+            for (PriceHistory b : bars.subList(0, bars.size() - 10)) {
+                b.setOpen(b.getOpen().multiply(java.math.BigDecimal.TWO));
+                b.setHigh(b.getHigh().multiply(java.math.BigDecimal.TWO));
+                b.setLow(b.getLow().multiply(java.math.BigDecimal.TWO));
+                b.setClose(b.getClose().multiply(java.math.BigDecimal.TWO));
+            }
+            SignalPayload p = run(bars, END);
+            if (p.getRuleOutput() == SignalPayload.Type.BUY || p.getRuleOutput() == SignalPayload.Type.SELL) {
+                calls++;
+                assertThat(p.getSignal()).isEqualTo(SignalPayload.Type.NO_ACTIONABLE_SIGNAL);
+                assertThat(p.getGuardrails()).extracting("rule").contains("UNADJUSTED_SPLIT");
+            }
+        }
+        assertThat(calls).as("some seed should produce a rule call to suppress").isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("With less history than validation needs, the gate says so plainly")
+    void historyTooShortToValidate() {
+        SignalPayload p = run(Bars.randomWalk(400, 0.015, 5, END), END);
+        var v = p.getValidation();
+        assertThat(v.getBarsAvailable()).isEqualTo(400);
+        assertThat(v.getBarsNeededToValidate()).isEqualTo(SignalEngine.barsNeededToValidate());
+        assertThat(v.isHistoryTooShort()).isTrue();
+        assertThat(v.isCurrentCallValidated()).isFalse();
+    }
+
+    @Test
+    @DisplayName("The same history is analysed once; a repeat request reuses the result")
+    void resultIsCachedOnTheSeries() {
+        List<PriceHistory> bars = Bars.randomWalk(600, 0.015, 9, END);
+        MarketDataService md = mock(MarketDataService.class);
+        when(md.getDailySeries(anyString(), anyInt())).thenAnswer(inv ->
+                PriceSeriesValidator.validate("TEST", bars, END, inv.getArgument(1)));
+        SignalEngine engine = new SignalEngine(md, new MarketStructureAnalyzer());
+        assertThat(engine.analyse("TEST")).isSameAs(engine.analyse("TEST"));
+    }
 }

@@ -77,6 +77,28 @@ class PriceSeriesValidatorTest {
     }
 
     @Test
+    @DisplayName("Many duplicates are reported as one issue with a count, not one line each")
+    void duplicatesAggregate() {
+        List<PriceHistory> rows = walk(40);
+        for (PriceHistory p : new ArrayList<>(rows)) rows.add(Bars.bar(p.getDate(), 1, 2, 0.5, 1.5, 10));
+        DailySeries s = validate(rows, LAST);
+        assertThat(s.size()).isEqualTo(40);
+        assertThat(s.issues()).filteredOn(i -> i.code().equals("DUPLICATE_CANDLE")).singleElement()
+                .satisfies(i -> assertThat(i.detail()).startsWith("40 stored bar(s)"));
+    }
+
+    @Test
+    @DisplayName("Copies written at the same moment are told apart by the later row id")
+    void duplicateTieBreak() {
+        java.time.LocalDateTime at = java.time.LocalDateTime.of(2026, 9, 29, 18, 0);
+        PriceHistory first = Bars.bar(LAST, 1, 2, 0.5, 1.0, 10), second = Bars.bar(LAST, 1, 2, 0.5, 1.8, 10);
+        first.setUpdatedAt(at); first.setId(3L);
+        second.setUpdatedAt(at); second.setId(4L);
+        assertThat(PriceSeriesValidator.latestPerDate(List.of(second, first))).singleElement()
+                .satisfies(p -> assertThat(p.getClose()).isEqualByComparingTo("1.80"));
+    }
+
+    @Test
     @DisplayName("A bar for a session that has not closed is excluded")
     void unfinishedCandle() {
         List<PriceHistory> rows = walk(40);

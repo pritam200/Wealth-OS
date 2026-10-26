@@ -163,6 +163,12 @@ app:
     base-url: https://query1.finance.yahoo.com
     timeout-seconds: 10
 
+  market:
+    # Remove duplicate daily price bars at startup (keeping the most recently updated copy of
+    # each) and then add the unique index that stops new ones. Off by default because it deletes
+    # rows: take a backup, set PRICE_HISTORY_DEDUPE=true for one restart, then set it back.
+    dedupe-price-history: ${PRICE_HISTORY_DEDUPE:false}
+
   news:
     refresh-rate-ms: 1800000
 
