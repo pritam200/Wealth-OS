@@ -3,7 +3,7 @@ import { Mail, CheckCircle, RefreshCw, Unlink, Loader, AlertCircle, AlertTriangl
 import { gmailApi } from '../api/gmail';
 import { portfolioApi } from '../api/portfolio';
 import { StatTile } from './shared/StatTile';
-import type { GmailStatus, GmailSyncResult, ProcessedEmailEntry, PendingPdf, PipelineStep, ExcludedSender, FinancialSender, SavedPassword, ReconciliationReportDto } from '../api/gmail';
+import type { GmailStatus, GmailSyncResult, ProcessedEmailEntry, PendingPdf, PipelineStep, ExcludedSender, FinancialSender, LearnedTemplate, SavedPassword, ReconciliationReportDto } from '../api/gmail';
 
 function timeAgo(isoStr: string | null): string {
   if (!isoStr) return 'Never';
@@ -191,6 +191,63 @@ function ManageSavedPasswords() {
 
 // Only mail from banks, brokers, depositories, registrars and fund houses is read. This shows
 // which, and lets the user add one that isn't built in (a smaller bank, a new broker).
+/** The alert wordings learned from the extractor's reads: each reads that sender's alerts with no model call. */
+function LearnedTemplates() {
+  const [items, setItems] = useState<LearnedTemplate[]>([]);
+  const [expanded, setExpanded] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    try { const { data } = await gmailApi.getLearnedTemplates(); setItems(data); }
+    catch { setError('Could not load the learned wordings.'); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const forget = async (id: number) => {
+    try { await gmailApi.forgetLearnedTemplate(id); await load(); }
+    catch { setError('Could not remove that wording.'); }
+  };
+
+  const saved = items.reduce((n, t) => n + t.timesUsed, 0);
+  return (
+    <div className="mt-1">
+      <button onClick={() => setExpanded(e => !e)}
+        className="btn-ghost text-xs flex items-center gap-1.5 px-2 py-1.5">
+        {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        <FileText size={12} /> Learned alert wordings <span className="font-mono tabular-nums">({items.length})</span>
+        {saved > 0 && <span className="text-2xs text-bull">{saved} model call{saved === 1 ? '' : 's'} saved</span>}
+      </button>
+      {expanded && (
+        <div className="mt-2 bg-surface-hover rounded-lg p-2.5">
+          <p className="text-2xs text-gray-500 mb-2">
+            When the model reads a bank alert correctly, its wording is kept with the amount, date and payee left blank.
+            The next alert from that sender worded the same way is read from it, without the model, and checked the same way.
+            Remove one if it ever reads an alert wrongly.
+          </p>
+          {items.length === 0
+            ? <p className="text-2xs text-gray-600">Nothing learned yet.</p>
+            : (
+              <ul className="space-y-1">
+                {items.map(t => (
+                  <li key={t.id} className="flex items-start justify-between gap-2 bg-surface-panel rounded px-2 py-1.5">
+                    <div className="min-w-0">
+                      <div className="text-xs text-ink">{t.senderDomain} <span className="text-gray-500">· used {t.timesUsed}×</span></div>
+                      {t.sample && <div className="text-2xs text-gray-500 break-words">{t.sample}</div>}
+                    </div>
+                    <button onClick={() => forget(t.id)} className="btn-icon text-gray-600 hover:text-bear shrink-0" title="Forget this wording">
+                      <X size={12} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          {error && <p className="text-2xs text-bear mt-2">{error}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FinancialSenders() {
   const [builtIn, setBuiltIn] = useState<string[]>([]);
   const [added, setAdded] = useState<FinancialSender[]>([]);
@@ -931,6 +988,7 @@ export function GmailConnect({ onImport }: Props) {
       {status.connected && <LockedStatements onImport={onImport} />}
       {status.connected && <ManageSavedPasswords />}
       {status.connected && <FinancialSenders />}
+      {status.connected && <LearnedTemplates />}
       {status.connected && <ExcludedSenders />}
       {status.connected && <ReconciliationReportPanel />}
       {status.connected && <ContractNoteDebug />}

@@ -175,6 +175,16 @@ export interface SavedPassword {
 }
 
 /** A sender domain the user added to the banks, brokers and fund houses a sync reads. */
+export interface LearnedTemplate {
+  id: number;
+  senderDomain: string;
+  subjectShape: string;
+  sample: string | null;
+  timesUsed: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
 export interface FinancialSender {
   id: number;
   domain: string;
@@ -251,6 +261,8 @@ export const gmailApi = {
     apiClient.get<{ builtIn: string[]; added: FinancialSender[] }>('/api/gmail/financial-senders'),
   addFinancialSender: (domain: string) => apiClient.post<FinancialSender>('/api/gmail/financial-senders', { domain }),
   removeFinancialSender: (id: number) => apiClient.delete(`/api/gmail/financial-senders/${id}`),
+  getLearnedTemplates: () => apiClient.get<LearnedTemplate[]>('/api/gmail/learned-templates'),
+  forgetLearnedTemplate: (id: number) => apiClient.delete(`/api/gmail/learned-templates/${id}`),
   getExcludedSenders: () => apiClient.get<ExcludedSender[]>('/api/gmail/excluded-senders'),
   addExcludedSender: (pattern: string, label?: string) =>
     apiClient.post<ExcludedSender>('/api/gmail/excluded-senders', { pattern, label }),

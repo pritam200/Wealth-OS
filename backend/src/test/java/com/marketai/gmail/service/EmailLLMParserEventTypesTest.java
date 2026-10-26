@@ -208,6 +208,41 @@ class EmailLLMParserEventTypesTest {
     }
 
     @Test
+    @DisplayName("a sender's alert the model read is learned: the next one worded the same is read without the model")
+    void learnsAnAlertWording() throws Exception {
+        List<com.marketai.gmail.entity.LearnedTemplate> stored = new java.util.ArrayList<>();
+        var repo = mock(com.marketai.gmail.repository.LearnedTemplateRepository.class);
+        when(repo.save(any())).thenAnswer(i -> {
+            com.marketai.gmail.entity.LearnedTemplate t = i.getArgument(0);
+            if (t.getId() == null) { t.setId((long) stored.size() + 1); stored.add(t); }
+            return t;
+        });
+        when(repo.findByUserIdAndSenderDomainAndSubjectShapeOrderByTimesUsedDesc(any(), any(), any())).thenAnswer(i -> List.copyOf(stored));
+        ReflectionTestUtils.setField(service, "learnedTemplates", new LearnedTemplateService(repo));
+
+        String first = com.marketai.gmail.parser.LearnedTemplatesTest.KOTAK_1;
+        when(llm.complete(any(), any(), anyString())).thenReturn(LlmCompletion.builder().text("{\"transactions\":[{"
+            + "\"instrument_type\":\"UPI\",\"transaction_type\":\"DEBIT\",\"amount_inr\":1250,\"transaction_date\":\"2026-10-03\","
+            + "\"merchant\":\"SWIGGY LIMITED\",\"status\":\"SUCCESS\",\"evidence\":\"Rs.1,250.00 is debited from your Kotak Bank account "
+            + "XX4521 on 03-10-2026 towards UPI payment to SWIGGY LIMITED.\"}],\"confidence\":0.95}").provider("gemini").model("m").build());
+        service.process(USER_ID, user, "alerts@kotak.bank.in", "Transaction alert", first, "msg-1", null);
+        assertThat(stored).hasSize(1);
+
+        service.process(USER_ID, user, "alerts@kotak.bank.in", "Transaction alert",
+            com.marketai.gmail.parser.LearnedTemplatesTest.KOTAK_2, "msg-2", null);
+
+        verify(llm, times(1)).complete(any(), any(), anyString());
+        ArgumentCaptor<ParsedEmail> pe = ArgumentCaptor.forClass(ParsedEmail.class);
+        verify(importer, times(2)).importParsedEmail(any(), any(), pe.capture(), any(), any());
+        ParsedEmail second = pe.getAllValues().get(1);
+        assertThat(second.getAmount()).isEqualByComparingTo("86");
+        assertThat(second.getMerchant()).isEqualTo("BLINKIT COMMERCE");
+        assertThat(second.getTradeDate()).isEqualTo(java.time.LocalDate.of(2026, 10, 19));
+        assertThat(stored.get(0).getTimesUsed()).isEqualTo(1);
+        assertThat(stored.get(0).getSample()).doesNotContain("4521").as("account digits masked");
+    }
+
+    @Test
     @DisplayName("an exchange's trade alert is recorded as a confirmation, neither booked nor queued")
     void exchangeTradeAlert() throws Exception {
         when(llm.complete(any(), any(), anyString())).thenReturn(LlmCompletion.builder()

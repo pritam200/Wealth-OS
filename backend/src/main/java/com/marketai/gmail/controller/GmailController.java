@@ -49,6 +49,7 @@ public class GmailController {
     private final com.marketai.gmail.ledger.EmailManifestService manifestService;
     private final com.marketai.gmail.ledger.FinancialEventLedger eventLedger;
     private final com.marketai.gmail.service.FinancialSenderService financialSenderService;
+    private final com.marketai.gmail.service.LearnedTemplateService learnedTemplateService;
 
     @Value("${gmail.frontend-url:http://localhost:5174}")
     private String frontendUrl;
@@ -261,6 +262,30 @@ public class GmailController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         }
+    }
+
+    /** The alert wordings learned from the extractor's reads; each one saves a model call per alert. */
+    @GetMapping("/learned-templates")
+    public ResponseEntity<List<Map<String, Object>>> learnedTemplates(@AuthenticationPrincipal User user) {
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (var t : learnedTemplateService.list(user.getId())) {
+            Map<String, Object> m = new HashMap<>();
+            m.put("id", t.getId());
+            m.put("senderDomain", t.getSenderDomain());
+            m.put("subjectShape", t.getSubjectShape());
+            m.put("sample", t.getSample());
+            m.put("timesUsed", t.getTimesUsed());
+            m.put("lastUsedAt", t.getLastUsedAt());
+            m.put("createdAt", t.getCreatedAt());
+            out.add(m);
+        }
+        return ResponseEntity.ok(out);
+    }
+
+    @DeleteMapping("/learned-templates/{id}")
+    public ResponseEntity<Void> forgetLearnedTemplate(@AuthenticationPrincipal User user, @PathVariable Long id) {
+        return learnedTemplateService.forget(user.getId(), id)
+            ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 
     @DeleteMapping("/financial-senders/{id}")

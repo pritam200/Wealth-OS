@@ -92,6 +92,9 @@ public class EmailLLMParserService {
     private final ParsedEmailImporter importer;
     private final CasBalanceSnapshotRepository casBalanceSnapshotRepository;
     private final FinancialEventLedger ledger;
+    // Optional so the extractor runs without it (tests, or a context without the table).
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LearnedTemplateService learnedTemplates;
 
     private static final TransactionFingerprinter FINGERPRINTER = new TransactionFingerprinter();
 
@@ -487,7 +490,9 @@ public class EmailLLMParserService {
             Optional<BankAlertParsers.Result> fixed = fixedDocument.isPresent() ? fixedDocument
                 : src.isDocument() || chunks.size() != 1 ? Optional.empty()
                 : BankAlertParsers.parse(domain, subject, chunks.get(c), user != null ? user.getName() : null)
-                    .or(() -> com.marketai.gmail.parser.FundEmailParsers.parse(domain, subject, chunks.get(0)));
+                    .or(() -> com.marketai.gmail.parser.FundEmailParsers.parse(domain, subject, chunks.get(0)))
+                    // A wording learned from an earlier read of this sender's alerts.
+                    .or(() -> learnedTemplates == null ? Optional.empty() : learnedTemplates.read(userId, domain, subject, chunks.get(0)));
             if (fixed.isPresent()) {
                 completion = LlmCompletion.builder().text(fixed.get().json())
                     .provider("rules").model(fixed.get().parser()).promptVersion("v1").build();
@@ -538,6 +543,10 @@ public class EmailLLMParserService {
             // only when the source describes exactly one. For a statement the text is withheld and
             // lines are matched on content alone (see ParsedEmailImporter.attributableReference).
             String referenceText = chunks.size() == 1 && txns.size() == 1 ? sourceText : null;
+            // One alert the model read: once the checks accept it, its wording is learned so the
+            // sender's next alert worded the same way needs no model call.
+            boolean learnable = learnedTemplates != null && !src.isDocument() && referenceText != null
+                && !senderBlocked && !"rules".equals(completion.getProvider());
 
             int chunkImported = 0, chunkQueued = 0;
             extracted += txns.size();
@@ -584,6 +593,7 @@ public class EmailLLMParserService {
                 }
 
                 if (extraction != null && extraction.resolved()) {
+                    if (learnable) learnedTemplates.learn(userId, domain, subject, sourceText, tNode);
                     // A failed or cancelled payment: nothing to book, and the reason is kept.
                     ledger.record(event.toBuilder().state(EventState.RESOLVED).reason(why)
                         .validationStatus(VERIFIED).dedupStatus(NOT_CHECKED).build());
@@ -624,6 +634,7 @@ public class EmailLLMParserService {
                     ParsedEmailImporter.ImportOutcome booked =
                         importer.importParsedEmail(userId, user, pe, gmailMessageId, referenceText);
                     if (booked == ParsedEmailImporter.ImportOutcome.DUPLICATE) {
+                        if (learnable) learnedTemplates.learn(userId, domain, subject, sourceText, tNode);
                         // Counted, never reported as a fresh import: a sync that re-reads a
                         // statement it already booked says "N already recorded", not "N imported".
                         duplicates++;
@@ -639,6 +650,7 @@ public class EmailLLMParserService {
                                 + "The recorded one was kept; compare them and mark this resolved.")
                             .validationStatus(VERIFIED).dedupStatus("CONFLICT").build());
                     } else {
+                        if (learnable) learnedTemplates.learn(userId, domain, subject, sourceText, tNode);
                         summaries.add(pe.getSourceDescription());
                         chunkImported++;
                         ledger.record(event.toBuilder().state(EventState.IMPORTED).reason(pe.getSourceDescription())
