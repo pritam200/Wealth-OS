@@ -55,6 +55,8 @@ public class GeminiClient {
     /** After a 429, calls are spaced this far apart for {@link #PACING_WINDOW_MS}. */
     private static final long PACED_INTERVAL_MS = 6_000;
     private static final long PACING_WINDOW_MS = 10 * 60_000;
+    /** The longest an interactive call waits for its turn before it is refused with a retry time. */
+    private static final long INTERACTIVE_MAX_WAIT_MS = 8_000;
     private static final java.util.regex.Pattern RETRY_DELAY =
         java.util.regex.Pattern.compile("\"retryDelay\"\\s*:\\s*\"(\\d+)(?:\\.\\d+)?s\"");
 
@@ -103,6 +105,9 @@ public class GeminiClient {
         // A statement chunk can carry dozens of transactions and a transcribed page is long;
         // 2048 tokens cut the JSON off mid-array, which then failed to parse on every retry.
         int defaultCap = request.json() || request.hasImages() ? 8192 : 2048;
+        // Research asks for a long JSON report and a grounded summary; on thinking models the
+        // reasoning tokens count against this cap, which cut both off at the general defaults.
+        if (request.interactive()) defaultCap = request.json() ? 16384 : 4096;
         config.put("maxOutputTokens", request.maxTokens() != null ? request.maxTokens() : defaultCap);
         if (request.json()) config.put("responseMimeType", "application/json");
         body.set("generationConfig", config);
@@ -118,10 +123,10 @@ public class GeminiClient {
         if (dailyQuotaSpent(model)) {
             // Every call until the reset would be refused; sending them only adds latency.
             throw new LlmUnavailableException(LlmErrorCategory.RATE_LIMITED,
-                "Gemini daily quota for " + model + " used up — resets " + quotaResetsAt.get(model));
+                "Gemini daily quota for " + model + " used up — resets " + quotaResetsAt.get(model)).retryAt(quotaResetsAt.get(model));
         }
         for (int attempt = 1; ; attempt++) {
-            awaitTurn();
+            awaitTurn(request.interactive() ? INTERACTIVE_MAX_WAIT_MS : Long.MAX_VALUE);
             try {
                 response = webClientBuilder.build()
                         .post()
@@ -144,9 +149,15 @@ public class GeminiClient {
                     // configured fallback take the call, instead of stalling the sync for hours.
                     if (detail != null && detail.contains("PerDay")) {
                         markDailyQuotaSpent(model, detail);
-                        throw failure(e);
+                        throw failure(e).retryAt(quotaResetsAt.get(model));
                     }
                     long wait = rateLimitWait(detail, attempt);
+                    if (request.interactive()) {
+                        // Someone is waiting: say when to try again instead of holding the request.
+                        // The back-off still applies to the background callers sharing the key.
+                        backOff(wait);
+                        throw failure(e).retryAt(java.time.Instant.now().plusMillis(wait));
+                    }
                     log.info("Gemini rate limited — waiting {}s before retry {} of {}", wait / 1000, attempt, RATE_LIMIT_ATTEMPTS - 1);
                     backOff(wait);
                     continue;
@@ -305,6 +316,11 @@ public class GeminiClient {
         return until != null && java.time.Instant.now().isBefore(until);
     }
 
+    /** When this model's spent daily quota comes back, or null when it isn't spent. */
+    public java.time.Instant quotaResetsAt(String model) {
+        return model == null || !dailyQuotaSpent(model) ? null : quotaResetsAt.get(stripPrefix(model));
+    }
+
     /** When the soonest spent quota comes back, or null when none is spent. */
     public java.time.Instant dailyQuotaResetsAt() {
         return quotaResetsAt.values().stream().filter(java.time.Instant.now()::isBefore).min(java.util.Comparator.naturalOrder()).orElse(null);
@@ -338,8 +354,11 @@ public class GeminiClient {
         }
     }
 
-    /** Blocks until this caller may send: past any shared back-off, and spaced out while pacing. */
-    private void awaitTurn() {
+    /**
+     * Blocks until this caller may send: past any shared back-off, and spaced out while pacing.
+     * A caller that can wait at most {@code maxWaitMs} is refused at once when the wait is longer.
+     */
+    private void awaitTurn(long maxWaitMs) {
         while (true) {
             long wait;
             synchronized (pacingLock) {
@@ -350,6 +369,10 @@ public class GeminiClient {
                 if (wait <= 0) {
                     lastCallAt = now;
                     return;
+                }
+                if (wait > maxWaitMs) {
+                    throw new LlmUnavailableException(LlmErrorCategory.RATE_LIMITED,
+                        "Gemini is rate limited for another " + (wait / 1000) + "s").retryAt(java.time.Instant.ofEpochMilli(earliest));
                 }
             }
             sleep(Math.min(wait, 5_000));

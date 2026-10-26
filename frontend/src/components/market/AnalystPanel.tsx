@@ -35,7 +35,8 @@ const NEXT_ACTION_TONE: Record<string, string> = {
 };
 const nextActionLabel = (a: string) => a.replace(/_/g, ' ').replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 
-export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }) {
+/** {@code reloadKey} changes when research for this stock completes, so the research note and the action gate reload. */
+export function AnalystPanel({ symbol, name, reloadKey }: { symbol: string; name?: string; reloadKey?: number }) {
   const [a, setA] = useState<AnalystAssessment | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -44,7 +45,8 @@ export function AnalystPanel({ symbol, name }: { symbol: string; name?: string }
     setLoading(true);
     analystApi.assess(symbol, name).then(r => { if (alive) setA(r.data); }).catch(() => {}).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [symbol]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, reloadKey]);
 
   if (loading) return <div className="card h-32 flex items-center justify-center text-gray-500"><Loader2 size={15} className="animate-spin mr-2" /> Running analysis…</div>;
   if (!a) return null;

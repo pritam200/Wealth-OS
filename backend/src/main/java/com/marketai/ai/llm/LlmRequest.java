@@ -15,10 +15,12 @@ import java.util.List;
  * @param images      images to read (only for providers/models with {@link LlmCapability#VISION})
  * @param webSearch   let the model search the web (Gemini Google Search grounding); the sources it
  *                    used come back on {@link LlmCompletion#getGrounding()}. Never combined with json.
+ * @param interactive someone is waiting on the answer: a rate limit fails the call at once
+ *                    instead of waiting it out (see {@link LlmTask#interactive()})
  */
 public record LlmRequest(String systemInstruction, String userPrompt, String model, boolean json,
                          double temperature, Integer maxTokens, int timeoutSeconds,
-                         List<GeminiClient.InlineImage> images, boolean webSearch) {
+                         List<GeminiClient.InlineImage> images, boolean webSearch, boolean interactive) {
 
     public LlmRequest {
         images = images == null ? List.of() : List.copyOf(images);
@@ -27,8 +29,14 @@ public record LlmRequest(String systemInstruction, String userPrompt, String mod
 
     public LlmRequest(String systemInstruction, String userPrompt, String model, boolean json,
                       double temperature, Integer maxTokens, int timeoutSeconds,
+                      List<GeminiClient.InlineImage> images, boolean webSearch) {
+        this(systemInstruction, userPrompt, model, json, temperature, maxTokens, timeoutSeconds, images, webSearch, false);
+    }
+
+    public LlmRequest(String systemInstruction, String userPrompt, String model, boolean json,
+                      double temperature, Integer maxTokens, int timeoutSeconds,
                       List<GeminiClient.InlineImage> images) {
-        this(systemInstruction, userPrompt, model, json, temperature, maxTokens, timeoutSeconds, images, false);
+        this(systemInstruction, userPrompt, model, json, temperature, maxTokens, timeoutSeconds, images, false, false);
     }
 
     public boolean hasImages() { return !images.isEmpty(); }

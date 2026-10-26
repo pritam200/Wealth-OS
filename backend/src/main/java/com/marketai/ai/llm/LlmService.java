@@ -60,8 +60,9 @@ public class LlmService {
 
     /**
      * A web-grounded answer from the task's own route, when that route can search the web (a
-     * Gemini model, with the privacy mode allowing cloud calls). Never falls back: a model
-     * without web access answering from memory is not research.
+     * Gemini model, with the privacy mode allowing cloud calls). If that model fails — its
+     * daily quota spent, say — the task's fallback is tried only when it can search too. Never
+     * falls back to a model without web access: one answering from memory is not research.
      *
      * @return empty when the configured route cannot search — the caller records "not supported"
      * @throws LlmUnavailableException when a search-capable route was tried and failed
@@ -70,24 +71,60 @@ public class LlmService {
         Snapshot s = config.current();
         if (!s.aiEnabled()) return Optional.empty();
         Route r = s.route(task);
+        if (!searches(s, r)) return Optional.empty();
+        try {
+            return Optional.of(webAttempt(s, r, task, prompt, userPrompt, false));
+        } catch (LlmUnavailableException e) {
+            Optional<Route> fb = s.fallback(task).filter(f -> searches(s, f));
+            if (fb.isEmpty() || !e.getCategory().retryable()) throw e;
+            log.info("Web research on {}:{} failed ({}) — trying {}:{}", r.provider().key(), r.model(), e.getCategory(),
+                fb.get().provider().key(), fb.get().model());
+            return Optional.of(webAttempt(s, fb.get(), task, prompt, userPrompt, true));
+        }
+    }
+
+    private boolean searches(Snapshot s, Route r) {
         if (!r.enabled() || r.provider() != LlmProviderId.GEMINI || !s.permits(r.provider())
-            || !s.provider(r.provider()).configured()) return Optional.empty();
+            || !s.provider(r.provider()).configured()) return false;
+        Optional<ModelInfo> info = catalog.find(s.provider(r.provider()).withModel(r.model()), r.model());
+        return info.isEmpty() || info.get().capabilities().contains(LlmCapability.TOOLS);
+    }
+
+    private LlmCompletion webAttempt(Snapshot s, Route r, LlmTask task, PromptTemplate prompt, String userPrompt, boolean fallback) {
         ProviderSettings settings = s.provider(r.provider()).withModel(r.model());
-        Optional<ModelInfo> info = catalog.find(settings, r.model());
-        if (info.isPresent() && !info.get().capabilities().contains(LlmCapability.TOOLS)) return Optional.empty();
         LlmRequest request = new LlmRequest(prompt.system(), userPrompt, r.model(), false, 0.0,
-            settings.maxTokens(), settings.timeoutSeconds(), List.of(), true);
+            settings.maxTokens(), settings.timeoutSeconds(), List.of(), true, task.interactive());
         long started = System.currentTimeMillis();
         try {
             LlmCompletion c = catalog.provider(r.provider()).generate(settings, request);
             usage.record(task, r.provider().key(), r.model(), prompt.tag(), System.currentTimeMillis() - started,
-                true, null, false, c.getPromptTokens(), c.getCompletionTokens());
-            return Optional.of(c.toBuilder().provider(r.provider().key()).model(r.model()).promptVersion(prompt.tag()).build());
+                true, null, fallback, c.getPromptTokens(), c.getCompletionTokens());
+            return c.toBuilder().provider(r.provider().key()).model(r.model()).promptVersion(prompt.tag()).fallbackUsed(fallback).build();
         } catch (LlmUnavailableException e) {
             usage.record(task, r.provider().key(), r.model(), prompt.tag(), System.currentTimeMillis() - started,
-                false, e.getCategory().name(), false, null, null);
+                false, e.getCategory().name(), fallback, null, null);
             throw e;
         }
+    }
+
+    /**
+     * When every route this task can use has spent its daily quota: the soonest reset. Empty
+     * when any route could still answer (including one with no daily quota, like a local model).
+     */
+    public Optional<java.time.Instant> quotaSpentUntil(LlmTask task) {
+        Snapshot s = config.current();
+        if (!s.aiEnabled()) return Optional.empty();
+        List<Route> routes = new java.util.ArrayList<>();
+        if (usable(s, s.route(task))) routes.add(s.route(task));
+        s.fallback(task).filter(r -> usable(s, r)).ifPresent(routes::add);
+        if (routes.isEmpty()) return Optional.empty();
+        java.time.Instant soonest = null;
+        for (Route r : routes) {
+            Optional<java.time.Instant> until = catalog.provider(r.provider()).quotaSpentUntil(r.model());
+            if (until.isEmpty()) return Optional.empty();
+            if (soonest == null || until.get().isBefore(soonest)) soonest = until.get();
+        }
+        return Optional.ofNullable(soonest);
     }
 
     /** Configured to be served (no network check — a failed call reports itself). */
@@ -205,7 +242,8 @@ public class LlmService {
         }
 
         LlmRequest request = new LlmRequest(prompt.system(), userPrompt, route.model(), task.structured(),
-            task.deterministic() ? 0.0 : settings.temperature(), settings.maxTokens(), settings.timeoutSeconds(), images);
+            task.deterministic() ? 0.0 : settings.temperature(), settings.maxTokens(), settings.timeoutSeconds(), images,
+            false, task.interactive());
         LlmProvider provider = catalog.provider(route.provider());
         for (int attempt = 0; ; attempt++) {
             long started = System.currentTimeMillis();

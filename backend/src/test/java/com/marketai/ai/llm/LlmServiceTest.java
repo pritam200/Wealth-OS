@@ -161,4 +161,56 @@ class LlmServiceTest {
             .isInstanceOf(LlmUnavailableException.class);
         verify(ollama, never()).generate(any(), any());
     }
+
+    /** Gemini everywhere, with Flash-Lite ("gemini-lite") as each task's fallback. */
+    private void configureWithLite() {
+        Map<LlmTask, Route> routes = new EnumMap<>(LlmTask.class);
+        for (LlmTask t : LlmTask.values()) routes.put(t, new Route(t, LlmProviderId.GEMINI, "gemini-test"));
+        when(config.current()).thenReturn(new Snapshot(true, PrivacyMode.CLOUD, true, 1, GEMINI, OLLAMA, routes,
+            true, LlmConfigService.KeySource.SAVED, "0000", null, "gemini-lite"));
+    }
+
+    @Test
+    @DisplayName("web research falls back to Flash-Lite when Flash fails, and asks for an interactive call")
+    void webResearchFallsBackToLite() {
+        configureWithLite();
+        when(gemini.generate(any(), argThat(r -> r != null && "gemini-test".equals(r.model()))))
+            .thenThrow(new LlmUnavailableException(LlmErrorCategory.RATE_LIMITED, "daily quota"));
+        when(gemini.generate(any(), argThat(r -> r != null && "gemini-lite".equals(r.model())))).thenReturn(answer("gemini"));
+
+        LlmCompletion c = service.webResearch(LlmTask.FINANCIAL_ANALYSIS, PromptLibrary.RESEARCH_WEB, "subject").orElseThrow();
+
+        assertThat(c.getModel()).isEqualTo("gemini-lite");
+        assertThat(c.isFallbackUsed()).isTrue();
+        ArgumentCaptor<LlmRequest> req = ArgumentCaptor.forClass(LlmRequest.class);
+        verify(gemini, times(2)).generate(any(), req.capture());
+        assertThat(req.getAllValues()).allMatch(r -> r.webSearch() && r.interactive());
+    }
+
+    @Test
+    @DisplayName("the quota is spent for a task only when every route it can use is spent")
+    void quotaSpentOnlyWhenEveryRouteIs() {
+        configureWithLite();
+        java.time.Instant flashReset = java.time.Instant.now().plusSeconds(3600);
+        when(gemini.quotaSpentUntil("gemini-test")).thenReturn(java.util.Optional.of(flashReset));
+        when(gemini.quotaSpentUntil("gemini-lite")).thenReturn(java.util.Optional.empty());
+
+        assertThat(service.quotaSpentUntil(LlmTask.FINANCIAL_ANALYSIS)).isEmpty();
+
+        java.time.Instant liteReset = flashReset.plusSeconds(60);
+        when(gemini.quotaSpentUntil("gemini-lite")).thenReturn(java.util.Optional.of(liteReset));
+        assertThat(service.quotaSpentUntil(LlmTask.FINANCIAL_ANALYSIS)).contains(flashReset);
+    }
+
+    @Test
+    @DisplayName("only research is an interactive call; the mail sync keeps waiting out rate limits")
+    void onlyResearchIsInteractive() {
+        configure(PrivacyMode.CLOUD, false, LlmProviderId.GEMINI, Map.of());
+        service.complete(LlmTask.EMAIL_EXTRACTION, PromptLibrary.TRANSACTION_EXTRACTION, "p");
+        service.complete(LlmTask.FINANCIAL_ANALYSIS, PromptLibrary.RESEARCH_ANALYST, "p");
+        ArgumentCaptor<LlmRequest> req = ArgumentCaptor.forClass(LlmRequest.class);
+        verify(gemini, times(2)).generate(any(), req.capture());
+        assertThat(req.getAllValues().get(0).interactive()).isFalse();
+        assertThat(req.getAllValues().get(1).interactive()).isTrue();
+    }
 }

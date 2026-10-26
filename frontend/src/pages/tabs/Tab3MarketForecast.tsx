@@ -31,6 +31,11 @@ const TREND_COLOR: Record<string, string> = {
   DOWNTREND: 'text-bear', STRONG_DOWNTREND: 'text-bear',
 };
 
+// The forecast's index codes, known up front: the /indices list loads asynchronously (and can
+// fail), and until it arrives NIFTY50 would otherwise be researched as a company called NIFTY50.
+const INDEX_CODES: Record<string, string> = { NIFTY50: 'Nifty 50', BANKNIFTY: 'Bank Nifty', SENSEX: 'Sensex', NIFTYMIDCAP: 'Nifty Midcap 50' };
+const isIndex = (symbol: string, indices: Record<string, string>) => symbol in INDEX_CODES || symbol in indices || symbol.startsWith('^');
+
 export function Tab3MarketForecast() {
   const [indices, setIndices] = useState<Record<string, string>>({});
   const [symbol, setSymbol] = useState('NIFTY50');
@@ -298,8 +303,8 @@ export function Tab3MarketForecast() {
 
       <HorizonTable symbol={symbol} />
 
-      <ResearchSection key={symbol} title={indices[symbol] ? `AI market research — ${indices[symbol]}` : `AI research — ${symbol}`}
-        subject={indices[symbol] ? { kind: 'market', symbol } : { kind: 'stock', symbol }} />
+      <ResearchSection key={symbol} title={isIndex(symbol, indices) ? `AI market research — ${indices[symbol] ?? INDEX_CODES[symbol]}` : `AI research — ${symbol}`}
+        subject={isIndex(symbol, indices) ? { kind: 'market', symbol } : { kind: 'stock', symbol }} />
 
       <AiCopilot />
     </div>

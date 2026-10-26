@@ -30,9 +30,25 @@ public class ResearchCache {
                       String promptVersion, String provider, String model) {}
 
     public Optional<ResearchResult> find(Key k) {
+        return record(k).flatMap(this::read);
+    }
+
+    private Optional<ResearchRecord> record(Key k) {
         return repo.findFirstBySubjectTypeAndSymbolAndUserScopeAndMarketDateAndSnapshotHashAndPromptVersionAndProviderAndModelOrderByCreatedAtDesc(
-                k.subjectType(), k.symbol(), scope(k.userId()), date(k.marketDate()), k.snapshotHash(), k.promptVersion(), k.provider(), k.model())
-                .flatMap(this::read);
+                k.subjectType(), k.symbol(), scope(k.userId()), date(k.marketDate()), k.snapshotHash(), k.promptVersion(), k.provider(), k.model());
+    }
+
+    /**
+     * Completed research for this subject and trading session, under this prompt version: the
+     * research of the day. The live quote, a fresh headline or a fallback model answering all
+     * change the exact key during a session, and re-running three model calls on every view for
+     * that would spend the free quota on research that is no newer. Refresh runs it again.
+     */
+    public Optional<ResearchResult> current(String subjectType, String symbol, Long userId, String marketDate, String promptVersion) {
+        LocalDate d = date(marketDate);
+        if (d == null) return Optional.empty();
+        return repo.findFirstBySubjectTypeAndSymbolAndUserScopeAndMarketDateAndPromptVersionAndStatusOrderByCreatedAtDesc(
+                subjectType, symbol, scope(userId), d, promptVersion, "OK").flatMap(this::read);
     }
 
     /** The newest research for a subject, whatever produced it — callers label its age. */
@@ -49,8 +65,14 @@ public class ResearchCache {
         return repo.findFirstBySubjectTypeAndSymbolAndMarketDateOrderByCreatedAtDesc(subjectType, symbol, marketDate).flatMap(this::read);
     }
 
+    /**
+     * Stores research under the route that produced it. A later run on the same key — a refresh
+     * on unchanged data, or a complete run after a partial one — replaces the stored one: the
+     * key is unique, and inserting a second row used to be refused, keeping the older research.
+     */
     public void save(ResearchResult r, String promptVersion) {
-        ResearchRecord rec = new ResearchRecord();
+        ResearchRecord rec = record(new Key(r.getSubjectType(), r.getSymbol(), r.getUserScope(), r.getMarketDate(),
+                r.getDataSnapshotHash(), promptVersion, r.getProvider(), r.getModel())).orElseGet(ResearchRecord::new);
         rec.setSubjectType(r.getSubjectType());
         rec.setSymbol(r.getSymbol());
         rec.setUserScope(scope(r.getUserScope()));
