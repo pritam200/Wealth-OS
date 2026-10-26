@@ -1190,6 +1190,28 @@ public class ParsedEmailImporter {
         return portfolioService.createPortfolio(userId, "My Portfolio", "Auto-created");
     }
 
+    /**
+     * The portfolio a trade from {@code broker} is booked in: the one named after that broker
+     * ("Mirae Asset" for m.Stock), else the only portfolio when it isn't named after another
+     * broker, else a new one for this broker. Every trade used to go into the first portfolio,
+     * so an Upstox trade could be added to a Mirae holding of the same stock.
+     */
+    private Portfolio portfolioForBroker(Long userId, String broker) throws Exception {
+        List<Portfolio> portfolios = portfolioService.getUserPortfolios(userId);
+        if (broker == null) {
+            return portfolios.isEmpty() ? portfolioService.createPortfolio(userId, "My Portfolio", "Auto-created") : portfolios.get(0);
+        }
+        for (Portfolio p : portfolios) if (PortfolioService.sameBroker(p.getName(), broker)) return p;
+        if (portfolios.size() == 1 && !namesABroker(portfolios.get(0).getName())) return portfolios.get(0);
+        return portfolioService.createPortfolio(userId, broker, "Trades from " + broker + " emails");
+    }
+
+    private static boolean namesABroker(String name) {
+        for (String b : List.of("Zerodha", "Groww", "Upstox", "Angel One", "ICICI Direct", "Mirae Asset", "Dhan", "Kotak Securities"))
+            if (PortfolioService.sameBroker(name, b)) return true;
+        return false;
+    }
+
     private boolean importTrade(Long userId, User user, ParsedEmail pe, com.marketai.common.ledger.Provenance provenance) throws Exception {
         // A trade is only a trade if it has a symbol, a quantity and a price. Each of these was
         // previously used unchecked:
@@ -1211,13 +1233,20 @@ public class ParsedEmailImporter {
                 + ") — not creating a holding from partial data.");
         }
 
-        Portfolio portfolio = getOrCreatePortfolio(userId, user);
+        Portfolio portfolio = portfolioForBroker(userId, pe.getBroker());
         String exchange = pe.getExchange() != null ? pe.getExchange() : "NSE";
-        String symbol = pe.getSymbol().trim() + ("BSE".equalsIgnoreCase(exchange) ? ".BO" : ".NS");
+        String symbol;
+        try {
+            symbol = portfolioService.portfolioSymbol(portfolio.getId(), pe.getSymbol(),
+                "BSE".equalsIgnoreCase(exchange) ? ".BO" : ".NS", pe.getBroker());
+        } catch (IllegalStateException e) {
+            throw new ImportRejectedException(e.getMessage());
+        }
         LocalDate date = requireDate(pe);
         BigDecimal quantity = BigDecimal.valueOf(pe.getQuantity());
 
-        if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, quantity, pe.getPrice(), pe.getTradeReference())) {
+        if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, quantity, pe.getPrice(), pe.getTradeReference(),
+                pe.getOccurrenceInSource())) {
             log.debug("Skipping duplicate trade: {} {} @ {} on {}", symbol, pe.getQuantity(), pe.getPrice(), date);
             return false;
         }
@@ -1243,7 +1272,7 @@ public class ParsedEmailImporter {
         // Brokerage, STT, GST and stamp duty, when the contract note states them: they are part
         // of what the shares cost, and leaving them out overstated every later gain.
         req.setCharges(pe.getCharges() != null && pe.getCharges().signum() > 0 ? pe.getCharges() : BigDecimal.ZERO);
-        req.setBroker(pe.getExchange());
+        req.setBroker(pe.getBroker() != null ? pe.getBroker() : pe.getExchange());
         req.setIsin(pe.getIsin());
         req.setDpId(pe.getDpId());
         req.setClientId(pe.getClientId());

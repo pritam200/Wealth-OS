@@ -286,6 +286,8 @@ public class LegacyApplyService {
         // Prefer the symbol the user's portfolio already uses (.NS or .BO); default to NSE.
         for (String suffix : new String[]{".NS", ".BO"})
             if (ps.findHoldingId(portfolioId, s + suffix) != null) return s + suffix;
+        // A hand-entered holding often has no suffix at all; join it rather than open a second row.
+        if (ps.findHoldingId(portfolioId, s) != null) return s;
         return s + ".NS";
     }
 }

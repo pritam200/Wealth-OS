@@ -114,5 +114,19 @@ public final class IssuerDomainRegistry {
         return java.util.Collections.unmodifiableSet(DOMAINS.keySet());
     }
 
+    // The broker name a trade from each brokerage's mail is held under. m.Stock is Mirae Asset's
+    // brokerage; "Kotak" covers the bank too, so only its securities domain names the broker.
+    private static final Map<String, String> BROKERS = Map.of(
+        "Zerodha", "Zerodha", "Groww", "Groww", "Upstox", "Upstox", "Angel One", "Angel One",
+        "ICICI Direct", "ICICI Direct", "m.Stock", "Mirae Asset", "Dhan", "Dhan");
+
+    /** The broker a sender's trades belong to, or empty for banks, depositories and fund houses. */
+    public static Optional<String> brokerFor(String senderDomain) {
+        if (senderDomain == null) return Optional.empty();
+        String d = senderDomain.toLowerCase();
+        if (d.equals("kotaksecurities.com") || d.endsWith(".kotaksecurities.com")) return Optional.of("Kotak Securities");
+        return issuerFor(d).map(BROKERS::get);
+    }
+
     static int size() { return DOMAINS.size(); }
 }

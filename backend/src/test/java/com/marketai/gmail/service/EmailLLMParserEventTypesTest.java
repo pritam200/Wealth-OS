@@ -136,6 +136,45 @@ class EmailLLMParserEventTypesTest {
     }
 
     @Test
+    @DisplayName("an m.Stock contract note is booked without the model: every fill, at Mirae Asset, F&O left out")
+    void mstockContractNote() throws Exception {
+        when(marketData.searchStocks(anyString())).thenAnswer(inv -> {
+            String q = inv.getArgument(0);
+            if (q.contains("BHARTI") || q.equals("INE397D01024"))
+                return List.of(Stock.builder().symbol("BHARTIARTL").name("Bharti Airtel Ltd").build());
+            if (q.contains("LARSEN") || q.equals("INE018A01030"))
+                return List.of(Stock.builder().symbol("LT").name("Larsen & Toubro Ltd").build());
+            return List.of();
+        });
+        String note = String.join("\n",
+            "CONTRACT NOTE CUM TAX INVOICE",
+            "Trade Date : 13/10/2026",
+            "1000000000080 09:57:24 1488255 09:57:24 NSE - M BHARTI AIRTEL LIMITE SELL 40 1888.0000 0.0000 1888.0000 0.0000 75520.0000",
+            "1000000000080 09:57:24 1488255 09:57:24 NSE - M BHARTI AIRTEL LIMITE SELL 40 1888.0000 0.0000 1888.0000 0.0000 75520.0000",
+            "1000000000081 10:02:11 1488300 10:02:11 NSE - M BHARTI AIRTEL LIMITE SELL 40 1888.0000 0.0000 1888.0000 0.0000 75520.0000",
+            "1000000001382 12:59:24 1200001842 12:59:24 NSE - M LARSEN & TOUBRO LTD. BUY 5 3648.7000 0.0000 3648.7000 0.0000 -18243.5000",
+            "1000000000057 11:20:13 3527598 11:20:39 NSEFO - BT_O OPTIDX NIFTY 13OCT26 22150.00 PE (BT) BUY 65 24.6000 0.0000 24.6000 0.0000 -1599.0000",
+            "ISIN Security Name Buy Qty WAP Sell Qty WAP Net",
+            "INE397D01024 BHARTI AIRTEL LIMITE 120 1888.0000 0.0526 1887.9474 226560.0000 0 226560.0000",
+            "INE018A01030 LARSEN & TOUBRO LTD 5 3648.7000 3648.7000 18243.5000 5 -18243.5000");
+
+        service.process(USER_ID, user, "contractnote@mstock.com", "Contract Note as on Oct 13 2026", note, "msg-1", null,
+            0, new EmailLLMParserService.SourceDoc("att-1", "note.pdf", "h", null));
+
+        verify(llm, never()).complete(any(), any(), anyString());
+        ArgumentCaptor<ParsedEmail> pe = ArgumentCaptor.forClass(ParsedEmail.class);
+        verify(importer, times(4)).importParsedEmail(any(), any(), pe.capture(), any(), any());
+        List<ParsedEmail> fills = pe.getAllValues();
+        assertThat(fills).extracting(ParsedEmail::getSymbol).containsExactly("BHARTIARTL", "BHARTIARTL", "BHARTIARTL", "LT");
+        assertThat(fills).extracting(ParsedEmail::getBroker).containsOnly("Mirae Asset");
+        assertThat(fills).extracting(ParsedEmail::getTradeReference).containsExactly("1488255", "1488255", "1488300", "1200001842");
+        // Three sells of 40 at one price on one day are three trades; the two identical lines are numbered apart.
+        assertThat(fills.get(0).getOccurrenceInSource()).isZero();
+        assertThat(fills.get(1).getOccurrenceInSource()).isEqualTo(1);
+        verify(review, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("an exchange's trade alert is recorded as a confirmation, neither booked nor queued")
     void exchangeTradeAlert() throws Exception {
         when(llm.complete(any(), any(), anyString())).thenReturn(LlmCompletion.builder()

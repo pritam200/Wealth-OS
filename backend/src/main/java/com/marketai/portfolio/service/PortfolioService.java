@@ -84,6 +84,16 @@ public class PortfolioService {
      */
     public boolean isDuplicateTrade(Long portfolioId, String symbol, LocalDate date, BigDecimal quantity,
                                     BigDecimal price, String tradeReference) {
+        return isDuplicateTrade(portfolioId, symbol, date, quantity, price, tradeReference, 0);
+    }
+
+    /**
+     * Same check for the {@code occurrence}-th (from 0) of several identical fills in one source —
+     * one trade number, same size, same price, which m.Stock prints for an order filled in parts.
+     * It is a duplicate only when that many such fills are already recorded.
+     */
+    public boolean isDuplicateTrade(Long portfolioId, String symbol, LocalDate date, BigDecimal quantity,
+                                    BigDecimal price, String tradeReference, int occurrence) {
         if (tradeReference == null || tradeReference.isBlank()) {
             return isDuplicateTrade(portfolioId, symbol, date, quantity, price);
         }
@@ -91,9 +101,14 @@ public class PortfolioService {
         Optional<Holding> holding = holdingRepository.findByPortfolioIdAndSymbol(portfolioId, symbol.toUpperCase());
         if (holding.isEmpty()) return false;
         String ref = tradeReference.trim();
+        int sameFills = 0;
         for (Transaction t : transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(holding.get().getId())) {
             String theirs = t.getProvenance() != null ? t.getProvenance().getSourceReference() : null;
-            if (theirs != null && theirs.equalsIgnoreCase(ref)) return true;
+            // m.Stock prints one trade number on two fills of different sizes; only the same
+            // number for the same quantity is the same trade.
+            if (theirs != null && theirs.equalsIgnoreCase(ref)
+                    && (t.getQuantity() == null || t.getQuantity().compareTo(quantity) == 0)
+                    && ++sameFills > occurrence) return true;
             boolean sameFigures = date.equals(t.getTransactionDate()) && t.getQuantity() != null
                 && t.getQuantity().compareTo(quantity) == 0 && t.getPrice() != null && t.getPrice().compareTo(price) == 0;
             if (sameFigures && theirs == null) return true;
@@ -1195,6 +1210,49 @@ public class PortfolioService {
         return false;
     }
 
+    /** A symbol without its ".NS" suffix, upper-cased; ".BO" and fund symbols are left as they are. */
+    static String nseBase(String symbol) {
+        String s = symbol.trim().toUpperCase();
+        return s.endsWith(".NS") ? s.substring(0, s.length() - 3) : s;
+    }
+
+    /**
+     * The symbol a trade in {@code base} should be booked under in this portfolio: the one
+     * already held, with or without ".NS", so an imported trade joins the hand-entered holding
+     * instead of opening a second row for the same stock. A holding at another broker is never
+     * joined — the same stock at two brokers is two positions — so the trade is refused instead.
+     */
+    public String portfolioSymbol(Long portfolioId, String base, String suffix, String broker) {
+        String b = base.trim().toUpperCase();
+        String withSuffix = b.endsWith(suffix) ? b : b + suffix;
+        String bare = nseBase(withSuffix);
+        List<String> candidates = ".NS".equals(suffix) ? List.of(withSuffix, bare) : List.of(withSuffix);
+        for (String c : candidates) {
+            Optional<Holding> h = holdingRepository.findByPortfolioIdAndSymbol(portfolioId, c);
+            if (h.isEmpty()) continue;
+            if (broker == null || brokerKey(h.get()).isEmpty() || sameBroker(h.get().getBroker(), broker)) return c;
+            throw new IllegalStateException(c + " in this portfolio is held at " + h.get().getBroker()
+                + ", not " + broker + " — the same stock at two brokers is two positions.");
+        }
+        return withSuffix;
+    }
+
+    /**
+     * Whether two broker names are one brokerage: "Kotak" and "Kotak Securities", and m.Stock,
+     * which is Mirae Asset's brokerage, under either name.
+     */
+    public static boolean sameBroker(String a, String b) {
+        if (a == null || b == null) return false;
+        String x = brokerLetters(a), y = brokerLetters(b);
+        if (x.isEmpty() || y.isEmpty()) return false;
+        return x.equals(y) || x.startsWith(y) || y.startsWith(x);
+    }
+
+    private static String brokerLetters(String name) {
+        String s = name.toLowerCase().replaceAll("[^a-z]", "");
+        return s.startsWith("mstock") || s.startsWith("mirae") ? "mirae" : s;
+    }
+
     /**
      * Holdings that are one security: they share a symbol, or share an ISIN (transitively —
      * A and B by symbol, B and C by ISIN, is one group). Holdings with no symbol are left out.
@@ -1210,7 +1268,8 @@ public class PortfolioService {
         for (int i = 0; i < hs.size(); i++) {
             Holding h = hs.get(i);
             List<String> keys = new ArrayList<>();
-            keys.add("S:" + h.getSymbol().toUpperCase());
+            // "HDFCAMC" (entered by hand) and "HDFCAMC.NS" (imported) are one NSE listing.
+            keys.add("S:" + nseBase(h.getSymbol()));
             if (h.getIsin() != null && !h.getIsin().isBlank()) keys.add("I:" + h.getIsin().trim().toUpperCase());
             for (String k : keys) {
                 Integer j = firstByKey.putIfAbsent(k, i);

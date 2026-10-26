@@ -27,6 +27,7 @@ public class ParsedEmail {
     // Trade (stock buy/sell)
     private String symbol;
     private String exchange;    // NSE / BSE
+    private String broker;      // the brokerage whose mail stated the trade ("Mirae Asset", "Upstox")
     private Integer quantity;
     private BigDecimal price;
     private LocalDate tradeDate;

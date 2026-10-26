@@ -64,6 +64,8 @@ class NewEventTypeImportTest {
         p.setId(1L);
         when(portfolioService.getUserPortfolios(USER)).thenReturn(List.of(p));
         when(portfolioService.resolveFundSymbol(any(), any(), any())).thenAnswer(i -> i.getArgument(1));
+        when(portfolioService.portfolioSymbol(any(), any(), any(), any()))
+            .thenAnswer(i -> ((String) i.getArgument(1)).toUpperCase() + i.getArgument(2));
 
         importer = new ParsedEmailImporter(trackingService, portfolioService, incomeRepo, expenseRepo,
             mock(com.marketai.card.repository.CreditCardRepository.class),
@@ -274,7 +276,7 @@ class NewEventTypeImportTest {
     @Test
     @DisplayName("a contract note's charges and trade number reach the ledger")
     void tradeCarriesChargesAndReference() throws Exception {
-        when(portfolioService.isDuplicateTrade(any(), any(), any(), any(), any(), any())).thenReturn(false);
+        when(portfolioService.isDuplicateTrade(any(), any(), any(), any(), any(), any(), anyInt())).thenReturn(false);
 
         run(ParsedEmail.builder().type(ParsedEmail.Type.TRADE_BUY).symbol("TCS").quantity(10)
             .price(new BigDecimal("3500")).charges(new BigDecimal("42.10")).tradeReference("T-991")
@@ -284,7 +286,29 @@ class NewEventTypeImportTest {
         verify(portfolioService).addHolding(eq(1L), eq(USER), req.capture());
         assertThat(req.getValue().getCharges()).isEqualByComparingTo("42.10");
         assertThat(req.getValue().getProvenance().getSourceReference()).isEqualTo("T-991");
-        verify(portfolioService).isDuplicateTrade(eq(1L), eq("TCS.NS"), eq(DAY), any(), any(), eq("T-991"));
+        verify(portfolioService).isDuplicateTrade(eq(1L), eq("TCS.NS"), eq(DAY), any(), any(), eq("T-991"), eq(0));
+    }
+
+    @Test
+    @DisplayName("a trade is booked in its own broker's portfolio, never another broker's")
+    void tradeGoesToItsBrokersPortfolio() throws Exception {
+        Portfolio mirae = Portfolio.builder().id(1L).name("Mirae Asset").build();
+        Portfolio upstox = Portfolio.builder().id(2L).name("Upstox").build();
+        when(portfolioService.getUserPortfolios(USER)).thenReturn(List.of(mirae, upstox));
+        when(portfolioService.createPortfolio(eq(USER), eq("Zerodha"), any())).thenReturn(Portfolio.builder().id(3L).build());
+        ParsedEmail buy = ParsedEmail.builder().type(ParsedEmail.Type.TRADE_BUY).symbol("TCS").quantity(10)
+            .price(new BigDecimal("3500")).tradeDate(DAY).build();
+
+        run(buy.toBuilder().broker("Upstox").tradeReference("U-1").build());
+        verify(portfolioService).addHolding(eq(2L), eq(USER), any());
+
+        run(buy.toBuilder().broker("Mirae Asset").tradeReference("M-1").build());
+        ArgumentCaptor<AddHoldingRequest> req = ArgumentCaptor.forClass(AddHoldingRequest.class);
+        verify(portfolioService).addHolding(eq(1L), eq(USER), req.capture());
+        assertThat(req.getValue().getBroker()).isEqualTo("Mirae Asset");
+
+        run(buy.toBuilder().broker("Zerodha").tradeReference("Z-1").build());
+        verify(portfolioService).addHolding(eq(3L), eq(USER), any());
     }
 
     @Test

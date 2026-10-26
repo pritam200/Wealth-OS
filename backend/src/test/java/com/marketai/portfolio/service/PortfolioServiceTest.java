@@ -215,6 +215,56 @@ class PortfolioServiceTest {
         assertThat(service.isDuplicateTrade(PORTFOLIO_ID, null, LocalDate.now(), BigDecimal.ONE, BigDecimal.ONE)).isFalse();
     }
 
+    private Transaction fill(String ref, String qty, String price) {
+        return Transaction.builder().transactionDate(LocalDate.of(2026, 10, 13)).quantity(new BigDecimal(qty))
+            .price(new BigDecimal(price))
+            .provenance(com.marketai.common.ledger.Provenance.builder().sourceReference(ref).build()).build();
+    }
+
+    @Test
+    void sameSizeFillsOnOneDayAreSeparateTradesUnlessAlreadyRecorded() {
+        Holding h = Holding.builder().id(5L).symbol("AXISBANK.NS").build();
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "AXISBANK.NS")).thenReturn(Optional.of(h));
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(5L))
+            .thenReturn(List.of(fill("1488255", "40", "1888")));
+        LocalDate d = LocalDate.of(2026, 10, 13);
+
+        // Another trade number, same size and price: a second buy, not a copy.
+        assertThat(service.isDuplicateTrade(PORTFOLIO_ID, "AXISBANK.NS", d, new BigDecimal("40"), new BigDecimal("1888"), "1488256", 0)).isFalse();
+        // The same trade number, a different size: another fill of that order.
+        assertThat(service.isDuplicateTrade(PORTFOLIO_ID, "AXISBANK.NS", d, new BigDecimal("55"), new BigDecimal("1888"), "1488255", 0)).isFalse();
+        // The same fill read again.
+        assertThat(service.isDuplicateTrade(PORTFOLIO_ID, "AXISBANK.NS", d, new BigDecimal("40"), new BigDecimal("1888"), "1488255", 0)).isTrue();
+        // The second of two identical fills in one note, when only one is recorded so far.
+        assertThat(service.isDuplicateTrade(PORTFOLIO_ID, "AXISBANK.NS", d, new BigDecimal("40"), new BigDecimal("1888"), "1488255", 1)).isFalse();
+    }
+
+    @Test
+    void aTradeJoinsTheSameStockOnlyAtTheSameBroker() {
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "LT.NS")).thenReturn(Optional.empty());
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "LT"))
+            .thenReturn(Optional.of(Holding.builder().symbol("LT").broker("Mirae Asset").build()));
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "TITAN.NS"))
+            .thenReturn(Optional.of(Holding.builder().symbol("TITAN.NS").broker("").build()));
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "JIOFIN.NS"))
+            .thenReturn(Optional.of(Holding.builder().symbol("JIOFIN.NS").broker("Kotak Securities").build()));
+
+        assertThat(service.portfolioSymbol(PORTFOLIO_ID, "LT", ".NS", "Mirae Asset")).isEqualTo("LT");
+        assertThat(service.portfolioSymbol(PORTFOLIO_ID, "TITAN", ".NS", "Mirae Asset")).as("no broker recorded").isEqualTo("TITAN.NS");
+        assertThatThrownBy(() -> service.portfolioSymbol(PORTFOLIO_ID, "JIOFIN", ".NS", "Upstox"))
+            .isInstanceOf(IllegalStateException.class).hasMessageContaining("Kotak Securities");
+        assertThat(service.portfolioSymbol(PORTFOLIO_ID, "HDFCAMC", ".NS", "Upstox")).isEqualTo("HDFCAMC.NS");
+    }
+
+    @Test
+    void brokerNamesMatchAcrossTheirSpellings() {
+        assertThat(PortfolioService.sameBroker("m.Stock", "Mirae Asset")).isTrue();
+        assertThat(PortfolioService.sameBroker("Kotak", "Kotak Securities")).isTrue();
+        assertThat(PortfolioService.sameBroker("Upstox", "Mirae Asset")).isFalse();
+        assertThat(PortfolioService.sameBroker("Mutual Funds", "Mirae Asset")).isFalse();
+        assertThat(PortfolioService.sameBroker("", "Upstox")).isFalse();
+    }
+
     /**
      * Cross-user isolation. The portfolio is ownership-checked, but the holding used to be loaded
      * by raw id, so pairing your own portfolio id with someone else's holding id let the write

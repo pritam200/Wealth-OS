@@ -434,7 +434,11 @@ public class EmailLLMParserService {
         // Long sources (a month of statement lines) used to be cut at MAX_CHARS and everything
         // after the cut was silently never read. Each chunk is now extracted in turn; chunks
         // split on line boundaries and never overlap, so every line is read exactly once.
-        List<String> chunks = chunk(sourceText, MAX_CHARS);
+        // A contract note in a known layout is read whole by its fixed parser (no model call), so
+        // it is not split into chunks for the extractor.
+        Optional<BankAlertParsers.Result> fixedDocument = src.isDocument()
+            ? com.marketai.gmail.parser.ContractNoteParsers.parse(domain, subject, sourceText) : Optional.empty();
+        List<String> chunks = fixedDocument.isPresent() ? List.of(sourceText) : chunk(sourceText, MAX_CHARS);
         java.time.LocalDateTime readStartedAt = java.time.LocalDateTime.now();
         // An attachment or a transcribed scan is a document; a plain alert body is routine email.
         // Both run the same prompt and the same validation below — only the configured model differs.
@@ -459,7 +463,8 @@ public class EmailLLMParserService {
             LlmCompletion completion;
             // A bank alert in a known template is read by its fixed parser: exact, the same every
             // time, and no model call. Anything else goes to the extractor as before.
-            Optional<BankAlertParsers.Result> fixed = src.isDocument() || chunks.size() != 1 ? Optional.empty()
+            Optional<BankAlertParsers.Result> fixed = fixedDocument.isPresent() ? fixedDocument
+                : src.isDocument() || chunks.size() != 1 ? Optional.empty()
                 : BankAlertParsers.parse(domain, subject, chunks.get(c), user != null ? user.getName() : null);
             if (fixed.isPresent()) {
                 completion = LlmCompletion.builder().text(fixed.get().json())
@@ -540,6 +545,7 @@ public class EmailLLMParserService {
                 if (pe != null) {
                     pe.setSourceAttachmentId(attachmentId);
                     pe.setSourceDocumentHash(documentHash);
+                    pe.setBroker(com.marketai.document.classify.IssuerDomainRegistry.brokerFor(domain).orElse(null));
                     pe.setExtractionMethod(extractionMethod != null ? extractionMethod : attachmentId != null
                         ? com.marketai.common.ledger.Provenance.PDF_LLM : com.marketai.common.ledger.Provenance.EMAIL_LLM);
                     pe.setExtractionConfidence(overallConfidence);
@@ -1114,6 +1120,11 @@ public class EmailLLMParserService {
         }
         if ("EQUITY".equals(instrumentType) && CORPORATE_ACTIONS.contains(transactionType)) {
             return toCorporateAction(t, transactionType, date, evidence, sourceText);
+        }
+        if ("FNO".equals(instrumentType)) {
+            // Futures and options are not tracked as holdings; recorded so the trade is accounted for.
+            return Extraction.noMoneyMoved("A futures & options trade (" + json.str(t, "symbol")
+                + ") — F&O positions are not tracked by this app.");
         }
         if (amount == null) {
             String currency = up(json.str(t, "currency"));

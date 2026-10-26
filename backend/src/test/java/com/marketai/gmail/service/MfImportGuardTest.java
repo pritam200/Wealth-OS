@@ -181,6 +181,7 @@ class MfImportGuardTest {
 
     @Test
     void aCompleteTradeStillImports() throws Exception {
+        when(portfolioService.portfolioSymbol(any(), eq("RELIANCE"), eq(".NS"), any())).thenReturn("RELIANCE.NS");
         importer.importParsedEmail(
             USER, new User(), trade("RELIANCE", 25, new BigDecimal("1400")), "t-4", null);
 
