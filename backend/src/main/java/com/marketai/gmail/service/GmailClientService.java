@@ -238,7 +238,12 @@ public class GmailClientService {
      * its redemption is — otherwise the later event arrives with nothing to attach to.
      */
     public MessageIdList listMessageIds(Gmail gmail, String lookbackPeriod) throws Exception {
-        String query = "newer_than:" + lookbackPeriod + " -in:spam -in:trash";
+        return listMessageIds(gmail, lookbackPeriod, null);
+    }
+
+    /** @param fromClause a Gmail {@code from:(…)} clause limiting the search to financial senders, or null */
+    public MessageIdList listMessageIds(Gmail gmail, String lookbackPeriod, String fromClause) throws Exception {
+        String query = "newer_than:" + lookbackPeriod + " -in:spam -in:trash" + (fromClause != null ? " " + fromClause : "");
         List<String> ids = new ArrayList<>();
         String pageToken = null;
         boolean truncated = false;

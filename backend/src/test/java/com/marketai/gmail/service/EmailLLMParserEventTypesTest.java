@@ -59,7 +59,8 @@ class EmailLLMParserEventTypesTest {
     private ParsedEmail extract(String source, String txnJson) throws Exception {
         when(llm.complete(any(), any(), anyString())).thenReturn(LlmCompletion.builder()
             .text("{\"transactions\":[" + txnJson + "],\"confidence\":0.95}").provider("t").model("m").build());
-        service.process(USER_ID, user, "alerts@hdfcbank.net", "Alert", source, "msg-1", null);
+        // A registrar, so the bank-only fixed parsers and offer filter stay out of these cases.
+        service.process(USER_ID, user, "donotreply@camsonline.com", "Alert", source, "msg-1", null);
         ArgumentCaptor<ParsedEmail> pe = ArgumentCaptor.forClass(ParsedEmail.class);
         try {
             verify(importer).importParsedEmail(any(), any(), pe.capture(), any(), any());
@@ -144,6 +145,67 @@ class EmailLLMParserEventTypesTest {
         service.process(USER_ID, user, "nse-direct@nse.co.in", "Trades executed at NSE",
             "B Axis Bank Limited AXISBANK EQ 5 1260", "msg-1", null);
         verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
+        verify(review, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
+    }
+
+    /** Runs a bank alert through the whole pipeline; returns what reached the importer, or null. */
+    private ParsedEmail alert(String from, String body) throws Exception {
+        user.setName("PRITAM KUMAR SINGH");
+        EmailLLMParserService.Result r = service.process(USER_ID, user, from, "Alert", body, "msg-1", null);
+        verify(llm, never()).complete(any(), any(), anyString());
+        lastResult = r;
+        ArgumentCaptor<ParsedEmail> pe = ArgumentCaptor.forClass(ParsedEmail.class);
+        try {
+            verify(importer).importParsedEmail(any(), any(), pe.capture(), any(), any());
+        } catch (AssertionError none) {
+            return null;
+        }
+        return pe.getValue();
+    }
+
+    private EmailLLMParserService.Result lastResult;
+
+    @Test
+    @DisplayName("an Axis UPI alert is booked as spending by its fixed parser, without the extractor")
+    void axisAlertBookedWithoutModel() throws Exception {
+        ParsedEmail pe = alert("alerts@axis.bank.in", "Amount Debited:\nINR 2129.00\nAccount Number:\nXX6248\n"
+            + "Date & Time:\n02-10-26, 18:39:14 IST\nTransaction Info:\nUPI/P2M/123459734/SUNIL STORE\n");
+        assertThat(pe.getType()).isEqualTo(ParsedEmail.Type.EXPENSE);
+        assertThat(pe.getAmount()).isEqualByComparingTo("2129");
+        assertThat(pe.getTradeDate()).isEqualTo(java.time.LocalDate.of(2026, 10, 2));
+        assertThat(pe.getMerchant()).isEqualTo("SUNIL STORE");
+    }
+
+    @Test
+    @DisplayName("an SIP debit is neither spending nor a review question: the fund confirmation books it")
+    void sipDebitIsCovered() throws Exception {
+        ParsedEmail pe = alert("alerts@hdfcbank.bank.in", "Rs.5000.00 has been debited from HDFC Bank Account Number "
+            + "XXXXXXXXXX2548 towards HDFC Mutual Fund OTM/12340633 with UMRN HDFC00012408 on 22-Oct-2026.");
+        assertThat(pe).isNull();
+        verify(review, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
+        assertThat(lastResult.getResolved()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("an SBI transfer to the holder's own account is an own-account transfer")
+    void sbiOwnTransfer() throws Exception {
+        ParsedEmail pe = alert("cbssbi.cas@alerts.sbi.bank.in", "Your A/C XXXXX953801 Debited INR 88.00 on 20/10/26 "
+            + "-Transferred to Mr. PRITAM KUMARSI. Avl Balance INR 1,50,000.00-SBI");
+        assertThat(pe.getType()).isEqualTo(ParsedEmail.Type.OWN_TRANSFER);
+    }
+
+    @Test
+    @DisplayName("a bank's offer is recognised as no transaction without the extractor")
+    void bankOfferSkipped() throws Exception {
+        assertThat(alert("offers@indusind.com", "Begin your savings journey with 7% p.a. assured returns on an FD.")).isNull();
+        assertThat(lastResult.getOutcome()).isEqualTo(EmailLLMParserService.Outcome.NOT_FINANCIAL);
+    }
+
+    @Test
+    @DisplayName("money from the stock clearing house is not income")
+    void brokerPayoutNotIncome() throws Exception {
+        String line = "Rs 57700.00 credited on 10-09-2026 by NSCCL payout";
+        assertThat(extract(line, bank("CREDIT", "null", "57700", line))).isNull();
         verify(review, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
     }
 

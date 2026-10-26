@@ -48,6 +48,7 @@ public class GmailController {
     private final com.marketai.gmail.service.GmailResyncResetService resyncResetService;
     private final com.marketai.gmail.ledger.EmailManifestService manifestService;
     private final com.marketai.gmail.ledger.FinancialEventLedger eventLedger;
+    private final com.marketai.gmail.service.FinancialSenderService financialSenderService;
 
     @Value("${gmail.frontend-url:http://localhost:5174}")
     private String frontendUrl;
@@ -243,6 +244,31 @@ public class GmailController {
     // Lets a user exclude emails that belong to someone else sharing the same inbox/broker
     // (e.g. a parent's account) from ever being auto-imported. Pattern is matched against
     // sender + subject + body, since one broker address often serves multiple accounts.
+    // The senders a sync reads: the built-in banks, brokers and fund houses, plus the ones the
+    // user added. Mail from anyone else is not fetched.
+    @GetMapping("/financial-senders")
+    public ResponseEntity<Map<String, Object>> listFinancialSenders(@AuthenticationPrincipal User user) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("builtIn", com.marketai.document.classify.IssuerDomainRegistry.domains());
+        body.put("added", financialSenderService.added(user.getId()));
+        return ResponseEntity.ok(body);
+    }
+
+    @PostMapping("/financial-senders")
+    public ResponseEntity<?> addFinancialSender(@AuthenticationPrincipal User user, @RequestBody Map<String, String> body) {
+        try {
+            return ResponseEntity.ok(financialSenderService.add(user.getId(), body.get("domain")));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/financial-senders/{id}")
+    public ResponseEntity<Void> removeFinancialSender(@AuthenticationPrincipal User user, @PathVariable Long id) {
+        return financialSenderService.remove(user.getId(), id)
+            ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+    }
+
     @GetMapping("/excluded-senders")
     public ResponseEntity<List<ExcludedSender>> listExcludedSenders(@AuthenticationPrincipal User user) {
         return ResponseEntity.ok(excludedSenderRepo.findByUserIdOrderByCreatedAtDesc(user.getId()));

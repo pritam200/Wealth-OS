@@ -16,6 +16,14 @@ public final class SpendCategorizer {
 
         if (has(t, "sip", "mutual fund", "groww", "zerodha", "coin", "nps", "ppf", "elss", "investment"))
             return ExpenseCategory.INVESTMENT; // checked first: must never fall through to a spend category
+        // Money sent to a broker, the clearing houses that settle trades, or a fund house: the
+        // contract note or fund confirmation books it, so as spend it would be counted twice.
+        if (has(t, "nsccl", "iccl", "indian clearing", "nse clearing", "clearing corporation", "mstock", "m.stock",
+                 "mirae asset capital", "upstox", "angel one", "angel broking", "dhan.co", "icici securities",
+                 "hdfc securities", "kotak securities", "bse star", "bsestarmf", "mf utilities", "hdfcmf",
+                 "camsonline", "kfintech", "flexi cap", "small cap", "mid cap", "large cap", "small ca/",
+                 "index fund", "amc ltd", "asset management"))
+            return ExpenseCategory.INVESTMENT;
 
         // Checked before EMI's generic "credit card payment" phrase, and before every other
         // spend bucket: a CRED/CC-bill debit settles a debt already spent against elsewhere, so

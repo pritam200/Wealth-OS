@@ -66,8 +66,21 @@ public final class IssuerDomainRegistry {
         // ProviderPasswordRules for password derivation, but previously absent here, so the
         // system would derive a password for a domain it simultaneously flagged as an attacker.
         put("Kotak",         "kotak.com", "kotaksecurities.com");
-        put("IDFC First",    "idfcfirstbank.com");
-        put("Yes Bank",      "yesbank.in");
+        put("IDFC First",    "idfcfirstbank.com", "idfcfirst.bank.in", "idfcfirstbank.bank.in");
+        put("Yes Bank",      "yesbank.in", "yes.bank.in");
+        put("IndusInd Bank", "indusind.com", "indusind.bank.in");
+        put("Kotak",         "kotak.bank.in");
+
+        // Exchanges
+        put("NSE",           "nse.co.in", "nseindia.com");
+        put("BSE",           "bseindia.com");
+
+        // Fund houses that write to investors directly (most mail comes through CAMS/KFintech)
+        put("SBI Mutual Fund",       "sbimf.com");
+        put("HDFC Mutual Fund",      "hdfcfund.com");
+        put("ICICI Prudential AMC",  "icicipruamc.com");
+        put("Axis Mutual Fund",      "axismf.com");
+        put("Nippon India MF",       "nipponindiaim.com");
     }
 
     private IssuerDomainRegistry() {}
@@ -94,6 +107,11 @@ public final class IssuerDomainRegistry {
 
     public static boolean isKnown(String senderDomain) {
         return issuerFor(senderDomain).isPresent();
+    }
+
+    /** Every listed domain — the senders a sync fetches mail from. */
+    public static java.util.Set<String> domains() {
+        return java.util.Collections.unmodifiableSet(DOMAINS.keySet());
     }
 
     static int size() { return DOMAINS.size(); }

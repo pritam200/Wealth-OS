@@ -24,6 +24,7 @@ import com.marketai.expense.entity.ExpenseCategory;
 import com.marketai.gmail.ledger.EmailFinancialEvent;
 import com.marketai.gmail.ledger.EventState;
 import com.marketai.gmail.ledger.FinancialEventLedger;
+import com.marketai.gmail.parser.BankAlertParsers;
 import com.marketai.gmail.parser.ParsedEmail;
 import com.marketai.gmail.parser.SpendCategorizer;
 import com.marketai.identity.service.PasswordStrategy;
@@ -422,6 +423,14 @@ public class EmailLLMParserService {
             ? classification.statementProvider() : domain;
         boolean exchangeTradeAlert = isExchangeTradeAlert(domain, subject);
 
+        // A bank's offers, reminders and notices that state no amount at all are recognised here,
+        // so they never reach the extractor; anything stating an amount still does.
+        if (!src.isDocument() && BankAlertParsers.isBank(domain) && !BankAlertParsers.statesAmount(sourceText)
+                && BankAlertParsers.parse(domain, subject, sourceText, null).isEmpty()) {
+            return Result.builder().outcome(Outcome.NOT_FINANCIAL)
+                .detail("A bank's message that states no amount (an offer, reminder or notice)").build();
+        }
+
         // Long sources (a month of statement lines) used to be cut at MAX_CHARS and everything
         // after the cut was silently never read. Each chunk is now extracted in turn; chunks
         // split on line boundaries and never overlap, so every line is read exactly once.
@@ -448,7 +457,14 @@ public class EmailLLMParserService {
             String prompt = "From: " + from + "\nSubject: " + subject + part + "\n\n" + chunks.get(c);
 
             LlmCompletion completion;
-            try {
+            // A bank alert in a known template is read by its fixed parser: exact, the same every
+            // time, and no model call. Anything else goes to the extractor as before.
+            Optional<BankAlertParsers.Result> fixed = src.isDocument() || chunks.size() != 1 ? Optional.empty()
+                : BankAlertParsers.parse(domain, subject, chunks.get(c), user != null ? user.getName() : null);
+            if (fixed.isPresent()) {
+                completion = LlmCompletion.builder().text(fixed.get().json())
+                    .provider("rules").model(fixed.get().parser()).promptVersion("v1").build();
+            } else try {
                 completion = llm.complete(extractTask, PromptLibrary.TRANSACTION_EXTRACTION, prompt);
             } catch (LlmUnavailableException e) {
                 audit.recordFailure(userId, EXTRACT_TASK, gmailMessageId, PromptLibrary.TRANSACTION_EXTRACTION.system(), prompt,
@@ -516,6 +532,7 @@ public class EmailLLMParserService {
                     extraction = Extraction.noMoneyMoved(EXCHANGE_ALERT_REASON);
                     why = extraction.reason();
                 } else if (why == null) {
+                    markOwnTransfer(tNode, user != null ? user.getName() : null);
                     extraction = toParsedEmail(tNode, sourceText);
                     pe = extraction.parsed();
                     why = extraction.reason();
@@ -1412,6 +1429,9 @@ public class EmailLLMParserService {
             .build();
     }
 
+    static final String INVESTMENT_MONEY_REASON = "Money paid to or received from a broker or fund house — "
+        + "booked from the contract note or fund confirmation, so it is not counted as spending or income.";
+
     // Credits that are money you already had moving around, not income. Matched against the
     // transaction's own line only.
     private static final String[][] NON_INCOME_CREDITS = {
@@ -1446,6 +1466,13 @@ public class EmailLLMParserService {
 
         if ("CREDIT".equals(transactionType)) {
             String lower = lineText.toLowerCase(Locale.ROOT);
+            if (lower.contains("opening balance")) {
+                return Extraction.noMoneyMoved("An opening balance line — a balance, not money received.");
+            }
+            if (SpendCategorizer.categorize(lineText) == ExpenseCategory.INVESTMENT) {
+                // Sale or redemption proceeds: the contract note or fund confirmation books them.
+                return Extraction.noMoneyMoved(INVESTMENT_MONEY_REASON);
+            }
             for (String[] rule : NON_INCOME_CREDITS) {
                 if (lower.contains(rule[0])) return Extraction.review(rule[1] + " (₹" + amount.toPlainString() + ")");
             }
@@ -1462,11 +1489,11 @@ public class EmailLLMParserService {
         if ("DEBIT".equals(transactionType)) {
             ExpenseCategory category = SpendCategorizer.categorize(lineText);
             if (category == ExpenseCategory.INVESTMENT) {
-                // Booking it as spend would double-count the investment once the AMC/RTA
-                // confirmation books the MF/stock side; routed to review so it isn't lost if that
-                // confirmation never arrives.
-                return Extraction.review("A bank debit for an investment (₹" + amount.toPlainString()
-                    + ") — booked from the fund/broker confirmation, not as spending. Reject this if that confirmation was imported.");
+                // Booking it as spend would double-count the investment once the AMC/RTA or
+                // broker confirmation books the fund/stock side, which is the one booking source
+                // for investments. Recorded against the ledger, not queued: asking about every
+                // weekly SIP debit filled the review queue with the same question.
+                return Extraction.noMoneyMoved(INVESTMENT_MONEY_REASON);
             }
             String resolvedMerchant = merchant != null ? merchant : SpendCategorizer.extractMerchant(lineText);
             return Extraction.ok(ParsedEmail.builder()
@@ -1662,6 +1689,23 @@ public class EmailLLMParserService {
             return LocalDate.parse(s.trim(), DateTimeFormatter.ISO_LOCAL_DATE);
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /**
+     * A bank or UPI payment to or from the account holder themself ("Transferred to Mr. PRITAM
+     * KUMARSI", "VPA x@ybl (PRITAM KUMAR SINGH)") is money moved between their own accounts:
+     * neither spending nor income.
+     */
+    static void markOwnTransfer(JsonNode t, String holderName) {
+        if (!(t instanceof com.fasterxml.jackson.databind.node.ObjectNode o) || holderName == null) return;
+        String instrument = o.path("instrument_type").asText("");
+        if (!"BANK".equalsIgnoreCase(instrument) && !"UPI".equalsIgnoreCase(instrument)) return;
+        JsonNode sub = o.get("sub_type");
+        if (sub != null && !sub.isNull() && !sub.asText().isBlank()) return;
+        JsonNode merchant = o.get("merchant");
+        if (merchant != null && !merchant.isNull() && BankAlertParsers.isHolder(merchant.asText(), holderName)) {
+            o.put("sub_type", "OWN_TRANSFER");
         }
     }
 

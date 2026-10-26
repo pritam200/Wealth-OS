@@ -174,6 +174,13 @@ export interface SavedPassword {
   lastUsedAt: string | null;
 }
 
+/** A sender domain the user added to the banks, brokers and fund houses a sync reads. */
+export interface FinancialSender {
+  id: number;
+  domain: string;
+  createdAt?: string;
+}
+
 export interface ExcludedSender {
   id: number;
   pattern: string;
@@ -240,6 +247,10 @@ export const gmailApi = {
   deleteSavedPassword: (id: number) => apiClient.delete(`/api/gmail/saved-passwords/${id}`),
   // Patterns (sender address, client code, folio number, or account-holder name) that should
   // never be auto-imported — e.g. a shared inbox that also receives a parent's account emails.
+  getFinancialSenders: () =>
+    apiClient.get<{ builtIn: string[]; added: FinancialSender[] }>('/api/gmail/financial-senders'),
+  addFinancialSender: (domain: string) => apiClient.post<FinancialSender>('/api/gmail/financial-senders', { domain }),
+  removeFinancialSender: (id: number) => apiClient.delete(`/api/gmail/financial-senders/${id}`),
   getExcludedSenders: () => apiClient.get<ExcludedSender[]>('/api/gmail/excluded-senders'),
   addExcludedSender: (pattern: string, label?: string) =>
     apiClient.post<ExcludedSender>('/api/gmail/excluded-senders', { pattern, label }),

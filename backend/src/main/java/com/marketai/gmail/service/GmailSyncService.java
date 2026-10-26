@@ -48,6 +48,7 @@ public class GmailSyncService {
     private final PdfImportService pdfImportService;
     private final com.marketai.ai.review.service.EmailReviewService emailReviewService;
     private final com.marketai.ai.review.service.ReviewRuleService reviewRuleService;
+    private final FinancialSenderService financialSenderService;
     private final EmailLLMParserService emailLlmParserService;
     private final com.marketai.document.classify.SubjectPatternStage subjectPatternStage;
     private final com.marketai.sync.service.SyncLockService syncLockService;
@@ -187,7 +188,8 @@ public class GmailSyncService {
                     // Incremental path: Gmail's history API already told us precisely what is new.
                     messageIds = explicitMessageIds;
                 } else {
-                    GmailClientService.MessageIdList listed = gmailClient.listMessageIds(gmail, lookbackPeriod);
+                    GmailClientService.MessageIdList listed = gmailClient.listMessageIds(gmail, lookbackPeriod,
+                        financialSenderService.gmailFromClause(userId));
                     messageIds = listed.ids();
                     if (listed.truncated()) {
                         actionItems.add("More than " + GmailClientService.MESSAGE_ID_SAFETY_CAP
@@ -281,6 +283,20 @@ public class GmailSyncService {
                         .gmailMessageId(msgId).sender(from).subject(subject)
                         .status("EXCLUDED").detail("Matches excluded sender filter")
                         .pipelineSteps(steps).build());
+                    skipped++;
+                    continue;
+                }
+
+                // Only banks, brokers, depositories, registrars and fund houses are read. The Gmail
+                // search already asks for just those; this also covers the incremental path, which
+                // is handed every new message id.
+                if (!financialSenderService.allows(userId, from)) {
+                    String summary = "Not a bank, broker or fund house this app reads — skipped: " + subject;
+                    steps.add(summary);
+                    saveProcessed(userId, msgId, NO_TRANSACTION, "SKIPPED", summary, from, RULES, subject, null);
+                    logEntries.add(GmailSyncResult.SyncLogEntry.builder()
+                        .gmailMessageId(msgId).sender(from).subject(subject)
+                        .status("SKIPPED").detail(summary).pipelineSteps(steps).build());
                     skipped++;
                     continue;
                 }

@@ -3,7 +3,7 @@ import { Mail, CheckCircle, RefreshCw, Unlink, Loader, AlertCircle, AlertTriangl
 import { gmailApi } from '../api/gmail';
 import { portfolioApi } from '../api/portfolio';
 import { StatTile } from './shared/StatTile';
-import type { GmailStatus, GmailSyncResult, ProcessedEmailEntry, PendingPdf, PipelineStep, ExcludedSender, SavedPassword, ReconciliationReportDto } from '../api/gmail';
+import type { GmailStatus, GmailSyncResult, ProcessedEmailEntry, PendingPdf, PipelineStep, ExcludedSender, FinancialSender, SavedPassword, ReconciliationReportDto } from '../api/gmail';
 
 function timeAgo(isoStr: string | null): string {
   if (!isoStr) return 'Never';
@@ -183,6 +183,84 @@ function ManageSavedPasswords() {
               ))}
             </ul>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Only mail from banks, brokers, depositories, registrars and fund houses is read. This shows
+// which, and lets the user add one that isn't built in (a smaller bank, a new broker).
+function FinancialSenders() {
+  const [builtIn, setBuiltIn] = useState<string[]>([]);
+  const [added, setAdded] = useState<FinancialSender[]>([]);
+  const [expanded, setExpanded] = useState(false);
+  const [domain, setDomain] = useState('');
+  const [error, setError] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const { data } = await gmailApi.getFinancialSenders();
+      setBuiltIn(data.builtIn); setAdded(data.added);
+    } catch { setError('Could not load the sender list.'); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    if (!domain.trim()) return;
+    setAdding(true); setError('');
+    try {
+      await gmailApi.addFinancialSender(domain.trim());
+      setDomain('');
+      await load();
+    } catch (e: any) {
+      setError(e?.response?.data?.message ?? 'Could not add that sender.');
+    } finally { setAdding(false); }
+  };
+
+  const remove = async (id: number) => {
+    try { await gmailApi.removeFinancialSender(id); await load(); }
+    catch { setError('Could not remove that sender.'); }
+  };
+
+  return (
+    <div className="mt-3">
+      <button onClick={() => setExpanded(e => !e)}
+        className="btn-ghost text-xs flex items-center gap-1.5 px-2 py-1.5">
+        {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        <Mail size={12} /> Senders read <span className="font-mono tabular-nums">({builtIn.length + added.length})</span>
+      </button>
+      {expanded && (
+        <div className="mt-2 bg-surface-hover rounded-lg p-2.5">
+          <p className="text-2xs text-gray-500 mb-2">
+            Only mail from these banks, brokers, depositories, registrars and fund houses is read.
+            Everything else in your inbox is never opened. Add your bank or broker if it is missing.
+          </p>
+          {added.length > 0 && (
+            <ul className="space-y-1 mb-2">
+              {added.map(s => (
+                <li key={s.id} className="flex items-center justify-between gap-2 bg-surface-panel rounded px-2 py-1">
+                  <span className="text-xs text-ink">{s.domain}</span>
+                  <button onClick={() => remove(s.id)} className="btn-icon text-gray-600 hover:text-bear shrink-0" title="Remove">
+                    <X size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex items-center gap-1.5 mb-2">
+            <input type="text" placeholder="Sender domain or address, e.g. aubank.in"
+              value={domain} onChange={e => setDomain(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && add()}
+              className="input-field text-xs flex-1 py-1" />
+            <button onClick={add} disabled={adding || !domain.trim()}
+              className="btn-primary text-2xs px-2.5 py-1 flex items-center gap-1 shrink-0">
+              <Plus size={11} /> Add
+            </button>
+          </div>
+          {error && <p className="text-2xs text-bear mb-2">{error}</p>}
+          <p className="text-2xs text-gray-600 leading-relaxed">Built in: {builtIn.join(', ')}</p>
         </div>
       )}
     </div>
@@ -851,6 +929,7 @@ export function GmailConnect({ onImport }: Props) {
 
       {status.connected && <LockedStatements onImport={onImport} />}
       {status.connected && <ManageSavedPasswords />}
+      {status.connected && <FinancialSenders />}
       {status.connected && <ExcludedSenders />}
       {status.connected && <ReconciliationReportPanel />}
       {status.connected && <ContractNoteDebug />}
