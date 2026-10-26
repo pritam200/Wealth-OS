@@ -332,7 +332,13 @@ public class GmailSyncService {
                             // A scan parked as unreadable is retried only once an image-capable model
                             // is configured — otherwise it would be downloaded again every sync.
                             boolean retryScan = "NEEDS_OCR".equals(existingPdf.getStatus()) && pdfImportService.canReadScans();
-                            if (retryScan || "NEEDS_PASSWORD".equals(existingPdf.getStatus()) || "PASSWORD_FAILED".equals(existingPdf.getStatus()) || "FAILED".equals(existingPdf.getStatus())) {
+                            // A contract note the model read is read once more by its fixed parser:
+                            // the fills the model could not confirm are booked, the ones it booked
+                            // are recognised, and its review questions are cleared.
+                            boolean rereadByRules = ("IMPORTED".equals(existingPdf.getStatus()) || "IN_REVIEW".equals(existingPdf.getStatus()))
+                                && !"rules".equals(existingPdf.getReadBy())
+                                && com.marketai.gmail.parser.ContractNoteParsers.covers(providerKeyOf(existingPdf.getSender()), existingPdf.getSubject());
+                            if (retryScan || rereadByRules || "NEEDS_PASSWORD".equals(existingPdf.getStatus()) || "PASSWORD_FAILED".equals(existingPdf.getStatus()) || "FAILED".equals(existingPdf.getStatus())) {
                                 steps.add("PDF " + pdf.filename + " — retrying (" + existingPdf.getStatus() + ")");
                                 try {
                                     pdfImportService.tryAutoUnlock(userId, existingPdf);

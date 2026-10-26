@@ -65,7 +65,7 @@ export interface ReconciliationCenter {
   checkedAt: string;
 }
 
-export type AuditClass = 'VERIFIED' | 'DUPLICATE' | 'CONFLICT' | 'CORRUPTED' | 'MISSING' | 'REQUIRES_RECONCILIATION';
+export type AuditClass = 'VERIFIED' | 'DUPLICATE' | 'MISREAD' | 'CONFLICT' | 'CORRUPTED' | 'MISSING' | 'REQUIRES_RECONCILIATION';
 export type AuditEntity = 'EXPENSE' | 'INCOME' | 'TRANSACTION' | 'HOLDING' | 'FIXED_DEPOSIT' | 'RECURRING_DEPOSIT';
 
 export interface AuditFinding {

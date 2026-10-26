@@ -46,6 +46,9 @@ import java.util.Set;
 @Slf4j
 public class PdfImportService {
 
+    /** A document read in full that has nothing to book; not retried. */
+    public static final String NO_TRANSACTION = "NO_TRANSACTION";
+
     private static final List<String> PENDING_STATUSES = Arrays.asList("NEEDS_PASSWORD", "PASSWORD_FAILED");
     private static final List<String> RETRYABLE_STATUSES = Arrays.asList("NEEDS_PASSWORD", "PASSWORD_FAILED", "FAILED");
 
@@ -721,6 +724,7 @@ public class PdfImportService {
                 scanned ? com.marketai.common.ledger.Provenance.OCR_LLM : com.marketai.common.ledger.Provenance.PDF_LLM));
 
         pdf.setTradesExtracted(result.getExtracted());
+        pdf.setReadBy(result.getReadBy() != null ? result.getReadBy() : result.getOutcome() == EmailLLMParserService.Outcome.NOT_FINANCIAL ? "rules" : null);
         pdf.setCounts(EmailLLMParserService.countsOf(result));
         pdf.setTradesImported(result.getImported());
         int accounted = result.getImported() + result.getDuplicates() + result.getResolved();
@@ -728,10 +732,16 @@ public class PdfImportService {
         if (accounted == 0 && result.getQueuedForReview() == 0) {
             steps.add(step("holdings_updated", "SKIP", "No transactions found"));
             pdf.setPipelineSteps(toJson(steps));
-            pdf.setStatus("FAILED");
-            pdf.setResultSummary("Unlocked successfully but no transactions were found in the statement text.");
+            // Read in full with nothing to book (a margin statement, a holdings register) is done.
+            // As FAILED it was sent to the extractor again on every sync; only a read that did not
+            // finish is retried.
+            boolean finished = !result.isIncomplete();
+            pdf.setStatus(finished ? NO_TRANSACTION : "FAILED");
+            pdf.setResultSummary(finished && result.getDetail() != null ? truncate(result.getDetail())
+                : "Unlocked successfully but no transactions were found in the statement text.");
             pendingPdfRepo.save(pdf);
-            return new PdfUnlockResult(true, "Unlocked, but no transactions could be identified in this statement.");
+            return new PdfUnlockResult(true, finished && result.getDetail() != null ? result.getDetail()
+                : "Unlocked, but no transactions could be identified in this statement.");
         }
 
         if (accounted > 0) {

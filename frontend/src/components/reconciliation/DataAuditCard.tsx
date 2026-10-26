@@ -8,11 +8,11 @@ const fmtINR = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n || 0);
 
 const CLASS_LABEL: Record<AuditClass, string> = {
-  VERIFIED: 'Verified', DUPLICATE: 'Duplicate', CONFLICT: 'Conflict', CORRUPTED: 'Corrupted',
+  VERIFIED: 'Verified', DUPLICATE: 'Duplicate', MISREAD: 'Misread', CONFLICT: 'Conflict', CORRUPTED: 'Corrupted',
   MISSING: 'Missing', REQUIRES_RECONCILIATION: 'Needs a look',
 };
 const CLASS_TONE: Record<AuditClass, string> = {
-  VERIFIED: 'text-bull', DUPLICATE: 'text-bear', CONFLICT: 'text-bear', CORRUPTED: 'text-bear',
+  VERIFIED: 'text-bull', DUPLICATE: 'text-bear', MISREAD: 'text-bear', CONFLICT: 'text-bear', CORRUPTED: 'text-bear',
   MISSING: 'text-neutral', REQUIRES_RECONCILIATION: 'text-neutral',
 };
 const ENTITY_LABEL: Record<string, string> = {
@@ -21,9 +21,9 @@ const ENTITY_LABEL: Record<string, string> = {
 };
 
 /**
- * The existing-data audit: every stored record classified, read-only. Removing duplicates is a
- * separate, explicit step — it needs a backup taken first, and only records the audit calls
- * duplicates can be selected.
+ * The existing-data audit: every stored record classified, read-only. Removing duplicates and
+ * misreads is a separate, explicit step — it needs a backup taken first, and only records the
+ * audit calls duplicates or misreads can be selected.
  */
 export function DataAuditCard() {
   const maskText = useMaskedText();
@@ -48,7 +48,8 @@ export function DataAuditCard() {
 
   const key = (f: AuditFinding) => `${f.entity}:${f.id}`;
   const removable = (f: AuditFinding) =>
-    f.classification === 'DUPLICATE' && (f.entity === 'EXPENSE' || f.entity === 'INCOME' || f.entity === 'TRANSACTION');
+    (f.classification === 'DUPLICATE' || f.classification === 'MISREAD')
+      && (f.entity === 'EXPENSE' || f.entity === 'INCOME' || f.entity === 'TRANSACTION');
   const usableBackup = backups.find(b => b.usable);
 
   const toggle = (f: AuditFinding) => setSelected(s => {
@@ -79,7 +80,7 @@ export function DataAuditCard() {
   const rebuild = async () => {
     if (!usableBackup || !report) return;
     const remove = report.findings.filter(f => selected.has(key(f))).map(f => ({ entity: f.entity, id: f.id }));
-    const ok = window.confirm(`Remove ${remove.length} duplicate record(s) and re-derive holdings from their trades?\n\n`
+    const ok = window.confirm(`Remove ${remove.length} duplicate or misread record(s) and re-derive holdings from their trades?\n\n`
       + `Backup ${usableBackup.id} (${new Date(usableBackup.createdAt).toLocaleString('en-IN')}) will be used and can't be reused.`);
     if (!ok) return;
     setBusy(true); setMessage(null);
@@ -108,7 +109,7 @@ export function DataAuditCard() {
         Every stored record, checked against its source and the records around it. Read-only — nothing here changes your data
         unless you take a backup and confirm a rebuild below.
       </p>
-      <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+      <div className="grid grid-cols-3 md:grid-cols-7 gap-2">
         {classTotals.map(({ c, n }) => (
           <div key={c} className="rounded-lg border border-surface-border bg-surface-hover/40 p-2">
             <div className="stat-label truncate">{CLASS_LABEL[c]}</div>
@@ -120,6 +121,14 @@ export function DataAuditCard() {
         <p className="text-2xs text-bear">
           Duplicates overstate spending by {maskText(fmtINR(report.duplicateExpenseAmount))} and income by {maskText(fmtINR(report.duplicateIncomeAmount))}.
         </p>
+      )}
+
+      {report.findings.some(f => f.classification === 'MISREAD') && (
+        <button
+          onClick={() => setSelected(new Set(report.findings.filter(f => f.classification === 'MISREAD' && removable(f)).map(key)))}
+          className="btn-ghost text-2xs">
+          Tick all {report.findings.filter(f => f.classification === 'MISREAD').length} misreads
+        </button>
       )}
 
       {report.findings.length === 0
@@ -160,8 +169,8 @@ export function DataAuditCard() {
           </button>
         </div>
         <p className="text-2xs text-gray-600">
-          A rebuild re-derives holdings from their trades and removes only the duplicates you tick. It needs a backup from the last
-          24 hours, each backup allows one rebuild, and anything the audit no longer calls a duplicate is refused.
+          A rebuild re-derives holdings from their trades and removes only the duplicates and misreads you tick. It needs a backup
+          from the last 24 hours, each backup allows one rebuild, and anything the audit no longer calls a duplicate or misread is refused.
         </p>
         {message && <p className="text-2xs text-bull">{message}</p>}
         {error && <p className="text-2xs text-bear">{error}</p>}

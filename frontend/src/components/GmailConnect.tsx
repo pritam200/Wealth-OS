@@ -520,6 +520,7 @@ function ContractNoteDebug() {
     const colors: Record<string, string> = {
       IMPORTED: 'bg-bull/15 text-bull',
       IN_REVIEW: 'bg-neutral/15 text-neutral',
+      NO_TRANSACTION: 'bg-gray-500/15 text-gray-400',
       FAILED: 'bg-bear/15 text-bear',
       NEEDS_PASSWORD: 'bg-neutral/15 text-neutral',
       PASSWORD_FAILED: 'bg-neutral/15 text-neutral',

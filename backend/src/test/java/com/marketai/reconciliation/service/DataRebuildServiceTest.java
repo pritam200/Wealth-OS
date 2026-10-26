@@ -76,7 +76,7 @@ class DataRebuildServiceTest {
     void onlyDuplicates() {
         assertThatThrownBy(() -> service.rebuild(USER, req("REBUILD", 5L,
             new DataRebuildService.Removal(Entity.EXPENSE, 19L), new DataRebuildService.Removal(Entity.EXPENSE, 22L))))
-            .hasMessageContaining("EXPENSE 22 is not a duplicate");
+            .hasMessageContaining("EXPENSE 22 is not a duplicate or misread");
         verify(expenses, never()).deleteById(any());
         verify(portfolio, never()).rebuildHoldingsFromTransactions(any());
     }
@@ -95,5 +95,19 @@ class DataRebuildServiceTest {
         assertThat(result.getHoldingsRederived()).isEqualTo(2);
         assertThat(backup.getAppliedAt()).isNotNull();
         assertThatThrownBy(() -> service.rebuild(USER, req("REBUILD", 5L))).hasMessageContaining("already used");
+    }
+
+    @Test
+    @DisplayName("a misread record can be removed like a duplicate, inside a backed-up rebuild")
+    void misreadIsRemovable() {
+        when(audit.audit(USER)).thenReturn(DataAuditService.Report.builder().findings(List.of(
+            DataAuditService.Finding.builder().entity(Entity.INCOME).id(34L).classification(Classification.MISREAD).build()
+        )).build());
+
+        var result = service.rebuild(USER, req("REBUILD", 5L, new DataRebuildService.Removal(Entity.INCOME, 34L)));
+
+        verify(incomes).deleteById(34L);
+        assertThat(result.getIncomesRemoved()).isEqualTo(1);
+        verify(portfolio).rebuildHoldingsFromTransactions(USER);
     }
 }

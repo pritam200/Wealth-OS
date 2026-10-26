@@ -268,6 +268,8 @@ public class EmailLLMParserService {
         @Builder.Default private boolean incomplete = false;
         private String detail;
         private String matchedProvider;
+        /** What read the source: "rules" for a fixed parser, else the model's provider. */
+        private String readBy;
     }
 
     /**
@@ -431,6 +433,25 @@ public class EmailLLMParserService {
                 .detail("A bank's message that states no amount (an offer, reminder or notice)").build();
         }
 
+        // A broker's documents other than its contract notes — margin statements, registers of
+        // funds and securities, retention and DP holding statements — confirm what the contract
+        // notes book and never book anything themselves. They used to go to the extractor on
+        // every sync, which spent quota and booked the funds register's pay-ins as income.
+        // The exchange's "trades executed" alert and the depository's "transactions in your demat
+        // account" notice repeat what the contract note books, so they are recorded as read
+        // without a model call; each used to be extracted and then set aside item by item.
+        if (isExchangeTradeAlert(domain, subject) || isDepositoryMovementNotice(domain, subject)) {
+            return Result.builder().outcome(Outcome.NOT_FINANCIAL).readBy("rules")
+                .detail(isExchangeTradeAlert(domain, subject) ? EXCHANGE_ALERT_REASON
+                    : "The depository's notice of shares moving in or out of the demat account — it confirms the "
+                        + "trades booked from the contract notes, so nothing is booked from it.").build();
+        }
+        if (src.isDocument() && isBrokerConfirmationDocument(domain, subject)) {
+            return Result.builder().outcome(Outcome.NOT_FINANCIAL).readBy("rules")
+                .detail("A broker's " + subject.replaceAll("(?i)\\s*(dated|as on|ref).*$", "").trim()
+                    + " — it confirms what the contract notes book; nothing to book.").build();
+        }
+
         // Long sources (a month of statement lines) used to be cut at MAX_CHARS and everything
         // after the cut was silently never read. Each chunk is now extracted in turn; chunks
         // split on line boundaries and never overlap, so every line is read exactly once.
@@ -536,6 +557,9 @@ public class EmailLLMParserService {
                 Extraction extraction = null;
                 if (exchangeTradeAlert) {
                     extraction = Extraction.noMoneyMoved(EXCHANGE_ALERT_REASON);
+                    why = extraction.reason();
+                } else if (why == null && isBrokerFundsLine(domain, tNode)) {
+                    extraction = Extraction.noMoneyMoved(BROKER_FUNDS_REASON);
                     why = extraction.reason();
                 } else if (why == null) {
                     markOwnTransfer(tNode, user != null ? user.getName() : null);
@@ -713,6 +737,7 @@ public class EmailLLMParserService {
             .outcome(outcome).imported(imported).duplicates(duplicates).conflicts(conflicts).extracted(extracted)
             .queuedForReview(queuedForReview).rejected(rejected).resolved(resolved)
             .totalsCheck(totalsCheck).totalsDetail(totals.detail())
+            .readBy(lastCompletion != null ? lastCompletion.getProvider() : null)
             .summaries(summaries).build();
     }
 
@@ -1441,6 +1466,33 @@ public class EmailLLMParserService {
             .build();
     }
 
+    private static final java.util.regex.Pattern BROKER_CONFIRMATION_SUBJECT = java.util.regex.Pattern.compile(
+        "(?i)margin statement|register of (funds|securities)|\\b(rof|ros)\\b|retention statement"
+            + "|dp transaction|holding statement|funds statement|ledger statement");
+
+    /** A broker's document that only confirms: never a contract note. */
+    static boolean isBrokerConfirmationDocument(String domain, String subject) {
+        return subject != null && com.marketai.document.classify.IssuerDomainRegistry.brokerFor(domain).isPresent()
+            && !subject.toLowerCase(Locale.ROOT).contains("contract note")
+            && BROKER_CONFIRMATION_SUBJECT.matcher(subject).find();
+    }
+
+    static final String BROKER_FUNDS_REASON = "A line from the broker's funds statement — money added to or paid "
+        + "out of the trading account, not spending or income. The trades are booked from the contract notes.";
+
+    /**
+     * A cash line read from a broker's own mail (its funds or retention statement) is the trading
+     * account's ledger, never the user's spending or income: m.Stock's statement listed each
+     * ₹1 lakh pay-in twice, and both were booked as income.
+     */
+    static boolean isBrokerFundsLine(String domain, JsonNode t) {
+        if (com.marketai.document.classify.IssuerDomainRegistry.brokerFor(domain).isEmpty()) return false;
+        String instrument = t.path("instrument_type").asText("").toUpperCase(Locale.ROOT);
+        String type = t.path("transaction_type").asText("").toUpperCase(Locale.ROOT);
+        return (instrument.isEmpty() || instrument.equals("BANK") || instrument.equals("UPI"))
+            && (type.equals("DEBIT") || type.equals("CREDIT"));
+    }
+
     static final String INVESTMENT_MONEY_REASON = "Money paid to or received from a broker or fund house — "
         + "booked from the contract note or fund confirmation, so it is not counted as spending or income.";
 
@@ -1728,6 +1780,13 @@ public class EmailLLMParserService {
      * The exchange's "Trades executed" alert, sent for every trade a broker reports. It repeats
      * the contract note without the trade date, so booking from it as well would double-count.
      */
+    static boolean isDepositoryMovementNotice(String domain, String subject) {
+        if (domain == null || subject == null) return false;
+        String d = domain.toLowerCase(Locale.ROOT);
+        return (d.equals("cdslindia.co.in") || d.endsWith(".cdslindia.co.in") || d.equals("cdslindia.com") || d.endsWith(".cdslindia.com"))
+            && subject.toLowerCase(Locale.ROOT).contains("transactions in your demat account");
+    }
+
     static boolean isExchangeTradeAlert(String domain, String subject) {
         if (domain == null || subject == null) return false;
         String d = domain.toLowerCase(Locale.ROOT);

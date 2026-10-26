@@ -31,7 +31,8 @@ import java.util.*;
  *   <li><b>Explicit go-ahead.</b> The request must say {@code confirm: "REBUILD"} and list, by id,
  *       every record to remove. Nothing is removed that the user did not name.</li>
  *   <li><b>Only what the audit proves.</b> A named record is removed only if the audit, run again
- *       at that moment, classifies it DUPLICATE — a later copy of a record that stays. Anything
+ *       at that moment, classifies it DUPLICATE (a later copy of a record that stays) or MISREAD
+ *       (booked from a source that never said it). Anything
  *       else in the list fails the whole request; nothing is half-applied.</li>
  * </ol>
  *
@@ -161,18 +162,27 @@ public class DataRebuildService {
         DataAuditService.Report report = auditService.audit(userId);
         Map<Removal, DataAuditService.Finding> duplicates = new HashMap<>();
         for (DataAuditService.Finding f : report.getFindings()) {
-            if (f.getClassification() == DataAuditService.Classification.DUPLICATE) duplicates.put(new Removal(f.getEntity(), f.getId()), f);
+            if (f.getClassification() == DataAuditService.Classification.DUPLICATE
+                    || f.getClassification() == DataAuditService.Classification.MISREAD) {
+                duplicates.put(new Removal(f.getEntity(), f.getId()), f);
+            }
         }
         List<Removal> requested = req.getRemove() == null ? List.of() : new ArrayList<>(new LinkedHashSet<>(req.getRemove()));
         List<String> refused = new ArrayList<>();
         for (Removal r : requested) {
             DataAuditService.Finding f = duplicates.get(r);
-            if (f == null) refused.add(r.entity() + " " + r.id() + " is not a duplicate");
+            if (f == null) refused.add(r.entity() + " " + r.id() + " is not a duplicate or misread");
             else if (r.entity() == DataAuditService.Entity.TRANSACTION) {
                 Transaction t = transactionRepo.findById(r.id()).orElse(null);
-                if (t == null || t.getType() != Transaction.TransactionType.BUY) {
-                    // A duplicated sale also wrote a redemption/tax record; removing only the
-                    // ledger row would leave that behind, so it is left for a person.
+                boolean misread = f.getClassification() == DataAuditService.Classification.MISREAD;
+                // A misread share sale or split writes only its ledger row (gains are derived from
+                // the ledger), so it can go; a fund sale also wrote a redemption record.
+                boolean removable = t != null && (t.getType() == Transaction.TransactionType.BUY
+                    || misread && t.getType() == Transaction.TransactionType.SPLIT
+                    || misread && t.getType() == Transaction.TransactionType.SELL && !isFund(t));
+                if (!removable) {
+                    // A duplicated or fund sale may have written a redemption/tax record; removing
+                    // only the ledger row would leave that behind, so it is left for a person.
                     refused.add("TRANSACTION " + r.id() + " is a sale — remove it by hand with its redemption record");
                 }
             } else if (r.entity() != DataAuditService.Entity.EXPENSE && r.entity() != DataAuditService.Entity.INCOME) {
@@ -205,7 +215,7 @@ public class DataRebuildService {
         transactionRepo.flush();
         int rederived = portfolioService.rebuildHoldingsFromTransactions(userId);
 
-        String summary = String.format("Removed %d duplicate expense(s), %d income(s), %d purchase(s); re-linked %d refund(s); "
+        String summary = String.format("Removed %d duplicate or misread expense(s), %d income(s), %d trade(s); re-linked %d refund(s); "
             + "re-derived %d holding(s) from their ledgers.", expenses, incomes, txns, relinked, rederived);
         backup.setAppliedAt(LocalDateTime.now());
         backup.setAppliedSummary(summary);
@@ -213,6 +223,10 @@ public class DataRebuildService {
         log.info("Rebuild for user {} under backup {}: {}", userId, backup.getId(), summary);
         return RebuildResult.builder().backupId(backup.getId()).expensesRemoved(expenses).incomesRemoved(incomes)
             .transactionsRemoved(txns).refundsRelinked(relinked).holdingsRederived(rederived).summary(summary).build();
+    }
+
+    private static boolean isFund(Transaction t) {
+        return t.getHolding() != null && t.getHolding().getSymbol() != null && t.getHolding().getSymbol().endsWith(".MF");
     }
 
     static boolean usable(DataBackup b) {

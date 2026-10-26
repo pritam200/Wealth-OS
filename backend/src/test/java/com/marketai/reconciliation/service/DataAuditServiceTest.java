@@ -175,4 +175,65 @@ class DataAuditServiceTest {
             .collect(Collectors.toMap(Finding::getId, Finding::getClassification));
         assertThat(c.get(2L)).isEqualTo(Classification.DUPLICATE);
     }
+
+    // ── Misreads ──
+
+    private static final String HOLDER = "PRITAM KUMAR SINGH";
+
+    @Test
+    @DisplayName("broker funds lines, investment payments, own transfers and opening balances are misreads; real spending is not")
+    void misreadCash() {
+        assertThat(DataAuditService.misreadCash("pay_TA3pCVKvdNVKa1", null, "mstock.com", HOLDER, true, "m1")).get()
+            .asString().contains("Mirae Asset's funds statement");
+        assertThat(DataAuditService.misreadCash("NSCCL NSECAPITAL", null, "alerts.sbi.bank.in", HOLDER, false, "m2")).isPresent();
+        assertThat(DataAuditService.misreadCash("MIRAE ASSET CAPITAL MARKETS (INDIA) PVT", null, "alerts.sbi.bank.in", HOLDER, true, "m3")).isPresent();
+        assertThat(DataAuditService.misreadCash("HDFC Flexi Cap F/172176778", null, "axis.bank.in", HOLDER, false, "m4")).isPresent();
+        assertThat(DataAuditService.misreadCash("Opening Balance", null, "hdfcbank.bank.in", HOLDER, true, "m5")).isPresent();
+        assertThat(DataAuditService.misreadCash("Mr. PRITAM KUMARSI", null, "alerts.sbi.bank.in", HOLDER, false, "m6")).get()
+            .asString().contains("own accounts");
+        assertThat(DataAuditService.misreadCash("9123681874-3@ybl (PRITAM KUMAR SINGH)", null, "axis.bank.in", HOLDER, false, "m7")).isPresent();
+
+        assertThat(DataAuditService.misreadCash("RAVI KUMAR SHAW", null, "axis.bank.in", HOLDER, false, "m8")).isEmpty();
+        assertThat(DataAuditService.misreadCash("Greenmania Modern Retail", null, "hdfcbank.bank.in", HOLDER, false, "m9")).isEmpty();
+        // A hand entry is the user's own word.
+        assertThat(DataAuditService.misreadCash("NSCCL NSECAPITAL", null, null, HOLDER, false, null)).isEmpty();
+    }
+
+    private static Transaction modelTrade(long id, Transaction.TransactionType type, String date, String qty, String price) {
+        return Transaction.builder().id(id).type(type).transactionDate(LocalDate.parse(date))
+            .quantity(new BigDecimal(qty)).price(new BigDecimal(price))
+            .provenance(com.marketai.common.ledger.Provenance.builder().sourceEmailId("e").extractionMethod("PDF_LLM").build()).build();
+    }
+
+    @Test
+    @DisplayName("a model-read share trade at an option's premium is a misread; one near the close, or a hand entry, is not")
+    void misreadOptionPremium() {
+        Holding h = Holding.builder().id(1L).symbol("HEROMOTOCO.NS").build();
+        Transaction premium = modelTrade(10, Transaction.TransactionType.BUY, "2026-10-14", "100", "161");
+        Transaction real = modelTrade(11, Transaction.TransactionType.BUY, "2026-10-14", "2", "5010");
+        Transaction byHand = Transaction.builder().id(12L).type(Transaction.TransactionType.BUY).transactionDate(LocalDate.parse("2026-10-14"))
+            .quantity(BigDecimal.ONE).price(new BigDecimal("161")).build();
+        var closes = new java.util.TreeMap<LocalDate, BigDecimal>(java.util.Map.of(LocalDate.parse("2026-10-14"), new BigDecimal("5019.5")));
+
+        var out = DataAuditService.misreadTrades(h, List.of(premium, real, byHand), closes);
+        assertThat(out).containsOnlyKeys(10L);
+        assertThat(out.get(10L)).contains("₹161").contains("₹5019.5");
+    }
+
+    @Test
+    @DisplayName("a model-read split the prices don't show is a misread; one they do show is not")
+    void misreadSplit() {
+        Holding h = Holding.builder().id(1L).symbol("HAL.NS").build();
+        Transaction split = Transaction.builder().id(20L).type(Transaction.TransactionType.SPLIT).transactionDate(LocalDate.parse("2026-09-30"))
+            .quantity(BigDecimal.ZERO).price(BigDecimal.ZERO).ratioFrom(BigDecimal.ONE).ratioTo(new BigDecimal("5"))
+            .provenance(com.marketai.common.ledger.Provenance.builder().extractionMethod("EMAIL_LLM").build()).build();
+        var noFall = new java.util.TreeMap<LocalDate, BigDecimal>(java.util.Map.of(
+            LocalDate.parse("2026-09-29"), new BigDecimal("4549"), LocalDate.parse("2026-10-03"), new BigDecimal("4600"),
+            LocalDate.parse("2026-10-10"), new BigDecimal("4725")));
+        assertThat(DataAuditService.misreadTrades(h, List.of(split), noFall)).containsKey(20L);
+
+        var fell = new java.util.TreeMap<LocalDate, BigDecimal>(java.util.Map.of(
+            LocalDate.parse("2026-09-29"), new BigDecimal("4549"), LocalDate.parse("2026-10-03"), new BigDecimal("915")));
+        assertThat(DataAuditService.misreadTrades(h, List.of(split), fell)).isEmpty();
+    }
 }

@@ -51,13 +51,15 @@ public final class ContractNoteParsers {
 
     /** Reads a contract note, or returns empty when it isn't one these parsers know. */
     public static Optional<BankAlertParsers.Result> parse(String senderDomain, String subject, String text) {
-        if (senderDomain == null || text == null) return Optional.empty();
+        if (text == null || !covers(senderDomain, subject)) return Optional.empty();
+        return mstock(subject, text);
+    }
+
+    /** Whether a document from this sender with this subject is one these parsers read. */
+    public static boolean covers(String senderDomain, String subject) {
+        if (senderDomain == null || subject == null) return false;
         String d = senderDomain.toLowerCase(Locale.ROOT);
-        if ((d.equals("mstock.com") || d.endsWith(".mstock.com")) && subject != null
-                && subject.toLowerCase(Locale.ROOT).contains("contract note")) {
-            return mstock(subject, text);
-        }
-        return Optional.empty();
+        return (d.equals("mstock.com") || d.endsWith(".mstock.com")) && subject.toLowerCase(Locale.ROOT).contains("contract note");
     }
 
     private static Optional<BankAlertParsers.Result> mstock(String subject, String text) {

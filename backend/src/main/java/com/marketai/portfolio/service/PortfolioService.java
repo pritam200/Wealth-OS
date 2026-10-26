@@ -106,11 +106,15 @@ public class PortfolioService {
             String theirs = t.getProvenance() != null ? t.getProvenance().getSourceReference() : null;
             // m.Stock prints one trade number on two fills of different sizes; only the same
             // number for the same quantity is the same trade.
-            if (theirs != null && theirs.equalsIgnoreCase(ref)
-                    && (t.getQuantity() == null || t.getQuantity().compareTo(quantity) == 0)
-                    && ++sameFills > occurrence) return true;
             boolean sameFigures = date.equals(t.getTransactionDate()) && t.getQuantity() != null
                 && t.getQuantity().compareTo(quantity) == 0 && t.getPrice() != null && t.getPrice().compareTo(price) == 0;
+            boolean sameRef = theirs != null && theirs.equalsIgnoreCase(ref)
+                && (t.getQuantity() == null || t.getQuantity().compareTo(quantity) == 0);
+            // The model sometimes took the order number for the trade number, so a fill it booked
+            // carries a reference no other read will quote; its figures are what identify it.
+            boolean modelRead = t.getProvenance() != null && t.getProvenance().getExtractionMethod() != null
+                && t.getProvenance().getExtractionMethod().endsWith("_LLM");
+            if ((sameRef || sameFigures && modelRead) && ++sameFills > occurrence) return true;
             if (sameFigures && theirs == null) return true;
         }
         return false;

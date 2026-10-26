@@ -45,6 +45,11 @@ public class PendingPdf {
     @Column(length = 200)
     private String providerKey;
 
+    // What last read the document: "rules" for a fixed parser, else the model's provider. A
+    // contract note the model read is read once more when a fixed parser comes to cover it.
+    @Column(name = "read_by", length = 40)
+    private String readBy;
+
     // Best-effort guess from the subject line (see SubjectPatternStage), one of
     // com.marketai.document.classify.DocTypes, or null when unclassifiable. Lets password
     // learning distinguish "this is a card-statement password" from "this is a bank-statement

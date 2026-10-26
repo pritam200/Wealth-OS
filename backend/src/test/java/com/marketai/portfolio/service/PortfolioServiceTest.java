@@ -240,6 +240,19 @@ class PortfolioServiceTest {
     }
 
     @Test
+    void aFillTheModelBookedUnderTheOrderNumberIsRecognisedByItsFigures() {
+        Holding h = Holding.builder().id(5L).symbol("ICICIBANK.NS").build();
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "ICICIBANK.NS")).thenReturn(Optional.of(h));
+        Transaction byModel = fill("1100000063098905", "5", "1339");
+        byModel.getProvenance().setExtractionMethod("PDF_LLM");
+        when(transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(5L)).thenReturn(List.of(byModel));
+        LocalDate d = LocalDate.of(2026, 10, 13);
+
+        assertThat(service.isDuplicateTrade(PORTFOLIO_ID, "ICICIBANK.NS", d, new BigDecimal("5"), new BigDecimal("1339"), "63098905", 0)).isTrue();
+        assertThat(service.isDuplicateTrade(PORTFOLIO_ID, "ICICIBANK.NS", d, new BigDecimal("5"), new BigDecimal("1340"), "63098906", 0)).isFalse();
+    }
+
+    @Test
     void aTradeJoinsTheSameStockOnlyAtTheSameBroker() {
         when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "LT.NS")).thenReturn(Optional.empty());
         when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "LT"))

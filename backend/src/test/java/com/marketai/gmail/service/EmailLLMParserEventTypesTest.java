@@ -196,6 +196,18 @@ class EmailLLMParserEventTypesTest {
     }
 
     @Test
+    @DisplayName("a pay-in on a broker's funds statement is neither income nor queued")
+    void brokerFundsLine() throws Exception {
+        String line = "06-07-2026 pay_TA3pCVKvdNVKa1 Funds added 100000.00";
+        when(llm.complete(any(), any(), anyString())).thenReturn(LlmCompletion.builder()
+            .text("{\"transactions\":[" + bank("CREDIT", "null", "100000", line) + "],\"confidence\":0.95}").provider("t").model("m").build());
+        service.process(USER_ID, user, "statements@mstock.com", "Retention Statement as on Oct 16 2026", line, "msg-1", null);
+
+        verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
+        verify(review, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("an exchange's trade alert is recorded as a confirmation, neither booked nor queued")
     void exchangeTradeAlert() throws Exception {
         when(llm.complete(any(), any(), anyString())).thenReturn(LlmCompletion.builder()
@@ -204,8 +216,27 @@ class EmailLLMParserEventTypesTest {
                 + "\"evidence\":\"B Axis Bank Limited AXISBANK EQ 5 1260\"}],\"confidence\":0.95}").provider("t").model("m").build());
         service.process(USER_ID, user, "nse-direct@nse.co.in", "Trades executed at NSE",
             "B Axis Bank Limited AXISBANK EQ 5 1260", "msg-1", null);
+        service.process(USER_ID, user, "cdsl@cdslindia.co.in", "Transactions In Your Demat Account",
+            "INE238A01034 AXIS BANK LTD Credit 5", "msg-2", null);
+        verify(llm, never()).complete(any(), any(), anyString());
         verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
         verify(review, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("a broker's margin statement or funds register is read as nothing to book, without the model")
+    void brokerConfirmationDocuments() {
+        for (String subject : List.of("Margin Statement as on Oct 13 2026 Ref No.:(1)", "Weekly Register of Funds (ROF) dated Oct 10 2026",
+                "Weekly Register of Securities (ROS) dated Oct 17 2026", "Retention Statement as on Oct 16 2026",
+                "Quarterly DP Transaction & Holding Statement Dated Sep 30 2026")) {
+            EmailLLMParserService.Result r = service.process(USER_ID, user, "statements@mstock.com", subject, "Page 1 of 3 ...", "msg-1", null,
+                0, new EmailLLMParserService.SourceDoc("att-1", "s.pdf", "h", null));
+            assertThat(r.getOutcome()).as(subject).isEqualTo(EmailLLMParserService.Outcome.NOT_FINANCIAL);
+            assertThat(r.getReadBy()).isEqualTo("rules");
+        }
+        verify(llm, never()).complete(any(), any(), anyString());
+        assertThat(EmailLLMParserService.isBrokerConfirmationDocument("mstock.com", "Contract Note as on Oct 13 2026")).isFalse();
+        assertThat(EmailLLMParserService.isBrokerConfirmationDocument("hdfcbank.bank.in", "Margin Statement")).isFalse();
     }
 
     /** Runs a bank alert through the whole pipeline; returns what reached the importer, or null. */

@@ -39,6 +39,10 @@ import java.util.*;
  *   <li><b>VERIFIED</b> — consistent, and traceable to its source (an email or a hand entry).</li>
  *   <li><b>DUPLICATE</b> — a second copy of a record that is already there. Only the later copy
  *       is marked; the one it duplicates is named, so removing the copy loses nothing.</li>
+ *   <li><b>MISREAD</b> — booked from a misread source: a broker's funds ledger or a payment
+ *       into an investment taken as spending or income, a transfer between the holder's own
+ *       accounts, an option premium taken as a share price, a split the prices don't show.
+ *       Removing it loses nothing real.</li>
  *   <li><b>CONFLICT</b> — a later document quoted the same payment reference with different
  *       details; which is right is for the user to decide.</li>
  *   <li><b>CORRUPTED</b> — the record contradicts itself (no amount, a future date, a price of
@@ -53,7 +57,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class DataAuditService {
 
-    public enum Classification { VERIFIED, DUPLICATE, CONFLICT, CORRUPTED, MISSING, REQUIRES_RECONCILIATION }
+    public enum Classification { VERIFIED, DUPLICATE, MISREAD, CONFLICT, CORRUPTED, MISSING, REQUIRES_RECONCILIATION }
 
     public enum Entity { EXPENSE, INCOME, TRANSACTION, HOLDING, FIXED_DEPOSIT, RECURRING_DEPOSIT }
 
@@ -69,8 +73,10 @@ public class DataAuditService {
     private final RecurringDepositRepository rdRepo;
     private final ImportedTransactionFingerprintRepository fingerprintRepo;
     private final com.marketai.gmail.repository.ProcessedEmailRepository processedEmailRepo;
+    private final com.marketai.auth.repository.UserRepository userRepo;
+    private final com.marketai.market.repository.PriceHistoryRepository priceHistoryRepo;
 
-    @Data @Builder
+    @Data @Builder(toBuilder = true)
     public static class Finding {
         private Entity entity;
         private Long id;
@@ -98,7 +104,7 @@ public class DataAuditService {
     }
 
     private static final List<Classification> SEVERITY = List.of(
-        Classification.CORRUPTED, Classification.CONFLICT, Classification.DUPLICATE,
+        Classification.CORRUPTED, Classification.CONFLICT, Classification.DUPLICATE, Classification.MISREAD,
         Classification.MISSING, Classification.REQUIRES_RECONCILIATION, Classification.VERIFIED);
 
     @Transactional(readOnly = true)
@@ -118,11 +124,33 @@ public class DataAuditService {
         EmailLines lines = emailLines(userId, expenses, incomes);
 
         List<Finding> all = new ArrayList<>();
-        all.addAll(auditExpenses(expenses, conflicted, needsReview, lines, today));
-        all.addAll(auditIncomes(incomes, conflicted, needsReview, lines, today));
+        // Misreads first, and each is then left out of the other checks, so every record is
+        // still counted once.
+        String holder = userRepo.findById(userId).map(com.marketai.auth.entity.User::getName).orElse(null);
+        Map<String, String> senders = senderDomains(userId, expenses, incomes);
+        Set<Long> misreadExpenses = new HashSet<>(), misreadIncomes = new HashSet<>();
+        for (Expense e : expenses) {
+            misreadCash(e.getMerchant(), e.getDescription(), senders.get(e.getSourceEmailId()), holder, false, e.getSourceEmailId())
+                .ifPresent(r -> { misreadExpenses.add(e.getId()); all.add(Finding.builder().entity(Entity.EXPENSE).id(e.getId())
+                    .amount(e.getAmount()).date(e.getExpenseDate()).label(e.getMerchant() != null ? e.getMerchant() : e.getDescription())
+                    .classification(Classification.MISREAD).reason(r).build()); });
+        }
+        for (Income i : incomes) {
+            misreadCash(i.getPayer(), i.getDescription(), senders.get(i.getSourceEmailId()), holder, true, i.getSourceEmailId())
+                .ifPresent(r -> { misreadIncomes.add(i.getId()); all.add(Finding.builder().entity(Entity.INCOME).id(i.getId())
+                    .amount(i.getAmount()).date(i.getIncomeDate()).label(i.getPayer() != null ? i.getPayer() : i.getDescription())
+                    .classification(Classification.MISREAD).reason(r).build()); });
+        }
+        all.addAll(auditExpenses(expenses.stream().filter(e -> !misreadExpenses.contains(e.getId())).toList(), conflicted, needsReview, lines, today));
+        all.addAll(auditIncomes(incomes.stream().filter(i -> !misreadIncomes.contains(i.getId())).toList(), conflicted, needsReview, lines, today));
         for (Portfolio p : portfolioRepo.findByUserIdOrderByIdAsc(userId)) {
             for (Holding h : holdingRepo.findByPortfolioId(p.getId())) {
-                all.addAll(auditHolding(h, transactionRepo.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId()), conflicted, today));
+                List<Transaction> txns = transactionRepo.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId());
+                Map<Long, String> misread = misreadTrades(h, txns, closesFor(h, txns));
+                for (Finding f : auditHolding(h, txns, conflicted, today)) {
+                    String why = f.getEntity() == Entity.TRANSACTION ? misread.get(f.getId()) : null;
+                    all.add(why == null ? f : f.toBuilder().classification(Classification.MISREAD).reason(why).duplicateOf(null).build());
+                }
             }
         }
         all.addAll(auditFds(fdRepo.findByUserIdOrderByCreatedAtDesc(userId), today));
@@ -158,6 +186,125 @@ public class DataAuditService {
             }
         }
         return new EmailLines(rows, extracted);
+    }
+
+    /** The sending domain of each email the cash rows came from. */
+    private Map<String, String> senderDomains(Long userId, List<Expense> expenses, List<Income> incomes) {
+        Set<String> ids = new HashSet<>();
+        expenses.forEach(e -> { if (e.getSourceEmailId() != null) ids.add(e.getSourceEmailId()); });
+        incomes.forEach(i -> { if (i.getSourceEmailId() != null) ids.add(i.getSourceEmailId()); });
+        Map<String, String> out = new HashMap<>();
+        if (ids.isEmpty()) return out;
+        for (var m : processedEmailRepo.findByUserIdAndGmailMessageIdIn(userId, ids)) {
+            String d = com.marketai.document.classify.ClassificationCandidate.email(m.getSender(), null, null).senderDomain();
+            if (d != null) out.put(m.getGmailMessageId(), d);
+        }
+        return out;
+    }
+
+    private static final java.util.regex.Pattern HONORIFIC = java.util.regex.Pattern.compile("^(mr|mrs|ms|miss|dr)\\.?\\s+", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern NAME_IN_BRACKETS = java.util.regex.Pattern.compile("\\(([^)]+)\\)");
+
+    /**
+     * Why an email-booked expense or income is not spending or income at all, or empty when it
+     * may be. Hand entries are never second-guessed.
+     */
+    static Optional<String> misreadCash(String party, String description, String senderDomain, String holder,
+                                        boolean income, String sourceEmailId) {
+        if (sourceEmailId == null) return Optional.empty();
+        Optional<String> broker = com.marketai.document.classify.IssuerDomainRegistry.brokerFor(senderDomain);
+        if (broker.isPresent()) {
+            return Optional.of("A line from " + broker.get() + "'s funds statement — money added to or paid out of the "
+                + "trading account, not " + (income ? "income" : "spending") + ". The trades are booked from the contract notes.");
+        }
+        String text = ((party != null ? party : "") + " " + (description != null ? description : "")).trim();
+        if (income && text.toLowerCase(Locale.ROOT).contains("opening balance")) {
+            return Optional.of("A statement's opening balance read as money received.");
+        }
+        if (com.marketai.gmail.parser.SpendCategorizer.categorize(text) == com.marketai.expense.entity.ExpenseCategory.INVESTMENT) {
+            return Optional.of(income
+                ? "Sale or redemption proceeds paid out by a broker or fund house — the sale is booked from its contract note or confirmation, so it is not income."
+                : "Money paid into an investment — the purchase is booked from its contract note or fund confirmation, so it is not spending.");
+        }
+        if (holder != null && party != null) {
+            String name = party.trim();
+            java.util.regex.Matcher m = NAME_IN_BRACKETS.matcher(name);
+            if (m.find()) name = m.group(1).trim();
+            name = HONORIFIC.matcher(name).replaceFirst("");
+            if (com.marketai.gmail.parser.BankAlertParsers.isHolder(name, holder)) {
+                return Optional.of("A transfer between your own accounts — not " + (income ? "income" : "spending") + ".");
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** A share trade priced under a quarter, or over four times, of the day's close is not a share price. */
+    static final BigDecimal PRICE_BAND = new BigDecimal("4");
+
+    /** Daily closes around each model-read trade in this holding, by date. */
+    private NavigableMap<LocalDate, BigDecimal> closesFor(Holding h, List<Transaction> txns) {
+        NavigableMap<LocalDate, BigDecimal> out = new TreeMap<>();
+        if (h.getSymbol() == null || h.getSymbol().endsWith(".MF")) return out;
+        LocalDate from = null, to = null;
+        for (Transaction t : txns) {
+            if (!modelRead(t) || t.getTransactionDate() == null) continue;
+            from = from == null || t.getTransactionDate().isBefore(from) ? t.getTransactionDate() : from;
+            to = to == null || t.getTransactionDate().isAfter(to) ? t.getTransactionDate() : to;
+        }
+        if (from == null) return out;
+        String s = h.getSymbol().trim().toUpperCase(Locale.ROOT);
+        String base = s.endsWith(".NS") ? s.substring(0, s.length() - 3) : s;
+        for (String sym : new LinkedHashSet<>(List.of(s, base + ".NS", base))) {
+            for (var p : priceHistoryRepo.findDailyBySymbolAndDateBetween(sym, from.minusDays(10), to.plusDays(30))) {
+                if (p.getClose() != null && p.getClose().signum() > 0) out.putIfAbsent(p.getDate(), p.getClose());
+            }
+        }
+        return out;
+    }
+
+    private static boolean modelRead(Transaction t) {
+        String m = t.getProvenance() != null ? t.getProvenance().getExtractionMethod() : null;
+        return m != null && m.endsWith("_LLM");
+    }
+
+    /**
+     * Model-read trades the market prices contradict: a share trade at an option's premium
+     * (Hero MotoCorp "bought" at ₹164 the day it closed at ₹5,020), or a split after which the
+     * price did not fall (HAL "split 1:5" while trading at ₹4,549 before and ₹4,725 after).
+     */
+    static Map<Long, String> misreadTrades(Holding h, List<Transaction> txns, NavigableMap<LocalDate, BigDecimal> closes) {
+        Map<Long, String> out = new HashMap<>();
+        if (closes.isEmpty()) return out;
+        for (Transaction t : txns) {
+            if (!modelRead(t) || t.getTransactionDate() == null) continue;
+            LocalDate d = t.getTransactionDate();
+            boolean trade = t.getType() == Transaction.TransactionType.BUY || t.getType() == Transaction.TransactionType.SELL;
+            if (trade && t.getPrice() != null && t.getPrice().signum() > 0) {
+                BigDecimal close = closes.get(d);
+                if (close == null) continue;
+                if (t.getPrice().multiply(PRICE_BAND).compareTo(close) < 0 || t.getPrice().compareTo(close.multiply(PRICE_BAND)) > 0) {
+                    out.put(t.getId(), "Priced at ₹" + plain(t.getPrice()) + " when " + h.getSymbol() + " closed at ₹" + plain(close)
+                        + " that day — an option or futures price read as a share trade.");
+                }
+            } else if (t.getType() == Transaction.TransactionType.SPLIT && t.splitMultiplier() != null
+                    && t.splitMultiplier().compareTo(BigDecimal.ONE) > 0) {
+                var before = closes.lowerEntry(d);
+                // The lowest close in the next 20 days, so an ex-date a few days after the record
+                // date still shows the fall.
+                var after = closes.subMap(d, false, d.plusDays(20), true).entrySet().stream()
+                    .min(Map.Entry.comparingByValue()).orElse(null);
+                if (before == null || after == null || before.getKey().isBefore(d.minusDays(10))) continue;
+                // A real 1:5 split leaves the price near a fifth; it fell by less than half of that.
+                BigDecimal fall = before.getValue().divide(after.getValue(), 4, java.math.RoundingMode.HALF_UP);
+                BigDecimal expected = t.splitMultiplier();
+                if (fall.compareTo(BigDecimal.ONE.add(expected.subtract(BigDecimal.ONE).divide(new BigDecimal("2"), 4, java.math.RoundingMode.HALF_UP))) < 0) {
+                    out.put(t.getId(), h.getSymbol() + " closed at ₹" + plain(before.getValue()) + " before and no lower than ₹"
+                        + plain(after.getValue()) + " in the 20 days after this split — a " + plain(t.getRatioFrom()) + ":" + plain(t.getRatioTo())
+                        + " split would have cut the price to about 1/" + plain(expected) + ".");
+                }
+            }
+        }
+        return out;
     }
 
     static Report summarise(List<Finding> all) {
