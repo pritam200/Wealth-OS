@@ -29,7 +29,7 @@ class GoalProjectionTest {
     @BeforeEach
     void setUp() {
         repo = mock(FinancialGoalRepository.class);
-        service = new GoalService(repo);
+        service = new GoalService(repo, mock(com.marketai.portfolio.repository.HoldingRepository.class), mock(com.marketai.scheduled.repository.RecurringInvestmentRepository.class));
     }
 
     private void givenGoal(LocalDate targetDate, String target, String saved, String sip) {
@@ -68,9 +68,21 @@ class GoalProjectionTest {
 
         GoalResponse g = service.list(USER).get(0);
 
-        // MONTHS.between is clamped at 0 for a past date, so this lands in the same branch.
         assertThat(g.getMonthsToTarget()).isZero();
         assertThat(g.isOnTrack()).isFalse();
+        assertThat(g.getStatus()).isEqualTo("OVERDUE");
+        assertThat(g.getShortfallAmount()).isEqualByComparingTo("3800000");
+    }
+
+    @Test
+    void aTargetDateTwoWeeksAwayStillLeavesAMonthToContribute() {
+        givenGoal(LocalDate.now().plusDays(14), "100000", "50000", "1000");
+
+        GoalResponse g = service.list(USER).get(0);
+
+        assertThat(g.getMonthsToTarget()).isEqualTo(1);
+        assertThat(g.getStatus()).isEqualTo("SHORTFALL");
+        assertThat(g.getRequiredMonthly()).isNotNull();
     }
 
     @Test

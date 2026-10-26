@@ -11,24 +11,37 @@ export const reminderApi = {
 };
 
 /* ── Goals ── */
+/** The whole goal — an update replaces every field, so leaving targetDate out clears it. */
 export interface GoalRequest {
   name: string; category?: string; targetAmount: number;
   currentSaved?: number; monthlyContribution?: number;
-  expectedReturn?: number; targetDate?: string;
+  expectedReturn?: number; inflationRate?: number; targetDate?: string;
+  linkedHoldingIds?: number[]; linkedSipIds?: number[];
 }
 export interface GoalResponse {
   id: number; name: string; category: string;
   targetAmount: number; currentSaved: number; monthlyContribution: number;
   expectedReturn: number; targetDate: string | null;
+  inflationRate: number | null;
+  linkedHoldingIds: number[]; linkedSipIds: number[];
+  /** Current value of linked holdings / monthly amount of active linked SIPs. */
+  linkedValue: number; linkedMonthly: number;
+  /** currentSaved + linkedValue; monthlyContribution + linkedMonthly. */
+  totalSaved: number; totalMonthly: number;
+  /** The target grown by inflation to the target date. */
+  inflatedTarget: number; shortfallAmount: number;
   progressPercent: number; projectedValue: number; onTrack: boolean;
   monthsToTarget: number | null; requiredMonthly: number | null;
-  status: 'ON_TRACK' | 'SHORTFALL' | 'ACHIEVED';
+  status: 'ON_TRACK' | 'SHORTFALL' | 'ACHIEVED' | 'OVERDUE';
 }
+export interface GoalLinkOption { id: number; label: string; detail: string | null; amount: number }
+export interface GoalLinkOptions { holdings: GoalLinkOption[]; sips: GoalLinkOption[] }
 export const GOAL_CATEGORIES = ['Retirement', 'Home', 'Car', 'Education', 'Travel', 'Emergency', 'Other'];
 export const goalApi = {
   list: () => apiClient.get<GoalResponse[]>('/api/goals'),
   add: (r: GoalRequest) => apiClient.post<GoalResponse>('/api/goals', r),
-  update: (id: number, r: Partial<GoalRequest>) => apiClient.put<GoalResponse>(`/api/goals/${id}`, r),
+  linkOptions: () => apiClient.get<GoalLinkOptions>('/api/goals/link-options'),
+  update: (id: number, r: GoalRequest) => apiClient.put<GoalResponse>(`/api/goals/${id}`, r),
   delete: (id: number) => apiClient.delete(`/api/goals/${id}`),
   whatIf: (id: number, r: GoalWhatIfRequest) => apiClient.post<GoalWhatIfResponse>(`/api/goals/${id}/what-if`, r),
 };
@@ -52,6 +65,8 @@ export interface GoalWhatIfResponse {
   baseline: GoalWhatIfProjection;
   scenario: GoalWhatIfProjection;
   completionDelayMonths: number | null;
+  /** The baseline reaches the target within 50 years; with this change it doesn't. */
+  scenarioNeverCompletes: boolean;
   projectedValueDelta: number;
 }
 

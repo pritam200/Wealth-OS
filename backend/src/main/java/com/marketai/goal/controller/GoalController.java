@@ -3,6 +3,7 @@ package com.marketai.goal.controller;
 import com.marketai.auth.entity.User;
 import com.marketai.goal.dto.GoalDtos.*;
 import com.marketai.goal.service.GoalService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -22,13 +23,18 @@ public class GoalController {
         return ResponseEntity.ok(service.list(user.getId()));
     }
 
+    @GetMapping("/link-options")
+    public ResponseEntity<LinkOptions> linkOptions(@AuthenticationPrincipal User user) {
+        return ResponseEntity.ok(service.linkOptions(user.getId()));
+    }
+
     @PostMapping
-    public ResponseEntity<GoalResponse> add(@AuthenticationPrincipal User user, @RequestBody GoalRequest req) {
+    public ResponseEntity<GoalResponse> add(@AuthenticationPrincipal User user, @Valid @RequestBody GoalRequest req) {
         return ResponseEntity.ok(service.add(user.getId(), req));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<GoalResponse> update(@AuthenticationPrincipal User user, @PathVariable Long id, @RequestBody GoalRequest req) {
+    public ResponseEntity<GoalResponse> update(@AuthenticationPrincipal User user, @PathVariable Long id, @Valid @RequestBody GoalRequest req) {
         return ResponseEntity.ok(service.update(user.getId(), id, req));
     }
 

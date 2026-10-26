@@ -55,4 +55,8 @@ public interface HoldingRepository extends JpaRepository<Holding, Long> {
      *  statement's folio isn't itself recorded on the holding. */
     @Query("SELECT h FROM Holding h WHERE h.portfolio.user.id = :userId AND h.amfiSchemeCode = :schemeCode")
     List<Holding> findByUserIdAndAmfiSchemeCode(@Param("userId") Long userId, @Param("schemeCode") String schemeCode);
+
+    /** The user's open holdings with their portfolio loaded, for choosing what counts toward a goal. */
+    @Query("SELECT h FROM Holding h JOIN FETCH h.portfolio p WHERE p.user.id = :userId AND h.quantity > 0 ORDER BY p.name, h.name")
+    List<Holding> findOpenByUserIdWithPortfolio(@Param("userId") Long userId);
 }

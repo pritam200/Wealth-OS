@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Bell, Target, Receipt, Plus, Trash2, CheckCircle, AlertTriangle, CalendarClock,
-  TrendingUp, Coins, Landmark, Wallet, HelpCircle,
+  TrendingUp, Coins, Landmark, Wallet, HelpCircle, Pencil,
 } from 'lucide-react';
 import { reminderApi, goalApi, taxApi, GOAL_CATEGORIES } from '../../api/planning';
-import type { Reminder, GoalResponse, TaxResponse, GoalWhatIfResponse } from '../../api/planning';
+import type { Reminder, GoalResponse, TaxResponse, GoalWhatIfResponse, GoalLinkOption, GoalLinkOptions } from '../../api/planning';
 import { scheduledInvestmentApi } from '../../api/scheduledInvestment';
 import type { RecurringInvestment } from '../../api/scheduledInvestment';
 import { StatTile } from '../../components/shared/StatTile';
@@ -210,35 +210,96 @@ export function RemindersPanel() {
 
 /* ── Goals ── */
 const today = () => new Date().toISOString().slice(0, 10);
+const errorText = (e: any, fallback: string) => e?.response?.data?.message || fallback;
+type GoalForm = {
+  name: string; category: string; targetAmount: string; currentSaved: string; monthlyContribution: string;
+  expectedReturn: string; inflationRate: string; targetDate: string; linkedHoldingIds: number[]; linkedSipIds: number[];
+};
+const blankGoal: GoalForm = {
+  name: '', category: 'Retirement', targetAmount: '', currentSaved: '', monthlyContribution: '',
+  expectedReturn: '10', inflationRate: '6', targetDate: '', linkedHoldingIds: [], linkedSipIds: [],
+};
+const goalToForm = (g: GoalResponse): GoalForm => ({
+  name: g.name, category: g.category || 'Other', targetAmount: String(g.targetAmount),
+  currentSaved: g.currentSaved ? String(g.currentSaved) : '', monthlyContribution: g.monthlyContribution ? String(g.monthlyContribution) : '',
+  expectedReturn: String(g.expectedReturn ?? 10), inflationRate: String(g.inflationRate ?? 0), targetDate: g.targetDate ?? '',
+  linkedHoldingIds: g.linkedHoldingIds ?? [], linkedSipIds: g.linkedSipIds ?? [],
+});
+/** What's wrong with the form, or null when it can be saved. */
+function goalFormError(f: GoalForm): string | null {
+  const n = (s: string) => (s === '' ? 0 : Number(s));
+  if (!f.name.trim()) return 'Give the goal a name.';
+  if (!(Number(f.targetAmount) > 0)) return 'Set a target amount above zero.';
+  if (n(f.currentSaved) < 0 || n(f.monthlyContribution) < 0) return "Amounts can't be negative.";
+  if (Number.isNaN(n(f.expectedReturn)) || n(f.expectedReturn) < 0 || n(f.expectedReturn) > 50) return 'Expected return must be between 0 and 50%.';
+  if (Number.isNaN(n(f.inflationRate)) || n(f.inflationRate) < 0 || n(f.inflationRate) > 30) return 'Inflation must be between 0 and 30%.';
+  return null;
+}
+const STATUS_LABEL: Record<GoalResponse['status'], string> = {
+  ON_TRACK: 'On track', ACHIEVED: 'Achieved', SHORTFALL: 'Shortfall', OVERDUE: 'Overdue',
+};
+
 function GoalsSection() {
   const maskText = useMaskedText();
   const [goals, setGoals] = useState<GoalResponse[]>([]);
+  const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
-  const blank = { name: '', category: 'Retirement', targetAmount: '', currentSaved: '', monthlyContribution: '', expectedReturn: '10', targetDate: '' };
-  const [f, setF] = useState(blank);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [f, setF] = useState<GoalForm>(blankGoal);
+  const [options, setOptions] = useState<GoalLinkOptions | null>(null);
 
   const [failed, setFailed] = useState(false);
   const load = useCallback(async () => {
     try { setGoals((await goalApi.list()).data); setFailed(false); }
     catch { setFailed(true); }
+    finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const submit = async () => {
-    if (!f.name || !f.targetAmount) return;
-    setSaving(true);
-    try {
-      await goalApi.add({
-        name: f.name, category: f.category, targetAmount: Number(f.targetAmount),
-        currentSaved: f.currentSaved ? Number(f.currentSaved) : 0,
-        monthlyContribution: f.monthlyContribution ? Number(f.monthlyContribution) : 0,
-        expectedReturn: f.expectedReturn ? Number(f.expectedReturn) : 10,
-        targetDate: f.targetDate || undefined,
-      });
-      setF(blank); setOpen(false); await load();
-    } catch {} finally { setSaving(false); }
+  const openForm = (g?: GoalResponse) => {
+    setF(g ? goalToForm(g) : blankGoal);
+    setEditingId(g ? g.id : null);
+    setSaveError(null);
+    setOpen(true);
+    if (!options) goalApi.linkOptions().then(r => setOptions(r.data)).catch(() => setOptions({ holdings: [], sips: [] }));
   };
+  const close = () => { setF(blankGoal); setEditingId(null); setSaveError(null); setOpen(false); };
+
+  const formError = goalFormError(f);
+  const submit = async () => {
+    if (formError) { setSaveError(formError); return; }
+    setSaving(true); setSaveError(null);
+    const payload = {
+      name: f.name.trim(), category: f.category, targetAmount: Number(f.targetAmount),
+      currentSaved: f.currentSaved ? Number(f.currentSaved) : 0,
+      monthlyContribution: f.monthlyContribution ? Number(f.monthlyContribution) : 0,
+      expectedReturn: f.expectedReturn ? Number(f.expectedReturn) : 10,
+      inflationRate: f.inflationRate ? Number(f.inflationRate) : 0,
+      targetDate: f.targetDate || undefined,
+      linkedHoldingIds: f.linkedHoldingIds, linkedSipIds: f.linkedSipIds,
+    };
+    try {
+      if (editingId != null) await goalApi.update(editingId, payload);
+      else await goalApi.add(payload);
+      close(); await load();
+    } catch (e) {
+      setSaveError(errorText(e, "Couldn't save the goal. Try again."));
+    } finally { setSaving(false); }
+  };
+
+  const remove = async (g: GoalResponse) => {
+    if (!window.confirm(`Delete the goal "${g.name}"? This can't be undone.`)) return;
+    setActionError(null);
+    try { await goalApi.delete(g.id); }
+    catch (e) { setActionError(errorText(e, `Couldn't delete "${g.name}".`)); }
+    finally { await load(); }
+  };
+
+  const toggle = (key: 'linkedHoldingIds' | 'linkedSipIds', id: number) =>
+    setF(x => ({ ...x, [key]: x[key].includes(id) ? x[key].filter(i => i !== id) : [...x[key], id] }));
 
   return (
     <div className="card">
@@ -247,11 +308,12 @@ function GoalsSection() {
           <div className="icon-badge-gold"><Target size={15} /></div>
           <h3 className="font-bold text-ink text-sm">Financial Goals</h3>
         </div>
-        <button onClick={() => setOpen(o => !o)} className="btn-secondary text-xs flex items-center gap-1"><Plus size={11} /> Add Goal</button>
+        <button onClick={() => (open ? close() : openForm())} className="btn-secondary text-xs flex items-center gap-1"><Plus size={11} /> Add Goal</button>
       </div>
 
       {open && (
         <div className="bg-surface-hover rounded-lg p-3 mb-3 space-y-2 border border-surface-border">
+          <div className="text-2xs font-medium text-ink">{editingId != null ? 'Edit goal' : 'New goal'}</div>
           <div className="grid grid-cols-2 gap-2">
             <input value={f.name} onChange={e => setF(x => ({ ...x, name: e.target.value }))} placeholder="Goal name (e.g. Retirement)" className="input-field text-xs" />
             <select value={f.category} onChange={e => setF(x => ({ ...x, category: e.target.value }))} className="input-field text-xs">
@@ -259,29 +321,58 @@ function GoalsSection() {
             </select>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <input type="number" value={f.targetAmount} onChange={e => setF(x => ({ ...x, targetAmount: e.target.value }))} placeholder="Target ₹" className="input-field text-xs" />
-            <input type="date" value={f.targetDate} onChange={e => setF(x => ({ ...x, targetDate: e.target.value }))} min={today()} className="input-field text-xs" />
+            <label className="text-2xs text-gray-600">Target ₹ (today's rupees)
+              <input type="number" min="0" value={f.targetAmount} onChange={e => setF(x => ({ ...x, targetAmount: e.target.value }))} className="input-field text-xs w-full" />
+            </label>
+            <label className="text-2xs text-gray-600">Target date (blank for none)
+              <input type="date" value={f.targetDate} onChange={e => setF(x => ({ ...x, targetDate: e.target.value }))} min={editingId == null ? today() : undefined} className="input-field text-xs w-full" />
+            </label>
           </div>
-          <div className="grid grid-cols-3 gap-2">
-            <input type="number" value={f.currentSaved} onChange={e => setF(x => ({ ...x, currentSaved: e.target.value }))} placeholder="Saved ₹" className="input-field text-xs" />
-            <input type="number" value={f.monthlyContribution} onChange={e => setF(x => ({ ...x, monthlyContribution: e.target.value }))} placeholder="Monthly ₹" className="input-field text-xs" />
-            <input type="number" value={f.expectedReturn} onChange={e => setF(x => ({ ...x, expectedReturn: e.target.value }))} placeholder="Return %" className="input-field text-xs" />
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-2xs text-gray-600">Other savings ₹ (not linked below)
+              <input type="number" min="0" value={f.currentSaved} onChange={e => setF(x => ({ ...x, currentSaved: e.target.value }))} className="input-field text-xs w-full" />
+            </label>
+            <label className="text-2xs text-gray-600">Other monthly ₹ (not linked below)
+              <input type="number" min="0" value={f.monthlyContribution} onChange={e => setF(x => ({ ...x, monthlyContribution: e.target.value }))} className="input-field text-xs w-full" />
+            </label>
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-2xs text-gray-600">Expected return % a year
+              <input type="number" min="0" max="50" value={f.expectedReturn} onChange={e => setF(x => ({ ...x, expectedReturn: e.target.value }))} className="input-field text-xs w-full" />
+            </label>
+            <label className="text-2xs text-gray-600">Inflation % a year
+              <input type="number" min="0" max="30" value={f.inflationRate} onChange={e => setF(x => ({ ...x, inflationRate: e.target.value }))} className="input-field text-xs w-full" />
+            </label>
+          </div>
+
+          <GoalLinkPicker title="Holdings counted toward this goal (current value)" options={options?.holdings} selected={f.linkedHoldingIds}
+            onToggle={id => toggle('linkedHoldingIds', id)} empty="No open holdings yet." />
+          <GoalLinkPicker title="SIPs counted toward this goal (monthly amount, while active)" options={options?.sips} selected={f.linkedSipIds}
+            onToggle={id => toggle('linkedSipIds', id)} empty="No SIPs tracked yet — add one under Recurring Investments." perMonth />
+
+          {saveError && <p className="text-2xs text-bear">{saveError}</p>}
           <div className="flex gap-2">
-            <button onClick={submit} disabled={saving} className="btn-primary text-xs py-1.5 flex-1">{saving ? 'Saving…' : 'Save Goal'}</button>
-            <button onClick={() => { setF(blank); setOpen(false); }} className="btn-ghost text-xs py-1.5 flex-1">Cancel</button>
+            <button onClick={submit} disabled={saving || !!formError} title={formError ?? undefined} className="btn-primary text-xs py-1.5 flex-1">
+              {saving ? 'Saving…' : editingId != null ? 'Update Goal' : 'Save Goal'}
+            </button>
+            <button onClick={close} className="btn-ghost text-xs py-1.5 flex-1">Cancel</button>
           </div>
         </div>
       )}
 
-      {failed
+      {actionError && <p className="text-2xs text-bear mb-2">{actionError}</p>}
+      {loading
+        ? <div className="h-10 animate-pulse bg-surface-hover rounded" />
+        : failed
         ? <LoadFailure what="your goals" onRetry={load} />
         : !goals.length
         ? <p className="text-gray-600 text-xs text-center py-4">No goals yet. Add one to see if your SIP will get you there.</p>
         : (
           <div className="space-y-3">
             {goals.map(g => {
-              const statusColor = g.status === 'ACHIEVED' ? 'text-bull' : g.status === 'ON_TRACK' ? 'text-bull' : 'text-neutral';
+              const statusColor = g.status === 'ACHIEVED' || g.status === 'ON_TRACK' ? 'text-bull' : g.status === 'OVERDUE' ? 'text-bear' : 'text-neutral';
+              const inflated = g.inflatedTarget != null && Math.round(g.inflatedTarget) > Math.round(g.targetAmount);
+              const linked = (g.linkedHoldingIds?.length ?? 0) + (g.linkedSipIds?.length ?? 0);
               return (
                 <div key={g.id} className="bg-surface-hover rounded-lg p-3">
                   <div className="flex items-center justify-between mb-1.5">
@@ -289,32 +380,77 @@ function GoalsSection() {
                       <span className="text-ink text-xs font-medium">{g.name}</span>
                       <span className="text-2xs text-gray-600">{g.category}</span>
                       <span className={`text-2xs flex items-center gap-1 ${statusColor}`}>
-                        {g.status === 'SHORTFALL' ? <AlertTriangle size={10} /> : <CheckCircle size={10} />}
-                        {g.status === 'ON_TRACK' ? 'On track' : g.status === 'ACHIEVED' ? 'Achieved' : 'Shortfall'}
+                        {g.status === 'SHORTFALL' || g.status === 'OVERDUE' ? <AlertTriangle size={10} /> : <CheckCircle size={10} />}
+                        {STATUS_LABEL[g.status] ?? g.status}
                       </span>
                     </div>
-                    <button aria-label="Delete" onClick={async () => { await goalApi.delete(g.id); load(); }} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                    <div className="flex items-center gap-1">
+                      <button aria-label="Edit" onClick={() => openForm(g)} className="btn-icon text-gray-700 hover:text-ink p-0.5"><Pencil size={11} /></button>
+                      <button aria-label="Delete" onClick={() => remove(g)} className="btn-icon text-gray-700 hover:text-bear p-0.5"><Trash2 size={11} /></button>
+                    </div>
                   </div>
                   <div className="flex justify-between text-2xs text-gray-500 mb-1">
-                    <span>{maskText(fmtINR(g.currentSaved))} of {maskText(fmtINR(g.targetAmount))}</span>
+                    <span>{maskText(fmtINR(g.totalSaved ?? g.currentSaved))} of {maskText(fmtINR(inflated ? g.inflatedTarget : g.targetAmount))}</span>
                     <span>{maskText(`${g.progressPercent.toFixed(0)}%`)}{g.targetDate ? ` · ${g.targetDate}` : ''}</span>
                   </div>
+                  {inflated && (
+                    <div className="text-2xs text-gray-600 mb-1">{maskText(fmtINR(g.targetAmount))} today is {maskText(fmtINR(g.inflatedTarget))} by then at {g.inflationRate}% inflation</div>
+                  )}
                   <div className="h-2 bg-surface rounded-full overflow-hidden mb-2">
                     <div className="h-full rounded-full bg-gradient-to-r from-brand to-bull" style={{ width: `${Math.min(100, g.progressPercent)}%` }} />
                   </div>
-                  <div className="grid grid-cols-3 gap-2 text-2xs mb-2">
-                    <div><span className="text-gray-600">Projected: </span><span className={`font-mono ${g.onTrack ? 'text-bull' : 'text-neutral'}`}>{maskText(fmtINR(g.projectedValue))}</span></div>
-                    <div><span className="text-gray-600">SIP: </span><span className="font-mono text-gray-300">{maskText(fmtINR(g.monthlyContribution))}/mo</span></div>
-                    {g.requiredMonthly != null && g.status === 'SHORTFALL' && (
-                      <div><span className="text-gray-600">Need: </span><span className="font-mono text-neutral">{maskText(fmtINR(g.requiredMonthly))}/mo</span></div>
-                    )}
-                  </div>
+                  {g.status === 'OVERDUE' ? (
+                    <p className="text-2xs text-bear mb-2">The target date has passed — {maskText(fmtINR(g.shortfallAmount))} short. Edit the goal to set a new date.</p>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2 text-2xs mb-2">
+                      <div><span className="text-gray-600">Projected: </span><span className={`font-mono ${g.onTrack ? 'text-bull' : 'text-neutral'}`}>{maskText(fmtINR(g.projectedValue))}</span></div>
+                      <div><span className="text-gray-600">Monthly: </span><span className="font-mono text-gray-300">{maskText(fmtINR(g.totalMonthly ?? g.monthlyContribution))}/mo</span></div>
+                      {g.requiredMonthly != null && g.status === 'SHORTFALL' && (
+                        <div><span className="text-gray-600">Need: </span><span className="font-mono text-neutral">{maskText(fmtINR(g.requiredMonthly))}/mo</span></div>
+                      )}
+                    </div>
+                  )}
+                  {linked > 0 && (
+                    <div className="text-2xs text-gray-600 mb-2">
+                      Includes {g.linkedHoldingIds.length} linked holding{g.linkedHoldingIds.length === 1 ? '' : 's'} ({maskText(fmtINR(g.linkedValue))})
+                      {g.linkedSipIds.length > 0 && <> and {g.linkedSipIds.length} SIP{g.linkedSipIds.length === 1 ? '' : 's'} ({maskText(fmtINR(g.linkedMonthly))}/mo active)</>}
+                    </div>
+                  )}
                   <GoalWhatIfPanel goal={g} />
                 </div>
               );
             })}
           </div>
         )}
+    </div>
+  );
+}
+
+function GoalLinkPicker({ title, options, selected, onToggle, empty, perMonth }: {
+  title: string; options: GoalLinkOption[] | undefined; selected: number[];
+  onToggle: (id: number) => void; empty: string; perMonth?: boolean;
+}) {
+  const maskText = useMaskedText();
+  // A linked holding that has since been sold no longer appears among the options; it counts nothing.
+  const missing = options ? selected.filter(id => !options.some(o => o.id === id)).length : 0;
+  return (
+    <div>
+      <div className="text-2xs text-gray-600 mb-1">{title}</div>
+      {!options ? <div className="h-6 animate-pulse bg-surface rounded" />
+        : !options.length ? <p className="text-2xs text-gray-600">{empty}</p>
+        : (
+          <div className="max-h-32 overflow-y-auto bg-surface rounded border border-surface-border divide-y divide-surface-border">
+            {options.map(o => (
+              <label key={o.id} className="flex items-center gap-2 px-2 py-1 text-2xs cursor-pointer">
+                <input type="checkbox" checked={selected.includes(o.id)} onChange={() => onToggle(o.id)} />
+                <span className="text-ink truncate flex-1">{o.label}</span>
+                {o.detail && <span className="text-gray-600 shrink-0">{o.detail}</span>}
+                <span className="font-mono text-gray-400 shrink-0">{maskText(fmtINR(o.amount))}{perMonth ? '/mo' : ''}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      {missing > 0 && <p className="text-2xs text-gray-600 mt-1">{missing} linked item{missing === 1 ? ' is' : 's are'} no longer held and count nothing; saving removes {missing === 1 ? 'it' : 'them'}.</p>}
     </div>
   );
 }
@@ -386,6 +522,9 @@ function GoalWhatIfPanel({ goal }: { goal: GoalResponse }) {
             <div className={`font-mono text-2xs ${result.projectedValueDelta >= 0 ? 'text-bull' : 'text-neutral'}`}>{maskText(fmtINR(result.scenario.projectedValue))}</div>
             <div className="text-2xs text-gray-600">{result.scenario.completionDate ? `done ${result.scenario.completionDate}` : 'not reached'}</div>
           </div>
+          {result.scenarioNeverCompletes && (
+            <div className="col-span-2 text-2xs text-bear">With this change the goal is no longer reached within 50 years.</div>
+          )}
           {result.completionDelayMonths != null && (
             <div className="col-span-2 text-2xs text-gray-500">
               {result.completionDelayMonths === 0

@@ -32,7 +32,7 @@ class GoalWhatIfTest {
     @BeforeEach
     void setUp() {
         repo = mock(FinancialGoalRepository.class);
-        service = new GoalService(repo);
+        service = new GoalService(repo, mock(com.marketai.portfolio.repository.HoldingRepository.class), mock(com.marketai.scheduled.repository.RecurringInvestmentRepository.class));
     }
 
     private void givenGoal(LocalDate targetDate, String target, String saved, String sip) {
