@@ -748,7 +748,9 @@ public class PdfImportService {
         pdf.setPipelineSteps(toJson(steps));
         // A statement only partly read (the extractor failed on some of its pages) stays FAILED so
         // it is retried; the lines already booked are recognised on retry and not booked twice.
-        pdf.setStatus(accounted > 0 && !result.isIncomplete() ? "IMPORTED" : "FAILED");
+        // One read in full whose lines all went to review is done: as FAILED it was sent to the
+        // extractor again on every sync, spending quota without ever leaving the queue.
+        pdf.setStatus(result.isIncomplete() ? "FAILED" : accounted > 0 ? "IMPORTED" : "IN_REVIEW");
         String summary = result.getImported() + " item(s) imported"
             + (result.getDuplicates() > 0 ? ", " + result.getDuplicates() + " already recorded" : "")
             + (result.getQueuedForReview() > 0 ? ", " + result.getQueuedForReview() + " queued for review" : "")

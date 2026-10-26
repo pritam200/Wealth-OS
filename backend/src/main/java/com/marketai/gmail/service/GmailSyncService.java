@@ -322,6 +322,8 @@ public class GmailSyncService {
                                     PendingPdf refreshed = pendingPdfRepo.findById(existingPdf.getId()).orElse(existingPdf);
                                     if ("IMPORTED".equals(refreshed.getStatus())) {
                                         steps.add("Auto-unlocked on retry: " + refreshed.getResultSummary());
+                                    } else if ("IN_REVIEW".equals(refreshed.getStatus())) {
+                                        steps.add("Read on retry, held for review: " + refreshed.getResultSummary());
                                     } else {
                                         steps.add("Still locked — no matching saved password found");
                                     }
@@ -374,6 +376,8 @@ public class GmailSyncService {
                             PendingPdf refreshed = pendingPdfRepo.findById(savedPdf.getId()).orElse(savedPdf);
                             if ("IMPORTED".equals(refreshed.getStatus())) {
                                 steps.add("Auto-unlocked and imported: " + refreshed.getResultSummary());
+                            } else if ("IN_REVIEW".equals(refreshed.getStatus())) {
+                                steps.add("Auto-unlocked, held for review: " + refreshed.getResultSummary());
                             } else if ("PASSWORD_FAILED".equals(refreshed.getStatus())) {
                                 steps.add("Auto-unlock failed: saved password did not work — " + refreshed.getResultSummary());
                             } else {

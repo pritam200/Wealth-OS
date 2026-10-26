@@ -149,7 +149,7 @@ export interface PendingPdf {
   sender: string;
   subject: string;
   providerKey: string | null;
-  status: 'NEEDS_PASSWORD' | 'PASSWORD_FAILED' | 'IMPORTED' | 'FAILED' | 'DISMISSED';
+  status: 'NEEDS_PASSWORD' | 'PASSWORD_FAILED' | 'IMPORTED' | 'IN_REVIEW' | 'FAILED' | 'DISMISSED';
   resultSummary: string | null;
   passwordHint: string | null;
   pipelineSteps: string | null;

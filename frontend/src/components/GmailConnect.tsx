@@ -441,6 +441,7 @@ function ContractNoteDebug() {
   const statusBadge = (s: string) => {
     const colors: Record<string, string> = {
       IMPORTED: 'bg-bull/15 text-bull',
+      IN_REVIEW: 'bg-neutral/15 text-neutral',
       FAILED: 'bg-bear/15 text-bear',
       NEEDS_PASSWORD: 'bg-neutral/15 text-neutral',
       PASSWORD_FAILED: 'bg-neutral/15 text-neutral',

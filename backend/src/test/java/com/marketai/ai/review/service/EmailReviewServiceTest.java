@@ -194,4 +194,21 @@ class EmailReviewServiceTest {
         assertThat(service.finishReread(USER_ID, "msg-1", false)).isZero();
         verify(repo, never()).deleteAll(any());
     }
+
+    @Test
+    @DisplayName("an attachment re-read clears only its own range, and the email's re-read keeps tracking")
+    void attachmentRereadIsScoped() {
+        EmailReviewItem body = pending(1), oldLine = pending(1_000_005), otherPdf = pending(2_000_005);
+        when(repo.findByUserIdAndGmailMessageIdAndStatus(USER_ID, "msg-1", com.marketai.ai.review.entity.ReviewStatus.PENDING))
+            .thenReturn(java.util.List.of(body, oldLine, otherPdf));
+
+        service.beginReread();
+        java.util.Set<Integer> outer = service.beginAttachmentReread();
+        int cleared = service.finishAttachmentReread(USER_ID, "msg-1", 999_999, 1_000_999, true, outer);
+
+        assertThat(cleared).isEqualTo(1);
+        verify(repo).deleteAll(java.util.List.of(oldLine));
+        queue(sip()); // the body asks item 0 again once the attachment is done
+        assertThat(service.finishReread(USER_ID, "msg-1", true)).as("email re-read still tracked").isEqualTo(3);
+    }
 }

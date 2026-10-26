@@ -176,7 +176,7 @@ class EmailLLMParserServiceTest {
     }
 
     @Test
-    @DisplayName("an unavailable LLM routes to review rather than crashing the sync")
+    @DisplayName("an unavailable LLM is retried later rather than crashing the sync or filling the review queue")
     void llmUnavailableRoutesToReviewNotCrash() throws Exception {
         when(llm.complete(any(), any(), anyString())).thenThrow(new LlmUnavailableException("no model"));
 
@@ -186,8 +186,7 @@ class EmailLLMParserServiceTest {
 
         assertThat(result.getOutcome()).isEqualTo(EmailLLMParserService.Outcome.UNAVAILABLE);
         verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
-        verify(emailReviewService).enqueue(eq(USER_ID), eq(MSG_ID),
-            eq(com.marketai.ai.review.service.EmailReviewService.WHOLE_EMAIL_ITEM_INDEX), anyString(), anyString(), any());
+        verify(emailReviewService, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
         assertThat(result.isIncomplete()).as("an unread email must be retried, not marked done").isTrue();
     }
 

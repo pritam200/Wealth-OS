@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Single LLM-based replacement for the whole regex parser cascade (18 {@code EmailParser}
@@ -367,6 +368,24 @@ public class EmailLLMParserService {
 
     public Result process(Long userId, User user, String from, String subject, String sourceText,
                           String gmailMessageId, Classification classification, int itemIndexBase, SourceDoc src) {
+        if (src == null || src.attachmentId() == null) {
+            return read(userId, user, from, subject, sourceText, gmailMessageId, classification, itemIndexBase, src);
+        }
+        // An attachment is re-read on its own (a PDF retried after a password or a quota reset),
+        // outside the email's re-read, so the questions its earlier read left are cleared here.
+        Set<Integer> outer = emailReviewService.beginAttachmentReread();
+        Result result = null;
+        try {
+            result = read(userId, user, from, subject, sourceText, gmailMessageId, classification, itemIndexBase, src);
+            return result;
+        } finally {
+            emailReviewService.finishAttachmentReread(userId, gmailMessageId, itemIndexBase - 1, itemIndexBase + 999,
+                result != null && !result.isIncomplete(), outer);
+        }
+    }
+
+    private Result read(Long userId, User user, String from, String subject, String sourceText,
+                        String gmailMessageId, Classification classification, int itemIndexBase, SourceDoc src) {
         if (src == null) src = SourceDoc.BODY;
         String attachmentId = src.attachmentId();
         String documentHash = src.documentHash();
@@ -401,6 +420,7 @@ public class EmailLLMParserService {
             : null;
         String statementProvider = classification != null && classification.statementProvider() != null
             ? classification.statementProvider() : domain;
+        boolean exchangeTradeAlert = isExchangeTradeAlert(domain, subject);
 
         // Long sources (a month of statement lines) used to be cut at MAX_CHARS and everything
         // after the cut was silently never read. Each chunk is now extracted in turn; chunks
@@ -492,7 +512,10 @@ public class EmailLLMParserService {
 
                 ParsedEmail pe = null;
                 Extraction extraction = null;
-                if (why == null) {
+                if (exchangeTradeAlert) {
+                    extraction = Extraction.noMoneyMoved(EXCHANGE_ALERT_REASON);
+                    why = extraction.reason();
+                } else if (why == null) {
                     extraction = toParsedEmail(tNode, sourceText);
                     pe = extraction.parsed();
                     why = extraction.reason();
@@ -523,7 +546,7 @@ public class EmailLLMParserService {
                 }
 
                 if (why != null) {
-                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, pe, why);
+                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, tNode, pe, why);
                     ledger.record(event.toBuilder().state(EventState.REQUIRES_REVIEW).reason(why)
                         .validationStatus(senderBlocked ? NOT_CHECKED : pe == null ? FAILED : VERIFIED)
                         .dedupStatus(NOT_CHECKED).build());
@@ -538,7 +561,7 @@ public class EmailLLMParserService {
                         ? "The extractor did not report a usable confidence score."
                         : String.format("Confidence %.2f is below the %.2f threshold required to import automatically.",
                             overallConfidence, minConfidence);
-                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, pe, reason);
+                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, tNode, pe, reason);
                     ledger.record(event.toBuilder().state(EventState.REQUIRES_REVIEW).reason(reason)
                         .validationStatus(VERIFIED).dedupStatus(NOT_CHECKED).build());
                     chunkQueued++;
@@ -574,7 +597,7 @@ public class EmailLLMParserService {
                             .validationStatus(VERIFIED).dedupStatus("NEW").build());
                     }
                 } catch (ImportRejectedException e) {
-                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, pe, e.getMessage());
+                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, tNode, pe, e.getMessage());
                     ledger.record(event.toBuilder().state(EventState.REQUIRES_REVIEW).reason(e.getMessage())
                         .validationStatus(VERIFIED).dedupStatus("POSSIBLE_DUPLICATE").build());
                     chunkQueued++;
@@ -582,7 +605,7 @@ public class EmailLLMParserService {
                 } catch (Exception e) {
                     log.error("Import failed for {}: {}", pe.getSourceDescription(), e.getMessage(), e);
                     String reason = "Could not be saved automatically (" + e.getMessage() + ") — accept to retry.";
-                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, pe, reason);
+                    enqueueItemForReview(userId, gmailMessageId, itemIndex, from, subject, overallConfidence, tNode, pe, reason);
                     ledger.record(event.toBuilder().state(EventState.FAILED_WITH_REASON).reason(reason)
                         .validationStatus(VERIFIED).dedupStatus(NOT_CHECKED).build());
                     chunkQueued++;
@@ -603,13 +626,19 @@ public class EmailLLMParserService {
         if (!unreadParts.isEmpty()) {
             // Some or all of the source could not be read. The email is reported as incomplete so
             // the sync retries it (already-booked lines are recognised and not booked twice), and
-            // a placeholder in the review queue makes the gap visible in the meantime.
+            // the ledger makes the gap visible in the meantime. An extractor that was merely
+            // unavailable (quota spent, provider down) is not a question for the user, so it is
+            // kept out of the review queue; unreadable output still gets a placeholder there.
             String reason = (extractorUnavailable ? "The extractor was unavailable" : "The extractor returned unreadable output")
                 + " for " + String.join(", ", unreadParts) + ", so it was left unprocessed — it will be retried on the next sync.";
-            enqueueWholeEmailForReview(userId, gmailMessageId, itemIndexBase - 1, from, subject, reason);
+            if (extractorUnavailable) {
+                emailReviewService.clearWholeEmailPlaceholder(userId, gmailMessageId, itemIndexBase - 1);
+            } else {
+                enqueueWholeEmailForReview(userId, gmailMessageId, itemIndexBase - 1, from, subject, reason);
+                queuedForReview++;
+            }
             ledger.record(emailLevelEvent(userId, gmailMessageId, unreadKey, itemIndexBase - 1, src, statementProvider,
                 lastCompletion, EventState.RECONCILIATION_REQUIRED, reason));
-            queuedForReview++;
             return Result.builder()
                 .outcome(extractorUnavailable && imported == 0 ? Outcome.UNAVAILABLE : Outcome.REVIEW)
                 .imported(imported).duplicates(duplicates).conflicts(conflicts).extracted(extracted)
@@ -794,7 +823,10 @@ public class EmailLLMParserService {
     }
 
     private void enqueueItemForReview(Long userId, String gmailMessageId, int itemIndex, String from,
-                                      String subject, Double confidence, ParsedEmail pe, String reason) {
+                                      String subject, Double confidence, JsonNode raw, ParsedEmail pe, String reason) {
+        // What the model read is shown alongside the reason so the item can be judged without
+        // opening the email. It is display-only: an unverified figure never becomes the item's
+        // amount or date, which a one-click accept would book.
         emailReviewService.enqueue(userId, gmailMessageId, itemIndex, from, subject,
             EmailIntelResult.builder()
                 .outcome(EmailIntelResult.Outcome.REVIEW_REQUIRED)
@@ -802,6 +834,8 @@ public class EmailLLMParserService {
                 .confidence(confidence)
                 .parsed(pe)
                 .reviewReason(reason)
+                .evidence(raw == null ? null : FinancialEventLedger.mask(json.str(raw, "evidence")))
+                .extractedFieldsJson(raw == null ? null : FinancialEventLedger.mask(raw.toString()))
                 .build());
     }
 
@@ -1339,7 +1373,7 @@ public class EmailLLMParserService {
     }
 
     private ParsedEmail toEquityParsedEmail(JsonNode t, String transactionType, BigDecimal amount, LocalDate date) {
-        String symbol = resolveSymbol(json.str(t, "symbol"));
+        String symbol = resolveSymbol(json.str(t, "symbol"), json.str(t, "isin"));
         BigDecimal price = json.decimal(t, "price");
         Integer quantity = json.integer(t, "quantity");
 
@@ -1557,20 +1591,65 @@ public class EmailLLMParserService {
      * the real stock master, and an ambiguous one is refused rather than booked.
      */
     private String resolveSymbol(String candidate) {
-        if (candidate == null || candidate.isBlank()) return null;
-        String upper = candidate.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9&-]", "");
-        if (upper.isEmpty()) return null;
-        List<Stock> hits;
-        try {
-            hits = marketDataService.searchStocks(upper);
-        } catch (Exception e) {
-            log.debug("Stock search failed while resolving symbol '{}': {}", candidate, e.getMessage());
-            return null;
+        return resolveSymbol(candidate, null);
+    }
+
+    /**
+     * Resolves what the model read as a stock to its listed symbol. Contract notes often give
+     * the company name cut off at 20 characters ("HERO MOTOCORP LIMITE") rather than the ticker,
+     * so a name is searched with its words kept and the corporate suffix dropped; the ISIN is the
+     * last resort, for the live search to resolve.
+     */
+    private String resolveSymbol(String candidate, String isin) {
+        if (candidate != null && !candidate.isBlank()) {
+            String upper = candidate.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9&-]", "");
+            if (!upper.isEmpty()) {
+                List<Stock> hits = searchStocks(upper);
+                for (Stock s : hits) {
+                    if (upper.equalsIgnoreCase(s.getSymbol())) return s.getSymbol();
+                }
+                if (hits.size() == 1) return hits.get(0).getSymbol();
+            }
+            String name = companyName(candidate);
+            if (name.contains(" ")) {
+                String byName = pickByName(searchStocks(name), name);
+                if (byName != null) return byName;
+            }
         }
-        for (Stock s : hits) {
-            if (upper.equalsIgnoreCase(s.getSymbol())) return s.getSymbol();
+        if (isin != null && ISIN.matcher(isin.trim().toUpperCase(Locale.ROOT)).matches()) {
+            List<Stock> hits = searchStocks(isin.trim().toUpperCase(Locale.ROOT));
+            if (hits.size() == 1) return hits.get(0).getSymbol();
         }
+        return null;
+    }
+
+    private static final Pattern ISIN = Pattern.compile("IN[A-Z0-9]{9}[0-9]");
+    // "LIMITED" and every cut-off form of it, plus the usual short forms.
+    private static final Pattern CORPORATE_SUFFIX =
+        Pattern.compile("(\\s+(LIMITED|LIMITE|LIMIT|LIMI|LIM|LTD|LT|PVT|PRIVATE|CO|CORP|INC))+\\.?$");
+
+    /** "Hero MotoCorp Limite" → "HERO MOTOCORP": upper-cased, punctuation dropped, suffix removed. */
+    static String companyName(String raw) {
+        String s = raw.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9& ]", " ").replaceAll("\\s+", " ").trim();
+        return CORPORATE_SUFFIX.matcher(s).replaceAll("").trim();
+    }
+
+    /** The one hit whose name is, or starts with, the given company name — else none. */
+    private static String pickByName(List<Stock> hits, String name) {
+        List<Stock> exact = hits.stream().filter(s -> s.getName() != null && companyName(s.getName()).equals(name)).toList();
+        if (exact.size() == 1) return exact.get(0).getSymbol();
+        List<Stock> prefix = hits.stream().filter(s -> s.getName() != null && companyName(s.getName()).startsWith(name)).toList();
+        if (prefix.size() == 1) return prefix.get(0).getSymbol();
         return hits.size() == 1 ? hits.get(0).getSymbol() : null;
+    }
+
+    private List<Stock> searchStocks(String query) {
+        try {
+            return marketDataService.searchStocks(query);
+        } catch (Exception e) {
+            log.debug("Stock search failed while resolving '{}': {}", query, e.getMessage());
+            return List.of();
+        }
     }
 
     private static String up(String s) {
@@ -1584,6 +1663,20 @@ public class EmailLLMParserService {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    static final String EXCHANGE_ALERT_REASON = "An exchange's trade alert — the same trades are booked from your "
+        + "broker's contract note, which carries the trade date and charges this alert leaves out.";
+
+    /**
+     * The exchange's "Trades executed" alert, sent for every trade a broker reports. It repeats
+     * the contract note without the trade date, so booking from it as well would double-count.
+     */
+    static boolean isExchangeTradeAlert(String domain, String subject) {
+        if (domain == null || subject == null) return false;
+        String d = domain.toLowerCase(Locale.ROOT);
+        return (d.equals("nse.co.in") || d.endsWith(".nse.co.in") || d.equals("bseindia.com") || d.endsWith(".bseindia.com"))
+            && subject.toLowerCase(Locale.ROOT).contains("trades executed");
     }
 
     /** True when a claimed issuer isn't among the domains {@link IssuerDomainRegistry} lists for it. */

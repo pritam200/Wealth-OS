@@ -79,6 +79,43 @@ public class EmailReviewService {
         return stale.size();
     }
 
+    /**
+     * Starts a re-read of one attachment, which may run inside the re-read of its email. Returns
+     * the enclosing email's tracking set, to hand back to {@link #finishAttachmentReread}.
+     */
+    public Set<Integer> beginAttachmentReread() {
+        Set<Integer> outer = REREAD.get();
+        REREAD.set(new HashSet<>());
+        return outer;
+    }
+
+    /**
+     * Ends an attachment re-read. Like {@link #finishReread}, but only items in the attachment's
+     * own index range [{@code fromIndex}, {@code toIndex}) are dropped — the email body and its
+     * other attachments keep theirs — and the enclosing email's tracking is restored.
+     */
+    @Transactional
+    public int finishAttachmentReread(Long userId, String gmailMessageId, int fromIndex, int toIndex,
+                                      boolean readInFull, Set<Integer> outer) {
+        Set<Integer> queued = REREAD.get();
+        if (outer != null) {
+            if (queued != null) outer.addAll(queued);
+            REREAD.set(outer);
+        } else {
+            REREAD.remove();
+        }
+        if (!readInFull || queued == null || gmailMessageId == null) return 0;
+        List<EmailReviewItem> stale = repo.findByUserIdAndGmailMessageIdAndStatus(userId, gmailMessageId, ReviewStatus.PENDING)
+            .stream().filter(i -> i.getItemIndex() >= fromIndex && i.getItemIndex() < toIndex)
+            .filter(i -> !queued.contains(i.getItemIndex())).toList();
+        if (!stale.isEmpty()) {
+            repo.deleteAll(stale);
+            log.info("Re-read of an attachment of {} cleared {} superseded review item(s) for user {}",
+                gmailMessageId, stale.size(), userId);
+        }
+        return stale.size();
+    }
+
     /** Queues a whole-email placeholder (the extractor could not read it). Idempotent per gmail
      *  message — a re-sync updates the existing pending row instead of adding another, and never
      *  resurrects a resolved one. */

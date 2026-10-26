@@ -181,7 +181,7 @@ public class FinancialEventLedger {
     private static final Pattern LONG_DIGITS = Pattern.compile("\\d{9,}");
     private static final Pattern PAN = Pattern.compile("\\b[A-Z]{5}\\d{4}[A-Z]\\b");
 
-    static String mask(String s) {
+    public static String mask(String s) {
         if (s == null) return null;
         String out = CARD.matcher(s).replaceAll(m -> "••••" + last4(m.group()));
         out = LONG_DIGITS.matcher(out).replaceAll(m -> "••••" + last4(m.group()));

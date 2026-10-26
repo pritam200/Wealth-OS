@@ -123,6 +123,31 @@ class EmailLLMParserEventTypesTest {
     }
 
     @Test
+    @DisplayName("a contract note's company name cut off at 20 characters still resolves to the stock")
+    void truncatedCompanyName() throws Exception {
+        when(marketData.searchStocks("HERO MOTOCORP")).thenReturn(List.of(
+            Stock.builder().symbol("HEROMOTOCO").name("Hero MotoCorp Ltd").build()));
+        String line = "INE158A01026 HERO MOTOCORP LIMITE 1 5156.0000 5156.0000 5156.0000 on 10-09-2026";
+        ParsedEmail pe = extract(line, "{\"instrument_type\":\"EQUITY\",\"transaction_type\":\"BUY\","
+            + "\"symbol\":\"HERO MOTOCORP LIMITE\",\"isin\":\"INE158A01026\",\"quantity\":1,\"price\":5156,"
+            + "\"amount_inr\":5156,\"transaction_date\":\"2026-09-10\",\"evidence\":\"" + line + "\"}");
+        assertThat(pe.getSymbol()).isEqualTo("HEROMOTOCO");
+    }
+
+    @Test
+    @DisplayName("an exchange's trade alert is recorded as a confirmation, neither booked nor queued")
+    void exchangeTradeAlert() throws Exception {
+        when(llm.complete(any(), any(), anyString())).thenReturn(LlmCompletion.builder()
+            .text("{\"transactions\":[{\"instrument_type\":\"EQUITY\",\"transaction_type\":\"BUY\",\"symbol\":\"AXISBANK\","
+                + "\"quantity\":5,\"price\":1260,\"amount_inr\":6300,\"transaction_date\":\"2026-10-14\","
+                + "\"evidence\":\"B Axis Bank Limited AXISBANK EQ 5 1260\"}],\"confidence\":0.95}").provider("t").model("m").build());
+        service.process(USER_ID, user, "nse-direct@nse.co.in", "Trades executed at NSE",
+            "B Axis Bank Limited AXISBANK EQ 5 1260", "msg-1", null);
+        verify(importer, never()).importParsedEmail(any(), any(), any(), any(), any());
+        verify(review, never()).enqueue(any(), any(), anyInt(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("an FD maturity becomes a DEPOSIT_CLOSE carrying the principal and TDS")
     void fdMaturity() throws Exception {
         String line = "FD matured on 10-09-2026: principal Rs 100000, Rs 106500 credited after TDS Rs 750";
