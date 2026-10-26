@@ -60,7 +60,9 @@ public class DataQualityService {
         LocalDateTime lastVerified = all.stream().map(CanonicalTransaction::getLastVerifiedAt).filter(Objects::nonNull).max(Comparator.naturalOrder()).orElse(null);
 
         List<LedgerIssue> openIssues = issueRepo.findByAccountIdInAndStatusInOrderByLastSeenAtDesc(accountIds, OPEN);
-        long mismatches = openIssues.stream().filter(i -> i.getType() == IssueType.HOLDING_MISMATCH).count();
+        Set<Long> demat = dematAccounts(accountIds);
+        long mismatches = openIssues.stream()
+            .filter(i -> i.getType() == IssueType.HOLDING_MISMATCH && !demat.contains(i.getAccountId())).count();
         long dups = openIssues.stream().filter(i -> i.getType() == IssueType.POSSIBLE_DUPLICATE).count();
         long prevented = candidates.countByUserIdAndStatus(userId, CandidateStatus.MATCHED_EXISTING) + candidates.countByUserIdAndStatus(userId, CandidateStatus.DUPLICATE);
 
@@ -75,6 +77,13 @@ public class DataQualityService {
             c(counts, ReconStatus.CONFLICT), dups, prevented, mismatches,
             c(counts, ReconStatus.PENDING) + c(counts, ReconStatus.UNCONFIRMED),
             bySource, authoritative, lastVerified, accountHealth(accountIds), holdingHealth(accountIds, openIssues), warnings);
+    }
+
+    /** The demat accounts a depository statement was filed under (see {@code CasImportService}). */
+    private Set<Long> dematAccounts(Set<Long> accountIds) {
+        return accounts.findAllById(accountIds).stream()
+            .filter(a -> com.marketai.cas.CasImportService.DEMAT_INSTITUTION.equalsIgnoreCase(a.getInstitution()))
+            .map(FinancialAccount::getId).collect(Collectors.toSet());
     }
 
     List<AccountHealth> accountHealth(Set<Long> accountIds) {
@@ -97,6 +106,7 @@ public class DataQualityService {
     List<HoldingHealth> holdingHealth(Set<Long> accountIds, List<LedgerIssue> openIssues) {
         Map<String, LedgerIssue> mismatchByKey = openIssues.stream().filter(i -> i.getType() == IssueType.HOLDING_MISMATCH)
             .collect(Collectors.toMap(i -> i.getAccountId() + ":" + i.getAssetId(), i -> i, (a, b) -> a));
+        Set<Long> demat = dematAccounts(accountIds);
         List<HoldingSnapshot> snaps = snapshots.findByAccountIdIn(accountIds);
         Map<Long, FinancialAsset> assetMap = assets.findAllById(snaps.stream().map(HoldingSnapshot::getAssetId).distinct().toList())
             .stream().collect(Collectors.toMap(FinancialAsset::getId, a -> a));
@@ -110,6 +120,13 @@ public class DataQualityService {
             FinancialAsset a = assetMap.get(any.getAssetId());
             LedgerIssue issue = mismatchByKey.get(k);
             String state = issue != null ? "NEEDS_RECONCILIATION" : r != null ? "VERIFIED" : "UNVERIFIED";
+            if (r != null && demat.contains(any.getAccountId()) && (c == null || c.getQuantity() == null || c.getQuantity().signum() == 0)) {
+                // A demat statement's shares are bought through broker accounts, so this account's own ledger is
+                // empty and its "0 calculated" says nothing. It verifies nothing on its own: the portfolio's
+                // holdings are compared with it by ISIN (DepositoryHoldingMismatchCheck, HoldingVerificationOverlay).
+                state = "REPORTED_ONLY";
+                issue = null;
+            }
             out.add(new HoldingHealth(any.getAccountId(), any.getAssetId(), a == null ? null : a.getName(), a == null ? null : a.getSymbol(),
                 a == null ? null : a.getIsin(), c == null ? null : c.getQuantity(), r == null ? null : r.getQuantity(), state,
                 r == null ? (c == null || c.getSourceType() == null ? null : "LEDGER (" + c.getSourceType() + ")") : r.getSourceType() + (r.getSourceProvider() == null ? "" : "/" + r.getSourceProvider()),

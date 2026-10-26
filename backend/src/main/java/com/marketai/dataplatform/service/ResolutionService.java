@@ -71,7 +71,11 @@ public class ResolutionService {
             }
             case REJECT -> reject(userId, issue, note);
             case MERGE -> merge(userId, issue, mergeTargetId, note);
-            case MARK_MANUAL_ADJUSTMENT -> manualAdjustment(userId, issue, note);
+            case MARK_MANUAL_ADJUSTMENT -> {
+                String extra = manualAdjustment(userId, issue, note);
+                String full = (note == null || note.isBlank() ? "" : note + " — ") + extra;
+                return issues.close(issue, IssueStatus.RESOLVED, action, full.length() > 500 ? full.substring(0, 500) : full, actor);
+            }
         }
         return issues.close(issue, IssueStatus.RESOLVED, action, note, actor);
     }
@@ -143,9 +147,11 @@ public class ResolutionService {
     /**
      * Records an explicit adjustment so the ledger agrees with the institution's holding. It is a
      * visible MANUAL transaction, dated today, attributable to the person who made it — not a
-     * silent edit of either side.
+     * silent edit of either side. Like a confirmation, it is then booked into the portfolio the rest
+     * of the app reads, or the reason it couldn't be is returned — otherwise the issue would close
+     * while every other screen kept the old quantity.
      */
-    private void manualAdjustment(Long userId, LedgerIssue issue, String note) {
+    private String manualAdjustment(Long userId, LedgerIssue issue, String note) {
         if (issue.getType() != IssueType.HOLDING_MISMATCH || issue.getDifference() == null || issue.getAccountId() == null || issue.getAssetId() == null)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A manual adjustment applies only to a holding mismatch");
         BigDecimal diff = issue.getDifference();   // reported - calculated
@@ -167,6 +173,10 @@ public class ResolutionService {
         audit.record(userId, String.valueOf(userId), "TRANSACTION", adj.getId(), "MANUAL_ADJUSTMENT", null,
             adj.getTransactionType() + " " + qty.stripTrailingZeros().toPlainString(), "resolves issue " + issue.getId());
         holdings.refresh(account.getOwnerUserId(), account.getId(), issue.getAssetId());
+        LegacyApplyService.Result r = legacyApply.apply(adj);
+        audit.record(userId, String.valueOf(userId), "TRANSACTION", adj.getId(), r.applied() ? "APPLIED_TO_PORTFOLIO" : "NOT_APPLIED_TO_PORTFOLIO",
+            null, null, r.message());
+        return r.message();
     }
 
     private void refresh(CanonicalTransaction t) {

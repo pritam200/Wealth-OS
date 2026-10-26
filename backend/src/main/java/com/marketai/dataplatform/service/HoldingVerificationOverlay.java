@@ -28,10 +28,10 @@ public class HoldingVerificationOverlay {
             if (health.holdings().isEmpty()) return;
             for (HoldingDto h : holdings) {
                 // The same fund can sit in several accounts: surface the most concerning state, then the least verified.
-                var m = health.holdings().stream().filter(x -> matches(h, x))
-                    .min(java.util.Comparator.comparingInt(x -> severity(x.state()))).orElse(null);
+                var all = health.holdings().stream().filter(x -> matches(h, x)).toList();
+                var m = all.stream().min(java.util.Comparator.comparingInt(x -> severity(stateFor(h, x, all)))).orElse(null);
                 if (m == null) continue;
-                h.setVerificationState(m.state());
+                h.setVerificationState(stateFor(h, m, all));
                 h.setVerificationSource(m.source());
                 h.setLastVerifiedAt(m.lastVerifiedAt());
                 h.setInstitutionQuantity(m.reportedQuantity());
@@ -39,6 +39,23 @@ public class HoldingVerificationOverlay {
         } catch (Exception e) {
             log.debug("Verification overlay unavailable: {}", e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * A demat statement line has no ledger of its own, so it is compared with the holding here: the
+     * holding is verified when its quantity is the depository's — in one demat account, or in all
+     * of them together — and otherwise left unverified with the depository's quantity shown, since a
+     * trade after the statement date explains a difference as well as an error does. The
+     * Reconciliation Center compares the two as of the statement date.
+     */
+    static String stateFor(HoldingDto h, DataQualityService.HoldingHealth x, List<DataQualityService.HoldingHealth> all) {
+        if (!"REPORTED_ONLY".equals(x.state())) return x.state();
+        if (h.getQuantity() == null) return "UNVERIFIED";
+        List<java.math.BigDecimal> reported = all.stream().filter(o -> "REPORTED_ONLY".equals(o.state()) && o.reportedQuantity() != null)
+            .map(DataQualityService.HoldingHealth::reportedQuantity).toList();
+        java.math.BigDecimal total = reported.stream().reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+        boolean same = h.getQuantity().compareTo(total) == 0 || reported.stream().anyMatch(q -> h.getQuantity().compareTo(q) == 0);
+        return same ? "VERIFIED" : "UNVERIFIED";
     }
 
     private static int severity(String state) {

@@ -39,6 +39,23 @@ public class ReconciliationService {
     private static final BigDecimal DRIFT_ABSOLUTE_FLOOR = new BigDecimal("1000");
     private static final double DRIFT_RELATIVE_TOLERANCE = 0.01; // 1%
 
+    static final String PORTFOLIO_INTEGRITY = "PORTFOLIO_INTEGRITY";
+    static final String DEPOSIT_INTEGRITY = "FD_RD_INTEGRITY";
+    static final String NET_WORTH_DRIFT = "NET_WORTH_DRIFT";
+
+    /** Every check {@link #checkAll} runs, the built-in ones first, so the list can't drift from what runs. */
+    public List<com.marketai.reconciliation.check.ReconciliationRegistry.CheckInfo> describeChecks() {
+        List<com.marketai.reconciliation.check.ReconciliationRegistry.CheckInfo> out = new ArrayList<>(List.of(
+            new com.marketai.reconciliation.check.ReconciliationRegistry.CheckInfo(PORTFOLIO_INTEGRITY, "PORTFOLIO",
+                "Holdings whose name can't be verified, or the same security held under two symbols, names or ISINs"),
+            new com.marketai.reconciliation.check.ReconciliationRegistry.CheckInfo(DEPOSIT_INTEGRITY, "FD",
+                "Fixed and recurring deposits that matured without being closed or renewed, or whose renewal link is broken"),
+            new com.marketai.reconciliation.check.ReconciliationRegistry.CheckInfo(NET_WORTH_DRIFT, "NET_WORTH",
+                "Today's net worth differs from the last recorded snapshot by more than market movement explains")));
+        out.addAll(checkRegistry.checks());
+        return out;
+    }
+
     public ReconciliationReportDto checkAll(Long userId) {
         List<ReconciliationIssue> issues = new ArrayList<>();
 
@@ -49,11 +66,15 @@ public class ReconciliationService {
                 .type(issue.getType())
                 .description(issue.getDescription())
                 .referenceId(issue.getHoldingId())
+                .checkId(PORTFOLIO_INTEGRITY)
                 .severity("MISMATCHED_TICKER".equals(issue.getType()) || "DUPLICATE_SYMBOL".equals(issue.getType()) ? "MEDIUM" : "HIGH")
                 .build());
         }
 
-        issues.addAll(trackingService.checkFdRdIntegrity(userId));
+        for (ReconciliationIssue issue : trackingService.checkFdRdIntegrity(userId)) {
+            if (issue.getCheckId() == null) issue.setCheckId(DEPOSIT_INTEGRITY);
+            issues.add(issue);
+        }
         issues.addAll(checkNetWorthDrift(userId));
 
         // Registered checks — ledger, ingestion and review-queue integrity. Added as a registry
@@ -78,7 +99,7 @@ public class ReconciliationService {
         if (diff.compareTo(tolerance) <= 0) return Collections.emptyList();
 
         return Collections.singletonList(ReconciliationIssue.builder()
-            .domain("NET_WORTH").type("NET_WORTH_DRIFT").severity("HIGH")
+            .domain("NET_WORTH").type("NET_WORTH_DRIFT").checkId(NET_WORTH_DRIFT).severity("HIGH")
             .description(String.format(
                 "Today's computed net worth (₹%s) differs from the last recorded snapshot (₹%s, %s) by more than expected — every screen should be reading from the same source, so this gap likely means a real data problem rather than normal market movement.",
                 current.getNetWorth(), latest.getNetWorth(), latest.getSnapshotDate()))

@@ -35,6 +35,9 @@ public class CasImportService {
 
     private final IngestionPipeline pipeline;
     private final ObjectMapper mapper;
+    /** Gives share holdings the ISIN their demat statement prints, so they can be checked by it. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DematIsinBackfill isinBackfill;
 
     public record SchemeSummary(String amc, String folio, String scheme, String isin, BigDecimal closingUnits,
                                 int transactions, boolean unitsReconcile) {}
@@ -146,7 +149,7 @@ public class CasImportService {
             res.created, res.duplicated + res.updated, res.rejected, holdings, warnings, Kind.MUTUAL_FUND);
     }
 
-    static final String DEMAT_INSTITUTION = "Demat (NSDL/CDSL)";
+    public static final String DEMAT_INSTITUTION = "Demat (NSDL/CDSL)";
 
     /** True when the PDF can't be opened without a password. */
     public boolean needsPassword(byte[] pdf) {
@@ -207,6 +210,11 @@ public class CasImportService {
         IngestionPipeline.Result res = pipeline.ingest(new IngestionPipeline.Request(userId, null, null, SourceType.CAS,
             "cas-import", ProviderMode.LIVE, records, null));
         if (res.rejected > 0 && !res.errors.isEmpty()) warnings.add(res.errors.get(0));
+        if (isinBackfill != null) {
+            int filled = isinBackfill.backfill(userId, parsed.holdings.stream()
+                .map(h -> new DematIsinBackfill.Line(h.isin, h.name)).toList());
+            if (filled > 0) warnings.add("Added the ISIN from this statement to " + filled + " holding(s) that had none, so they are checked against it.");
+        }
         return new Summary(parsed.asOf, parsed.asOf, holdings.size(), records.size(), res.created,
             res.duplicated + res.updated, res.rejected, holdings, warnings, Kind.DEMAT);
     }

@@ -21,4 +21,6 @@ public class ReconciliationIssue {
     // HIGH | MEDIUM | LOW
     private String severity;
     private Long referenceId;
+    // The check that found it; set by whoever runs the check when the check doesn't say.
+    private String checkId;
 }

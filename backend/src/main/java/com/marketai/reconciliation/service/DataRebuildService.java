@@ -174,13 +174,8 @@ public class DataRebuildService {
             if (f == null) refused.add(r.entity() + " " + r.id() + " is not a duplicate or misread");
             else if (r.entity() == DataAuditService.Entity.TRANSACTION) {
                 Transaction t = transactionRepo.findById(r.id()).orElse(null);
-                boolean misread = f.getClassification() == DataAuditService.Classification.MISREAD;
-                // A misread share sale or split writes only its ledger row (gains are derived from
-                // the ledger), so it can go; a fund sale also wrote a redemption record.
-                boolean removable = t != null && (t.getType() == Transaction.TransactionType.BUY
-                    || misread && t.getType() == Transaction.TransactionType.SPLIT
-                    || misread && t.getType() == Transaction.TransactionType.SELL && !isFund(t));
-                if (!removable) {
+                // The audit offered it under this same rule (DataAuditService.removalRefusal).
+                if (DataAuditService.removalRefusal(r.entity(), f.getClassification(), t) != null) {
                     // A duplicated or fund sale may have written a redemption/tax record; removing
                     // only the ledger row would leave that behind, so it is left for a person.
                     refused.add("TRANSACTION " + r.id() + " is a sale — remove it by hand with its redemption record");
@@ -223,10 +218,6 @@ public class DataRebuildService {
         log.info("Rebuild for user {} under backup {}: {}", userId, backup.getId(), summary);
         return RebuildResult.builder().backupId(backup.getId()).expensesRemoved(expenses).incomesRemoved(incomes)
             .transactionsRemoved(txns).refundsRelinked(relinked).holdingsRederived(rederived).summary(summary).build();
-    }
-
-    private static boolean isFund(Transaction t) {
-        return t.getHolding() != null && t.getHolding().getSymbol() != null && t.getHolding().getSymbol().endsWith(".MF");
     }
 
     static boolean usable(DataBackup b) {
