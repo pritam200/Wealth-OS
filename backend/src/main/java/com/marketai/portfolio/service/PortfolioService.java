@@ -68,6 +68,42 @@ public class PortfolioService {
             .map(Holding::getId).orElse(null);
     }
 
+    /** A holding a sale can be booked against, and the portfolio it is in. */
+    public record SellTarget(Long portfolioId, Long holdingId) {}
+
+    /**
+     * The holding a sale from {@code broker} reduces. In the broker's own portfolio, by symbol
+     * and then by ISIN. Failing that, the one open holding of the same security (ISIN, else
+     * symbol) elsewhere that isn't at another broker — one entered by hand or loaded from a
+     * statement into a general portfolio. With none, or more than one, there's no safe choice and
+     * the caller records the sale unmatched. A holding at a different broker is never reduced:
+     * the same stock at two brokers is two positions.
+     */
+    public Optional<SellTarget> findSellTarget(Long userId, Long portfolioId, String symbol, String isin, String broker,
+                                               java.util.function.Predicate<String> namedAfterABroker) {
+        Long here = findHoldingId(portfolioId, symbol);
+        if (here != null) return Optional.of(new SellTarget(portfolioId, here));
+        if (isin != null && !isin.isBlank()) {
+            List<Holding> byIsin = holdingRepository.findByPortfolioIdAndIsinIgnoreCase(portfolioId, isin.trim()).stream()
+                .filter(h -> h.getQuantity() != null && h.getQuantity().signum() > 0).toList();
+            if (byIsin.size() == 1) return Optional.of(new SellTarget(portfolioId, byIsin.get(0).getId()));
+        }
+        List<SellTarget> found = new ArrayList<>();
+        for (Portfolio p : getUserPortfolios(userId)) {
+            if (p.getId().equals(portfolioId)) continue;
+            if (broker != null && !sameBroker(p.getName(), broker) && namedAfterABroker.test(p.getName())) continue;
+            for (Holding h : holdingRepository.findByPortfolioId(p.getId())) {
+                if (h.getQuantity() == null || h.getQuantity().signum() <= 0) continue;
+                if (broker != null && h.getBroker() != null && !h.getBroker().isBlank() && !sameBroker(h.getBroker(), broker)) continue;
+                boolean same = isin != null && !isin.isBlank() && h.getIsin() != null
+                    ? h.getIsin().equalsIgnoreCase(isin.trim())
+                    : symbol != null && symbol.equalsIgnoreCase(h.getSymbol());
+                if (same) found.add(new SellTarget(p.getId(), h.getId()));
+            }
+        }
+        return found.size() == 1 ? Optional.of(found.get(0)) : Optional.empty();
+    }
+
     public boolean isDuplicateTrade(Long portfolioId, String symbol, LocalDate date, BigDecimal quantity, BigDecimal price) {
         if (portfolioId == null || symbol == null || date == null || quantity == null || price == null) return false;
         Optional<Holding> holding = holdingRepository.findByPortfolioIdAndSymbol(portfolioId, symbol.toUpperCase());

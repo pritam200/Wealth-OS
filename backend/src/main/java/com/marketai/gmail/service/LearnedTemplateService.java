@@ -46,6 +46,13 @@ public class LearnedTemplateService {
         return Optional.empty();
     }
 
+    /** Whether a learned wording reads this alert; nothing is recorded. */
+    public boolean matches(Long userId, String senderDomain, String subject, String text) {
+        if (userId == null || senderDomain == null || text == null) return false;
+        return repo.findByUserIdAndSenderDomainAndSubjectShapeOrderByTimesUsedDesc(userId, senderDomain, LearnedTemplates.subjectShape(subject))
+            .stream().anyMatch(lt -> LearnedTemplates.read(new LearnedTemplates.Shape(lt.getPattern(), lt.getConstants(), lt.getSample()), text).isPresent());
+    }
+
     /** Learns the wording of one transaction the model read and the checks accepted. Never throws. */
     public void learn(Long userId, String senderDomain, String subject, String text, JsonNode t) {
         try {

@@ -39,7 +39,7 @@ public final class LearnedTemplates {
 
     // Fields whose value is fixed by the wording. sub_type OWN_TRANSFER is left out: it depends on
     // the payee, and is worked out again on every read.
-    private static final Set<String> CONSTANTS = Set.of("instrument_type", "transaction_type", "sub_type", "status", "currency");
+    private static final Set<String> CONSTANTS = Set.of("instrument_type", "transaction_type", "sub_type", "status", "currency", "payment_method");
     private static final Set<String> LEARNABLE_INSTRUMENTS = Set.of("BANK", "UPI");
     /** Words of the sender's own wording a shape must keep, so it can't match just any sentence. */
     static final int MIN_LITERAL_WORDS = 4;

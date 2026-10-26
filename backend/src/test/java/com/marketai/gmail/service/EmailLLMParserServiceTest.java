@@ -473,4 +473,12 @@ class EmailLLMParserServiceTest {
         assertThat(result.getDuplicates()).isZero();
         assertThat(EmailLLMParserService.countsOf(result).getOutcome()).isEqualTo("RECONCILIATION_REQUIRED");
     }
+
+    @Test
+    void otherIssuerIsNoClaimAndBrandsCompareAcrossBusinessKinds() {
+        assertThat(service.issuerNotSupportedByDomain("OTHER", "axismf.com")).isFalse();
+        assertThat(service.issuerNotSupportedByDomain("AXIS_AMC", "axismf.com")).isFalse();
+        assertThat(service.issuerNotSupportedByDomain("ZERODHA", "hdfcbank.com")).isTrue();
+        assertThat(service.issuerNotSupportedByDomain("SBI_MF", "camsonline.com")).as("registrar sends for AMCs").isFalse();
+    }
 }

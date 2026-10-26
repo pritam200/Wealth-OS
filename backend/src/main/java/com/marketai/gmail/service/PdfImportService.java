@@ -67,8 +67,18 @@ public class PdfImportService {
         "axisdirect.in", "motilaloswal.com", "sbimf.com", "hdfcfund.com",
         "iciciprumf.com", "utimf.com", "nipponindiamf.com", "dfrankfurt.com",
         "franklintempletonindia.com", "dspmf.com", "tatamf.com",
-        "motilaloswal.com", "aboretummf.com", "bfranklintempletonind.com"
+        "motilaloswal.com", "aboretummf.com", "bfranklintempletonind.com",
+        // The domains these senders actually write from, per IssuerDomainRegistry.
+        "camsonline.co.in", "cdslindia.co.in", "icicipruamc.com", "nipponindiaim.com", "axismf.com", "mfcentral.com"
     ));
+
+    /** Whether statements from this sender (or a subdomain of one, "alerts.x.com") open with the PAN. */
+    static boolean usesPanPassword(String providerKey) {
+        if (providerKey == null) return false;
+        String k = providerKey.toLowerCase(java.util.Locale.ROOT);
+        for (String d : PAN_PASSWORD_DOMAINS) if (k.equals(d) || k.endsWith("." + d)) return true;
+        return false;
+    }
 
     private final PendingPdfRepository pendingPdfRepo;
     private final FinancialIdentityService financialIdentityService;
@@ -78,6 +88,9 @@ public class PdfImportService {
     private final GmailClientService gmailClient;
     private final PasswordCipher passwordCipher;
     private final EmailLLMParserService emailLlmParserService;
+    // Optional like the other late additions, so tests built on the constructor keep working.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.marketai.cas.CasImportService casImport;
     private final com.marketai.document.ocr.ScanTranscriber scanTranscriber;
     private final com.marketai.gmail.ledger.EmailManifestService manifestService;
 
@@ -113,6 +126,11 @@ public class PdfImportService {
             for (PendingPdf pdf : pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, List.of("NEEDS_OCR"))) {
                 if (pdf.getResultSummary() != null && pdf.getResultSummary().contains("image-capable model")) locked.add(pdf);
             }
+        }
+        // A contract note the model read is read once more by its fixed parser. That used to happen
+        // only when its email was fetched again, which never happens once the email is closed.
+        for (PendingPdf pdf : pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, List.of("IMPORTED", "IN_REVIEW"))) {
+            if (dueRereadByRules(pdf)) locked.add(pdf);
         }
         // Statements with no known password format get one model read of their email, here in the
         // background rather than in the page request.
@@ -255,10 +273,10 @@ public class PdfImportService {
 
         // 2. Cross-provider PAN sharing: try ALL saved PAN-domain passwords (multi-PAN households)
         List<SavedPdfPassword> panCandidates = new ArrayList<>();
-        if (saved == null && PAN_PASSWORD_DOMAINS.contains(pdf.getProviderKey())) {
+        if (saved == null && usesPanPassword(pdf.getProviderKey())) {
             List<SavedPdfPassword> allPasswords = savedPasswordRepo.findByUserIdOrderByUpdatedAtDescCreatedAtDesc(userId);
             for (SavedPdfPassword sp : allPasswords) {
-                if (PAN_PASSWORD_DOMAINS.contains(sp.getProviderKey())) {
+                if (usesPanPassword(sp.getProviderKey())) {
                     panCandidates.add(sp);
                 }
             }
@@ -512,7 +530,7 @@ public class PdfImportService {
             // Auto-unlock all other pending statements — same provider AND cross-provider PAN group
             int autoUnlocked = 0;
             List<PendingPdf> allPending = pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, PENDING_STATUSES);
-            boolean isPanPassword = PAN_PASSWORD_DOMAINS.contains(pdf.getProviderKey());
+            boolean isPanPassword = usesPanPassword(pdf.getProviderKey());
             for (PendingPdf sibling : allPending) {
                 if (sibling.getId().equals(pdf.getId())) continue;
                 // Same provider is no longer sufficient on its own: this institution may use a
@@ -522,7 +540,7 @@ public class PdfImportService {
                 boolean sameProvider = pdf.getProviderKey().equals(sibling.getProviderKey())
                     && java.util.Objects.equals(pdf.getDocumentType(), sibling.getDocumentType());
                 boolean panCrossProvider = isPanPassword && sibling.getProviderKey() != null
-                    && PAN_PASSWORD_DOMAINS.contains(sibling.getProviderKey());
+                    && usesPanPassword(sibling.getProviderKey());
                 if (!sameProvider && !panCrossProvider) continue;
                 try {
                     PdfUnlockResult sibResult = attemptUnlock(userId, sibling, user, gmail, password, true);
@@ -577,6 +595,17 @@ public class PdfImportService {
     }
 
     /** Every read of an attachment also brings its email's import manifest up to date. */
+    /** Marks a model read of a contract note its fixed parser was given a second chance at and missed. */
+    static final String REREAD_SUFFIX = "-reread";
+
+    /** A contract note the model read, in a layout a fixed parser now covers, not yet given to that parser. */
+    static boolean dueRereadByRules(PendingPdf pdf) {
+        return ("IMPORTED".equals(pdf.getStatus()) || "IN_REVIEW".equals(pdf.getStatus()))
+            // null: read before the reader was recorded, which was always the model.
+            && !"rules".equals(pdf.getReadBy()) && (pdf.getReadBy() == null || !pdf.getReadBy().endsWith(REREAD_SUFFIX))
+            && com.marketai.gmail.parser.ContractNoteParsers.covers(pdf.getProviderKey(), pdf.getSubject());
+    }
+
     private PdfUnlockResult attemptUnlock(Long userId, PendingPdf pdf, User user, Gmail gmail, String password, boolean isAutoAttempt) {
         try {
             return readAttachment(userId, pdf, user, gmail, password, isAutoAttempt);
@@ -595,6 +624,7 @@ public class PdfImportService {
     }
 
     private PdfUnlockResult readAttachment(Long userId, PendingPdf pdf, User user, Gmail gmail, String password, boolean isAutoAttempt) {
+        boolean rereadForRules = dueRereadByRules(pdf);
         List<String> steps = new ArrayList<>();
         steps.add(step("email_detected", "OK", "Email: " + truncate(pdf.getSubject(), 80)));
         steps.add(step("attachment_detected", "OK", "File: " + pdf.getFilename()));
@@ -717,6 +747,31 @@ public class PdfImportService {
         // instrument resolution, confidence gating, persistence, and review-queue routing.
         log.info("PDF extract start — pending {}, {} chars", pdf.getId(), text.length());
 
+        // A registrar's or depository's consolidated statement is read by the CAS parser, as an
+        // uploaded one is: every scheme's folio and name stay with its rows, and the closing units
+        // are checked against them. Sent to the extractor in 8,000-character pieces, rows in later
+        // pieces lost their scheme and went to review.
+        if (casImport != null && isStatementIssuer(pdf.getSender())) {
+            var cas = casImport.importEmailedText(userId, text,
+                com.marketai.document.classify.IssuerDomainRegistry.issuerFor(senderDomainOf(pdf.getSender())).orElse("CAS"));
+            if (cas.isPresent()) {
+                var s = cas.get();
+                steps.add(step("cas_parsed", "OK", s.schemes() + " holding(s), " + s.rows() + " transaction row(s) read by the CAS parser"));
+                steps.add(step("holdings_updated", "OK", s.created() + " new, " + s.duplicated() + " already recorded"));
+                pdf.setPipelineSteps(toJson(steps));
+                pdf.setReadBy("rules");
+                pdf.setTradesExtracted(s.rows());
+                pdf.setTradesImported(s.created());
+                pdf.setStatus("IMPORTED");
+                pdf.setResultSummary(truncate("Consolidated statement" + (s.periodTo() != null ? " to " + s.periodTo() : "") + ": "
+                    + s.schemes() + " holding(s), " + s.created() + " new record(s), " + s.duplicated() + " already recorded"
+                    + (s.warnings().isEmpty() ? "" : ". " + String.join(" ", s.warnings()))));
+                pendingPdfRepo.save(pdf);
+                return new PdfUnlockResult(true, "Read " + pdf.getFilename() + " as a consolidated statement: "
+                    + s.schemes() + " holding(s), " + s.created() + " new record(s)");
+            }
+        }
+
         EmailLLMParserService.Result result = emailLlmParserService.process(
             userId, user, pdf.getSender(), pdf.getSubject(), text, pdf.getGmailMessageId(), null,
             EmailLLMParserService.attachmentItemIndexBase(pdf.getFilename()),
@@ -724,7 +779,11 @@ public class PdfImportService {
                 scanned ? com.marketai.common.ledger.Provenance.OCR_LLM : com.marketai.common.ledger.Provenance.PDF_LLM));
 
         pdf.setTradesExtracted(result.getExtracted());
-        pdf.setReadBy(result.getReadBy() != null ? result.getReadBy() : result.getOutcome() == EmailLLMParserService.Outcome.NOT_FINANCIAL ? "rules" : null);
+        String readBy = result.getReadBy() != null ? result.getReadBy() : result.getOutcome() == EmailLLMParserService.Outcome.NOT_FINANCIAL ? "rules" : null;
+        // A contract note re-read for its fixed parser that the parser still couldn't read (the
+        // model read it again) is marked, so it isn't sent to the model again on every sync.
+        if (rereadForRules && readBy != null && !"rules".equals(readBy)) readBy = readBy + REREAD_SUFFIX;
+        pdf.setReadBy(readBy);
         pdf.setCounts(EmailLLMParserService.countsOf(result));
         pdf.setTradesImported(result.getImported());
         int accounted = result.getImported() + result.getDuplicates() + result.getResolved();
@@ -769,6 +828,16 @@ public class PdfImportService {
         pdf.setResultSummary(truncate(summary));
         pendingPdfRepo.save(pdf);
         return new PdfUnlockResult(true, result.getImported() + " item(s) imported from " + pdf.getFilename());
+    }
+
+    /** Registrars and depositories: the senders of consolidated account statements. */
+    private static boolean isStatementIssuer(String sender) {
+        String issuer = com.marketai.document.classify.IssuerDomainRegistry.issuerFor(senderDomainOf(sender)).orElse("");
+        return java.util.Set.of("CAMS", "KFintech", "MF Central", "CDSL", "NSDL").contains(issuer);
+    }
+
+    private static String senderDomainOf(String sender) {
+        return com.marketai.document.classify.ClassificationCandidate.email(sender, null, null).senderDomain();
     }
 
     private static String step(String name, String status, String detail) {
@@ -874,9 +943,9 @@ public class PdfImportService {
         if (token == null) { result.put("error", "No Gmail token"); return result; }
 
         SavedPdfPassword saved = savedPasswordRepo.findByUserIdAndProviderKey(userId, pdf.getProviderKey()).orElse(null);
-        if (saved == null && PAN_PASSWORD_DOMAINS.contains(pdf.getProviderKey())) {
+        if (saved == null && usesPanPassword(pdf.getProviderKey())) {
             for (SavedPdfPassword sp : savedPasswordRepo.findByUserIdOrderByUpdatedAtDescCreatedAtDesc(userId)) {
-                if (PAN_PASSWORD_DOMAINS.contains(sp.getProviderKey())) { saved = sp; break; }
+                if (usesPanPassword(sp.getProviderKey())) { saved = sp; break; }
             }
         }
         if (saved == null) { result.put("error", "No saved password found"); return result; }

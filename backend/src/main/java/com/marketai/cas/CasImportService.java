@@ -51,7 +51,24 @@ public class CasImportService {
 
     /** {@code expected}: when set, a CAS of the other kind is refused with a pointer to the right section. */
     public Summary importPdf(Long userId, byte[] pdf, String password, String institutionLabel, Kind expected) {
-        String text = extractText(pdf, password);
+        return importText(userId, extractText(pdf, password), institutionLabel, expected);
+    }
+
+    /**
+     * Reads a CAS already turned into text — one that arrived by email. Empty when the text isn't
+     * a statement these parsers read, so the caller can read it another way.
+     */
+    public java.util.Optional<Summary> importEmailedText(Long userId, String text, String institutionLabel) {
+        if (text == null) return java.util.Optional.empty();
+        if (!DematCasParser.looksLikeDemat(text) && CasParser.parse(text).schemes.isEmpty()) return java.util.Optional.empty();
+        try {
+            return java.util.Optional.of(importText(userId, text, institutionLabel, null));
+        } catch (ResponseStatusException e) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    private Summary importText(Long userId, String text, String institutionLabel, Kind expected) {
         Kind kind = DematCasParser.looksLikeDemat(text) ? Kind.DEMAT : Kind.MUTUAL_FUND;
         if (expected == Kind.MUTUAL_FUND && kind == Kind.DEMAT)
             throw bad("This is a demat (NSDL/CDSL) statement. Upload it under Stocks & demat holdings.");

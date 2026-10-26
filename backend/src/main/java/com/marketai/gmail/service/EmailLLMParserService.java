@@ -154,6 +154,25 @@ public class EmailLLMParserService {
         return classify(null, null, from, subject, body);
     }
 
+    /**
+     * Whether {@link #process} reads this plain email body without the model: screened out, a
+     * notice that only confirms what another document books, a bank's message with no amount,
+     * or a template a fixed parser or a learned wording reads. The sync then skips
+     * {@link #classify} too, whose only use for a body is the sender check below, so routine
+     * alerts cost no model call at all. Learned wordings are matched without counting a use.
+     */
+    public boolean readsWithoutModel(Long userId, User user, String from, String subject, String body) {
+        if (!looksFinancial(from, subject, body)) return true;
+        String domain = ClassificationCandidate.email(from, subject, null).senderDomain();
+        if (isExchangeTradeAlert(domain, subject) || isDepositoryMovementNotice(domain, subject)) return true;
+        if (body == null || chunk(body, MAX_CHARS).size() != 1) return false;
+        if (BankAlertParsers.isBank(domain) && !BankAlertParsers.statesAmount(body)
+                && BankAlertParsers.parse(domain, subject, body, null).isEmpty()) return true;
+        return BankAlertParsers.parse(domain, subject, body, user != null ? user.getName() : null).isPresent()
+            || com.marketai.gmail.parser.FundEmailParsers.parse(domain, subject, body).isPresent()
+            || (learnedTemplates != null && learnedTemplates.matches(userId, domain, subject, body));
+    }
+
     /** As {@link #classify(String, String, String)}, with the audit record attributed to the
      *  user and email it was run for (it used to be saved with neither). */
     public Classification classify(Long userId, String gmailMessageId, String from, String subject, String body) {
@@ -273,6 +292,13 @@ public class EmailLLMParserService {
         private String matchedProvider;
         /** What read the source: "rules" for a fixed parser, else the model's provider. */
         private String readBy;
+        /** Which reader: the fixed parser or learned wording ("axis-alert", "learned-12"), else the model. */
+        private String parser;
+
+        /** The reader to show against the email: the parser when one read it. */
+        public String parserOr(String fallback) {
+            return parser != null && !parser.isBlank() ? parser : fallback;
+        }
     }
 
     /**
@@ -750,6 +776,9 @@ public class EmailLLMParserService {
             .queuedForReview(queuedForReview).rejected(rejected).resolved(resolved)
             .totalsCheck(totalsCheck).totalsDetail(totals.detail())
             .readBy(lastCompletion != null ? lastCompletion.getProvider() : null)
+            .parser(lastCompletion == null ? null
+                : "rules".equals(lastCompletion.getProvider()) ? lastCompletion.getModel()
+                : lastCompletion.getProvider() + (lastCompletion.getModel() != null ? ":" + lastCompletion.getModel() : ""))
             .summaries(summaries).build();
     }
 
@@ -1816,14 +1845,28 @@ public class EmailLLMParserService {
     /** True when a claimed issuer isn't among the domains {@link IssuerDomainRegistry} lists for it. */
     boolean issuerNotSupportedByDomain(String claimedIssuer, String domain) {
         if (claimedIssuer == null || claimedIssuer.isBlank() || domain == null) return false;
+        // The classifier answers from a fixed list; OTHER means none of those, not a claim to be
+        // someone else. Counted as a mismatch, it held every ICICI Prudential, SBI MF, Axis MF and
+        // Nippon email for review as "sender could not be verified".
+        if (claimedIssuer.equalsIgnoreCase("OTHER") || claimedIssuer.equalsIgnoreCase("null")) return false;
         Optional<String> verified = IssuerDomainRegistry.issuerFor(domain);
         if (verified.isEmpty()) return false; // unknown domain — not evidence of spoofing on its own
         // Registrars send on behalf of AMCs and listed companies (an SBI Mutual Fund purchase
         // confirmation or a PFC dividend notice both arrive from CAMS/KFintech), so a different
         // named issuer there is the normal case, not impersonation.
         if (Set.of("CAMS", "KFintech", "MF Central").contains(verified.get())) return false;
-        String v = verified.get().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
-        String c = claimedIssuer.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        String v = brand(verified.get());
+        String c = brand(claimedIssuer);
+        if (v.isEmpty() || c.isEmpty()) return false;
         return !v.contains(c) && !c.contains(v);
+    }
+
+    /**
+     * The issuer's brand without what kind of business it is: the classifier's HDFC_AMC and
+     * AXIS_BANK name the same houses as the registry's "HDFC Mutual Fund" and "Axis Mutual Fund".
+     */
+    static String brand(String issuer) {
+        String s = issuer.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        return s.replaceAll("(mutualfund|assetmanagement|amc|mf|bank|securities|capital|broking|ltd|limited|india)+$", "");
     }
 }

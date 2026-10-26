@@ -1270,13 +1270,14 @@ public class ParsedEmailImporter {
         }
 
         if (pe.getType() == ParsedEmail.Type.TRADE_SELL) {
-            Long holdingId = portfolioService.findHoldingId(portfolio.getId(), symbol);
-            if (holdingId != null) {
-                sell(portfolio.getId(), holdingId, userId, quantity, pe.getPrice(), date, provenance, pe.getCharges());
+            var target = portfolioService.findSellTarget(userId, portfolio.getId(), symbol, pe.getIsin(), pe.getBroker(),
+                ParsedEmailImporter::namesABroker);
+            if (target.isPresent()) {
+                sell(target.get().portfolioId(), target.get().holdingId(), userId, quantity, pe.getPrice(), date, provenance, pe.getCharges());
                 log.info("Imported SELL: {} x {} @ ₹{}", symbol, quantity, pe.getPrice());
             } else {
                 log.warn("SELL trade for {} but no holding found — recording as transaction only", symbol);
-                return importSellAsTransaction(portfolio.getId(), userId, symbol, pe, date, quantity);
+                return importSellAsTransaction(portfolio.getId(), userId, symbol, pe, date, quantity, provenance);
             }
             return true;
         }
@@ -1326,7 +1327,7 @@ public class ParsedEmailImporter {
      * ₹1,50,000 to the year's taxable gains and inflated the estimate by tens of thousands.
      */
     private boolean importSellAsTransaction(Long portfolioId, Long userId, String symbol,
-            ParsedEmail pe, LocalDate date, BigDecimal quantity) throws ImportRejectedException {
+            ParsedEmail pe, LocalDate date, BigDecimal quantity, com.marketai.common.ledger.Provenance provenance) throws ImportRejectedException {
         BigDecimal saleValue = pe.getPrice().multiply(quantity);
         String desc = "Sale of " + symbol.replace(".NS", "").replace(".BO", "");
         if (isDuplicateIncome(userId, pe.toBuilder().amount(saleValue).build(), date, desc, null, null)) {
@@ -1339,6 +1340,9 @@ public class ParsedEmailImporter {
             .amount(saleValue)
             .source(com.marketai.income.entity.IncomeSource.UNMATCHED_SALE)
             .incomeDate(date)
+            // Traceable to its contract note, like every other imported row.
+            .sourceEmailId(provenance != null ? provenance.getSourceEmailId() : null)
+            .sourceFingerprint(provenance != null ? provenance.getSourceFingerprint() : null)
             .note("Sold " + quantity.stripTrailingZeros().toPlainString() + " units @ ₹" + pe.getPrice()
                 + " — gross proceeds, no matching holding so the cost basis and therefore the gain are unknown")
             .build());

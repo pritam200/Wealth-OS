@@ -250,6 +250,8 @@ public final class BankAlertParsers {
     /** Whether the sender is a bank (or card issuer) rather than a broker or fund house. */
     public static boolean isBank(String senderDomain) {
         if (senderDomain == null) return false;
+        // kotaksecurities.com maps to the issuer "Kotak", but it's the broker writing, not the bank.
+        if (com.marketai.document.classify.IssuerDomainRegistry.brokerFor(senderDomain).isPresent()) return false;
         String issuer = com.marketai.document.classify.IssuerDomainRegistry.issuerFor(senderDomain).orElse("");
         return issuer.contains("Bank") || issuer.equals("SBI") || issuer.equals("Kotak") || issuer.equals("IDFC First");
     }

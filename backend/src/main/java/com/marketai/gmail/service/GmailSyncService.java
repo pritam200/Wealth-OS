@@ -90,13 +90,53 @@ public class GmailSyncService {
         return domain.isEmpty() ? null : domain;
     }
 
-    private static boolean containsIgnoreCase(String text, String... keywords) {
-        if (text == null) return false;
-        String lower = text.toLowerCase();
-        for (String kw : keywords) {
-            if (kw != null && lower.contains(kw.toLowerCase())) return true;
+    private static final String EXCLUDED_BY = "Matches the excluded sender/pattern \"";
+    private static final String UNKNOWN_SENDER = "Not a bank, broker or fund house this app reads";
+
+    /**
+     * Gives a second attachment with the same name ("statement.pdf" twice) a name of its own,
+     * "statement (2).pdf". PDFs are kept per (email, name), so the second was taken for the first,
+     * logged as already processed and never read.
+     */
+    static List<GmailClientService.PdfAttachmentRef> distinctNames(List<GmailClientService.PdfAttachmentRef> refs) {
+        java.util.Map<String, Integer> seen = new java.util.HashMap<>();
+        List<GmailClientService.PdfAttachmentRef> out = new ArrayList<>();
+        for (GmailClientService.PdfAttachmentRef r : refs) {
+            String name = r.filename == null ? "attachment" : r.filename;
+            int n = seen.merge(name.toLowerCase(java.util.Locale.ROOT), 1, Integer::sum);
+            if (n == 1) { out.add(r); continue; }
+            int dot = name.lastIndexOf('.');
+            String renamed = dot > 0 ? name.substring(0, dot) + " (" + n + ")" + name.substring(dot) : name + " (" + n + ")";
+            out.add(new GmailClientService.PdfAttachmentRef(r.attachmentId, renamed));
         }
-        return false;
+        return out;
+    }
+
+    /** The first exclusion pattern the text contains, or null. */
+    private static String firstMatch(String text, List<String> patterns) {
+        if (text == null) return null;
+        String lower = text.toLowerCase();
+        for (String p : patterns) if (p != null && !p.isBlank() && lower.contains(p.toLowerCase())) return p;
+        return null;
+    }
+
+    /**
+     * An excluded email stays excluded while the pattern that excluded it is still set; once it's
+     * removed the email is read on the next sync. Rows recorded before the pattern was kept stay
+     * excluded while any pattern is set.
+     */
+    static boolean stillExcluded(ProcessedEmail e, List<String> patterns) {
+        String s = e.getResultSummary();
+        if (s != null && s.startsWith(EXCLUDED_BY) && s.endsWith("\"")) {
+            String p = s.substring(EXCLUDED_BY.length(), s.length() - 1);
+            return patterns.stream().anyMatch(x -> x != null && x.equalsIgnoreCase(p));
+        }
+        return !patterns.isEmpty();
+    }
+
+    /** Skipped only because its sender wasn't one read — read again once the sender is added. */
+    static boolean skippedAsUnknownSender(ProcessedEmail e) {
+        return e.getResultSummary() != null && e.getResultSummary().startsWith(UNKNOWN_SENDER);
     }
 
     public GmailSyncResult syncForUser(Long userId) {
@@ -240,8 +280,9 @@ public class GmailSyncService {
                     // NO_TRANSACTION is a completed read that found nothing to book — repeating the
                     // same LLM calls on every sync would only cost time on a full-mailbox backfill.
                     boolean permanentlyResolved = "IMPORTED".equals(existing.getStatus())
-                        || "EXCLUDED".equals(existing.getType())
-                        || (NO_TRANSACTION.equals(existing.getType()) && !worthRereading(existing))
+                        || ("EXCLUDED".equals(existing.getType()) && stillExcluded(existing, excludedPatterns))
+                        || (NO_TRANSACTION.equals(existing.getType()) && !worthRereading(existing)
+                            && !(skippedAsUnknownSender(existing) && financialSenderService.allows(userId, existing.getSender())))
                         || "PendingPdf".equals(existing.getMatchedParser())
                         || ("SKIPPED".equals(existing.getStatus()) && emailReviewService.isFullyResolved(userId, msgId));
                     if (permanentlyResolved) {
@@ -275,10 +316,10 @@ public class GmailSyncService {
                 List<String> steps = new ArrayList<>();
                 steps.add("Fetched email from Gmail");
 
-                if (!excludedPatterns.isEmpty()
-                        && containsIgnoreCase(from + " " + subject + " " + body, excludedPatterns.toArray(new String[0]))) {
+                String excludedBy = firstMatch(from + " " + subject + " " + body, excludedPatterns);
+                if (excludedBy != null) {
                     steps.add("Matched excluded sender/pattern filter — skipped");
-                    saveProcessed(userId, msgId, "EXCLUDED", "SKIPPED", "Matches an excluded sender/pattern filter", from, null);
+                    saveProcessed(userId, msgId, "EXCLUDED", "SKIPPED", EXCLUDED_BY + excludedBy + "\"", from, null);
                     logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                         .gmailMessageId(msgId).sender(from).subject(subject)
                         .status("EXCLUDED").detail("Matches excluded sender filter")
@@ -291,7 +332,7 @@ public class GmailSyncService {
                 // search already asks for just those; this also covers the incremental path, which
                 // is handed every new message id.
                 if (!financialSenderService.allows(userId, from)) {
-                    String summary = "Not a bank, broker or fund house this app reads — skipped: " + subject;
+                    String summary = UNKNOWN_SENDER + " — skipped: " + subject;
                     steps.add(summary);
                     saveProcessed(userId, msgId, NO_TRANSACTION, "SKIPPED", summary, from, RULES, subject, null);
                     logEntries.add(GmailSyncResult.SyncLogEntry.builder()
@@ -315,7 +356,7 @@ public class GmailSyncService {
                 // Check for PDF attachments — even when body extraction may succeed on its own,
                 // also try PDFs if the email has them (contract notes/statements often carry
                 // detail only present in the PDF, not the email body summary).
-                List<GmailClientService.PdfAttachmentRef> pdfRefs = gmailClient.findPdfAttachments(message);
+                List<GmailClientService.PdfAttachmentRef> pdfRefs = distinctNames(gmailClient.findPdfAttachments(message));
                 boolean queuedPdf = false;
                 // Classified once per email: it serves both the password hint and the body's sender check.
                 EmailLLMParserService.Classification bodyClassification = null;
@@ -335,9 +376,7 @@ public class GmailSyncService {
                             // A contract note the model read is read once more by its fixed parser:
                             // the fills the model could not confirm are booked, the ones it booked
                             // are recognised, and its review questions are cleared.
-                            boolean rereadByRules = ("IMPORTED".equals(existingPdf.getStatus()) || "IN_REVIEW".equals(existingPdf.getStatus()))
-                                && !"rules".equals(existingPdf.getReadBy())
-                                && com.marketai.gmail.parser.ContractNoteParsers.covers(providerKeyOf(existingPdf.getSender()), existingPdf.getSubject());
+                            boolean rereadByRules = PdfImportService.dueRereadByRules(existingPdf);
                             if (retryScan || rereadByRules || "NEEDS_PASSWORD".equals(existingPdf.getStatus()) || "PASSWORD_FAILED".equals(existingPdf.getStatus()) || "FAILED".equals(existingPdf.getStatus())) {
                                 steps.add("PDF " + pdf.filename + " — retrying (" + existingPdf.getStatus() + ")");
                                 try {
@@ -417,7 +456,9 @@ public class GmailSyncService {
 
                 // Single unconditional LLM extraction call for the email body — replaces the
                 // former 18-parser cascade plus the EmailIntelAgent/AiEmailExtractor fallbacks.
-                if (bodyClassification == null) {
+                // Classified only when the model will read it: an alert a fixed parser or a learned
+                // wording reads, or a notice recorded as read, needs no model call at all.
+                if (bodyClassification == null && !emailLlmParserService.readsWithoutModel(userId, user, from, subject, body)) {
                     bodyClassification = emailLlmParserService.classify(userId, msgId, from, subject, body);
                 }
                 EmailLLMParserService.Result result = emailLlmParserService.process(
@@ -497,11 +538,11 @@ public class GmailSyncService {
                         steps.add("LLM extraction: " + result.getImported() + " transaction(s) imported"
                             + (result.getQueuedForReview() > 0 ? ", " + result.getQueuedForReview() + " queued for review" : ""));
                         saveProcessed(userId, msgId, "IMPORTED", "IMPORTED",
-                            String.join("; ", result.getSummaries()), from, "EmailLLMParserService",
+                            String.join("; ", result.getSummaries()), from, result.parserOr("EmailLLMParserService"),
                             subject, EmailLLMParserService.countsOf(result));
                         logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                             .gmailMessageId(msgId).sender(from).subject(subject)
-                            .matchedParser("EmailLLMParserService").status("IMPORTED")
+                            .matchedParser(result.parserOr("EmailLLMParserService")).status("IMPORTED")
                             .itemsImported(result.getImported())
                             .detail(String.join("; ", result.getSummaries()))
                             .pipelineSteps(steps).build());
@@ -513,11 +554,11 @@ public class GmailSyncService {
                         queuedForReview += result.getQueuedForReview();
                         steps.add("Sent to review queue: " + result.getDetail());
                         saveProcessed(userId, msgId, "UNKNOWN", "SKIPPED",
-                            result.getDetail() != null ? result.getDetail() : "Queued for review", from, "EmailLLMParserService",
+                            result.getDetail() != null ? result.getDetail() : "Queued for review", from, result.parserOr("EmailLLMParserService"),
                             subject, EmailLLMParserService.countsOf(result));
                         logEntries.add(GmailSyncResult.SyncLogEntry.builder()
                             .gmailMessageId(msgId).sender(from).subject(subject)
-                            .matchedParser("EmailLLMParserService").status("REVIEW_REQUIRED")
+                            .matchedParser(result.parserOr("EmailLLMParserService")).status("REVIEW_REQUIRED")
                             .detail(result.getDetail()).pipelineSteps(steps).build());
                         skipped++;
                     }
