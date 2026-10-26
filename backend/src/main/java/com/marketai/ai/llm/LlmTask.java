@@ -43,6 +43,13 @@ public enum LlmTask {
     /** Temperature 0 regardless of configuration. */
     public boolean deterministic() { return structured || readsDocuments; }
 
+    /**
+     * A person is waiting on the screen for this answer. A rate limit then fails the call at
+     * once with when to try again, rather than holding the request through minutes of back-off
+     * that the mail sync can afford.
+     */
+    public boolean interactive() { return this == FINANCIAL_ANALYSIS; }
+
     /** Sends email or document content to the model (what Local AI keeps on this machine). */
     public boolean readsDocuments() { return readsDocuments; }
 }

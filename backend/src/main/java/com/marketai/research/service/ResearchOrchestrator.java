@@ -18,6 +18,8 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -69,24 +71,60 @@ public class ResearchOrchestrator {
         return run(builder.forFund(symbol, userId), mode);
     }
 
+    // Concurrent requests for the same subject (two screens, a double-mounted panel, the
+    // scheduler) share one run instead of each spending three model calls on it.
+    private final Map<String, CompletableFuture<ResearchResult>> inFlight = new ConcurrentHashMap<>();
+
     public ResearchResult run(ResearchContext ctx, Mode mode) {
-        long started = System.currentTimeMillis();
         String[] route = llm.describe(TASK).split(":", 2);
         String provider = route[0], model = route.length > 1 ? route[1] : "none";
         ResearchCache.Key key = new ResearchCache.Key(ctx.subjectType(), ctx.symbol(), ctx.userId(), ctx.marketDate(),
                 ctx.snapshotHash(), PROMPT_VERSION, provider, model);
 
         if (mode != Mode.REFRESH) {
-            Optional<ResearchResult> hit = cache.find(key);
+            // A partial run (the review failed) is shown but not served as final: the next run retries it.
+            Optional<ResearchResult> hit = cache.find(key).filter(r -> "OK".equals(r.getStatus()))
+                    .or(() -> cache.current(ctx.subjectType(), ctx.symbol(), ctx.userId(), ctx.marketDate(), PROMPT_VERSION));
             if (hit.isPresent()) return hit.get().toBuilder().fromCache(true).build();
         }
         ResearchResult base = base(ctx);
+        Optional<java.time.Instant> spent = llm.quotaSpentUntil(TASK);
+        if (spent.isPresent()) {
+            // Every model the task can use would refuse the call; say when research resumes.
+            return withPrevious(base, ctx, "UNAVAILABLE", "AI research paused: the free Gemini daily quota is used up — it resets at "
+                    + istTime(spent.get()) + ".");
+        }
         if (mode == Mode.CACHED) {
             return withPrevious(base, ctx, "NOT_RUN", "No research yet for the current data.");
         }
         if (!llm.isAvailable(TASK)) {
             return withPrevious(base, ctx, "DISABLED", "No model is configured for " + TASK.label() + " in LLM Configuration.");
         }
+
+        String flight = ctx.subjectType() + "|" + ctx.symbol() + "|" + ctx.userId();
+        CompletableFuture<ResearchResult> mine = new CompletableFuture<>();
+        CompletableFuture<ResearchResult> running = inFlight.putIfAbsent(flight, mine);
+        if (running != null) {
+            try {
+                return running.join();
+            } catch (java.util.concurrent.CompletionException e) {
+                throw e.getCause() instanceof RuntimeException re ? re : e;
+            }
+        }
+        try {
+            ResearchResult out = research(ctx, base, provider, model);
+            mine.complete(out);
+            return out;
+        } catch (RuntimeException e) {
+            mine.completeExceptionally(e);
+            throw e;
+        } finally {
+            inFlight.remove(flight, mine);
+        }
+    }
+
+    private ResearchResult research(ResearchContext ctx, ResearchResult base, String provider, String model) {
+        long started = System.currentTimeMillis();
 
         // Web research is gathered before the analyst pass so the analyst can cite it.
         List<Evidence> evidence = new ArrayList<>(ctx.evidence());
@@ -108,7 +146,7 @@ public class ResearchOrchestrator {
                         : SourceStatus.ok("Web research (search grounding)", found.size()));
             }
         } catch (LlmUnavailableException e) {
-            sources.add(SourceStatus.unavailable("Web research (search grounding)", e.getMessage()));
+            sources.add(SourceStatus.unavailable("Web research (search grounding)", reason(e)));
         }
 
         String context = render(ctx, evidence, sources);
@@ -126,9 +164,10 @@ public class ResearchOrchestrator {
                 report = validator.report(json.parse(analystCall.getText()).orElse(null));
             }
         } catch (LlmUnavailableException e) {
-            return withPrevious(base, ctx, "UNAVAILABLE", "AI research unavailable: " + e.getMessage());
+            return withPrevious(base, ctx, "UNAVAILABLE", "AI research unavailable: " + reason(e));
         } catch (ResearchOutputValidator.Invalid e) {
-            return withPrevious(base, ctx, "UNAVAILABLE", "AI research unavailable: the model's reply failed validation twice (" + e.getMessage() + ").");
+            log.info("Research reply for {} failed validation twice: {}", ctx.symbol(), e.getMessage());
+            return withPrevious(base, ctx, "UNAVAILABLE", "AI research unavailable: the model's reply failed validation twice. Try Refresh later.");
         }
 
         DevilsAdvocate review = null;
@@ -140,13 +179,15 @@ public class ResearchOrchestrator {
             reviewVersion = PromptLibrary.RESEARCH_DEVILS_ADVOCATE.tag();
         } catch (LlmUnavailableException e) {
             status = "PARTIAL";
-            statusReason = "Devil's-advocate review unavailable: " + e.getMessage();
+            statusReason = "Devil's-advocate review unavailable: " + reason(e) + " It is retried on the next run.";
         } catch (ResearchOutputValidator.Invalid e) {
             status = "PARTIAL";
-            statusReason = "Devil's-advocate review failed validation: " + e.getMessage();
+            log.info("Devil's-advocate reply for {} failed validation: {}", ctx.symbol(), e.getMessage());
+            statusReason = "Devil's-advocate review failed validation. It is retried on the next run.";
         } catch (Exception e) {
             status = "PARTIAL";
-            statusReason = "Devil's-advocate review failed: " + e.getClass().getSimpleName();
+            log.warn("Devil's-advocate review for {} failed: {}", ctx.symbol(), e.getClass().getSimpleName());
+            statusReason = "Devil's-advocate review failed. It is retried on the next run.";
         }
 
         NumberGuard guard = new NumberGuard(ctx.facts(), evidence);
@@ -171,6 +212,27 @@ public class ResearchOrchestrator {
         // Stored under the route actually used, so a fallback answer is not served as the primary model's.
         cache.save(out, PROMPT_VERSION);
         return out;
+    }
+
+    private static final DateTimeFormatter IST_TIME = DateTimeFormatter.ofPattern("HH:mm 'IST on' d MMM", Locale.ENGLISH);
+
+    static String istTime(java.time.Instant at) {
+        return at.atZone(IST).format(IST_TIME);
+    }
+
+    /**
+     * Why the model couldn't answer, in words fit to show: the category's own wording and, for
+     * a rate limit, when to try again. The exception's message is internal and never shown.
+     */
+    static String reason(LlmUnavailableException e) {
+        String why = e.getCategory().message() + ".";
+        java.time.Instant at = e.getRetryAt();
+        if (e.getCategory() != com.marketai.ai.llm.LlmErrorCategory.RATE_LIMITED || at == null) return why;
+        long seconds = java.time.Duration.between(java.time.Instant.now(), at).getSeconds();
+        if (seconds <= 0) return why + " Try again now.";
+        if (seconds < 120) return why + " Try again in about " + seconds + " seconds.";
+        if (seconds < 3600) return why + " Try again in about " + (seconds + 59) / 60 + " minutes.";
+        return why + " It resets at " + istTime(at) + ".";
     }
 
     /** The deterministic part, which stands on its own whether or not research runs. */

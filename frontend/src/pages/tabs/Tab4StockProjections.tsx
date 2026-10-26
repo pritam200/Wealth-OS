@@ -107,6 +107,8 @@ export function Tab4StockProjections() {
   const [search, setSearch] = useState('');
   const [cards, setCards] = useState<{ symbol: string; quote: QuoteDto | null; tech: TechnicalAnalysis | null; f1m: ForecastResponse | null; f3m: ForecastResponse | null; ai: string }[]>([]);
   const [loading, setLoading] = useState(false);
+  // Bumped per symbol when its research completes, so the analyst panel beside it reloads.
+  const [researched, setResearched] = useState<Record<string, number>>({});
   const [suggestions, setSuggestions] = useState<{ symbol: string; name: string }[]>([]);
   const [showSug, setShowSug] = useState(false);
 
@@ -222,9 +224,10 @@ export function Tab4StockProjections() {
             {/* projections + analyst below */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
               <ProjectionCard symbol={c.symbol} quote={c.quote} tech={c.tech} f1m={c.f1m} f3m={c.f3m} aiSummary={c.ai} />
-              <AnalystPanel symbol={c.symbol} name={c.quote?.name} />
+              <AnalystPanel symbol={c.symbol} name={c.quote?.name} reloadKey={researched[c.symbol]} />
             </div>
-            <ResearchSection subject={{ kind: 'stock', symbol: c.symbol, name: c.quote?.name }} />
+            <ResearchSection subject={{ kind: 'stock', symbol: c.symbol, name: c.quote?.name }}
+              onResult={() => setResearched(m => ({ ...m, [c.symbol]: (m[c.symbol] ?? 0) + 1 }))} />
           </div>
         ))}
       </div>

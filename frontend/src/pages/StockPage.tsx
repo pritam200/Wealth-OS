@@ -63,7 +63,9 @@ export function StockPage() {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [range, setRange] = useState(RANGES[1]);
   const [loading, setLoading] = useState(true);
-  const research = useResearch(symbol ? { kind: 'stock', symbol } : null);
+  // Bumped when research completes: the recommendation reads stored research, so it reloads then.
+  const [researched, setResearched] = useState(0);
+  const research = useResearch(symbol ? { kind: 'stock', symbol } : null, () => setResearched(n => n + 1));
 
   useEffect(() => {
     if (!symbol) return;
@@ -90,7 +92,7 @@ export function StockPage() {
       .then(r => { if (alive) setAssessment(r.data); })
       .catch(() => { if (alive) setAssessment(null); });
     return () => { alive = false; };
-  }, [symbol]);
+  }, [symbol, researched]);
 
   useEffect(() => {
     if (!symbol) return;

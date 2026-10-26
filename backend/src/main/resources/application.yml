@@ -110,6 +110,14 @@ app:
     # Takes every task that would run on the local model, and is Flash's fallback (its own free quota).
     lite-model: ${GEMINI_LITE_MODEL:gemini-3.5-flash-lite}
 
+  # Daily research of the market and held stocks at 16:00 IST on weekdays. Off by default:
+  # each subject is three model calls on the free Gemini quota the mail sync also uses.
+  research:
+    scheduler:
+      enabled: ${RESEARCH_SCHEDULER_ENABLED:false}
+      max-subjects: ${RESEARCH_SCHEDULER_MAX_SUBJECTS:10}
+      pace-seconds: 60
+
   sync:
     worker:
       # Small on purpose: the expensive step is the local LLM (~8s/email), and running many

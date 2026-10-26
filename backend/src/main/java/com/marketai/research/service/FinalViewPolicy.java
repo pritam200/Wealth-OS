@@ -12,7 +12,8 @@ import java.util.Set;
  * weighted score. A directional call needs both a validated quantitative edge and research that
  * agrees; research alone never creates a call, and disagreement is shown as disagreement.
  *
- * <p>Rules, in order:
+ * <p>Funds (rated NOT_RATED) take their own path: a research flag, else INSUFFICIENT_DATA
+ * without NAV history, else FUND_NOT_RATED. For everything else, rules in order:
  * <ol>
  *   <li>DATA_GATE — stale or insufficient price data: INSUFFICIENT_DATA.</li>
  *   <li>QUANT_ONLY — no research: a validated BUY/SELL stands, anything else is NO_ACTIONABLE_SIGNAL.</li>
@@ -34,6 +35,7 @@ public final class FinalViewPolicy {
         boolean validated = q != null && q.validated() && ("BUY".equals(quant) || "SELL".equals(quant));
         String lean = report != null ? report.getActionability() : null;
 
+        if ("NOT_RATED".equals(quant)) return fund(dataUsable, quant, lean);
         if (!dataUsable) {
             return new FinalView("INSUFFICIENT_DATA",
                     "Price data is " + ("STALE_DATA".equals(q != null ? q.seriesStatus() : null) ? "stale" : "insufficient")
@@ -69,6 +71,26 @@ public final class FinalViewPolicy {
                 ? "Neither the quantitative model nor the research finds an actionable signal."
                 : "Research leans " + lean + ", but there is no validated quantitative edge — research alone does not make a call.";
         return new FinalView("NO_ACTIONABLE_SIGNAL", why, "NO_EDGE", quant, lean);
+    }
+
+    /**
+     * A fund is never given a directional call (FUND_NOT_RATED), so price data does not gate it
+     * the way it gates a stock. What research can still say is that something needs looking at
+     * — a manager change, a mandate change — and that is shown, NAV history or not.
+     */
+    private static FinalView fund(boolean navUsable, String quant, String lean) {
+        if (FLAGS.contains(lean) && !"INSUFFICIENT_DATA".equals(lean)) {
+            return new FinalView(lean, "CONFLICTING_EVIDENCE".equals(lean)
+                    ? "Research found material evidence about this fund pointing both ways."
+                    : "Research found a change at the fund or fund house worth reviewing.", "RESEARCH_FLAG", quant, lean);
+        }
+        if (!navUsable) {
+            return new FinalView("INSUFFICIENT_DATA", "No NAV history is linked to this fund (it isn't matched to an AMFI scheme), "
+                    + "so its returns and risk can't be measured.", "DATA_GATE", quant, lean);
+        }
+        return new FinalView("NO_ACTIONABLE_SIGNAL", lean == null
+                ? "Funds are not given a buy or sell view; the figures are trailing measurements."
+                : "Funds are not given a buy or sell view; research found nothing that needs review.", "FUND_NOT_RATED", quant, lean);
     }
 
     private static String label(String s) {

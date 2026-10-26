@@ -311,4 +311,104 @@ class ResearchOrchestratorTest {
         assertThat(r.getReport().getNewsAssessment().evidence()).containsExactly("E3");
         assertThat(r.getReport().getNewsAssessment().basis()).isEqualTo("NEWS");
     }
+
+    @Test
+    @DisplayName("research completed for this session is served without a model call, even when the live data moved the exact key")
+    void sameSessionResearchIsCurrent() {
+        ResearchContext c = ctx(quant("BUY", true, "OK"), List.of(), filings());
+        ResearchResult stored = ResearchResult.builder().status("OK").symbol("TEST").marketDate("2026-09-29").dataSnapshotHash("older").build();
+        when(cache.current("STOCK", "TEST", 7L, "2026-09-29", ResearchOrchestrator.PROMPT_VERSION)).thenReturn(Optional.of(stored));
+
+        ResearchResult r = orch.run(c, ResearchOrchestrator.Mode.AUTO);
+
+        assertThat(r.isFromCache()).isTrue();
+        assertThat(r.getDataSnapshotHash()).isEqualTo("older");
+        verify(llm, never()).complete(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("a partial result stored under the exact key is not served as final: the next run retries the review")
+    void partialIsRetried() {
+        ResearchContext c = ctx(quant("BUY", true, "OK"), List.of(), filings());
+        when(cache.find(any())).thenReturn(Optional.of(ResearchResult.builder().status("PARTIAL").build()));
+        analystReplies(ANALYST_BUY);
+        devilReplies(DEVIL_LOW);
+
+        ResearchResult r = orch.run(c, ResearchOrchestrator.Mode.AUTO);
+
+        assertThat(r.getStatus()).isEqualTo("OK");
+        assertThat(r.isFromCache()).isFalse();
+    }
+
+    @Test
+    @DisplayName("with the daily quota spent on every route, no model is called and the reason says when it resets")
+    void quotaSpentShortCircuits() {
+        ResearchContext c = ctx(quant("BUY", true, "OK"), List.of(), filings());
+        when(llm.quotaSpentUntil(T)).thenReturn(Optional.of(java.time.Instant.parse("2026-10-27T07:00:00Z")));
+
+        ResearchResult r = orch.run(c, ResearchOrchestrator.Mode.AUTO);
+
+        assertThat(r.getStatus()).isEqualTo("UNAVAILABLE");
+        assertThat(r.getStatusReason()).contains("daily quota").contains("12:30 IST on 27 Oct");
+        verify(llm, never()).complete(any(), any(), anyString());
+        verify(llm, never()).webResearch(any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("failure reasons shown to people use the category's wording and a retry time, never the internal message")
+    void reasonsAreUserFacing() {
+        LlmUnavailableException minute = new LlmUnavailableException(com.marketai.ai.llm.LlmErrorCategory.RATE_LIMITED,
+                "Gemini call failed: HTTP 429").retryAt(java.time.Instant.now().plusSeconds(30));
+        assertThat(ResearchOrchestrator.reason(minute)).startsWith("The API quota or rate limit was reached.")
+                .contains("Try again in about").doesNotContain("HTTP 429");
+        LlmUnavailableException timeout = new LlmUnavailableException(com.marketai.ai.llm.LlmErrorCategory.TIMEOUT, "Gemini call timed out at uri x");
+        assertThat(ResearchOrchestrator.reason(timeout)).isEqualTo("The request timed out.");
+    }
+
+    @Test
+    @DisplayName("two requests for the same subject at once share one run")
+    void concurrentRequestsShareOneRun() throws Exception {
+        ResearchContext c = ctx(quant("BUY", true, "OK"), List.of(), filings());
+        java.util.concurrent.CountDownLatch inCall = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        when(llm.complete(eq(T), eq(PromptLibrary.RESEARCH_ANALYST), anyString())).thenAnswer(inv -> {
+            inCall.countDown();
+            release.await();
+            return completion(ANALYST_BUY);
+        });
+        devilReplies(DEVIL_LOW);
+
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var first = pool.submit(() -> orch.run(c, ResearchOrchestrator.Mode.AUTO));
+            inCall.await();
+            var second = pool.submit(() -> orch.run(c, ResearchOrchestrator.Mode.AUTO));
+            Thread.sleep(500);
+            release.countDown();
+            assertThat(second.get()).isSameAs(first.get());
+        } finally {
+            pool.shutdownNow();
+        }
+        verify(llm, times(1)).complete(eq(T), eq(PromptLibrary.RESEARCH_ANALYST), anyString());
+    }
+
+    @Test
+    @DisplayName("the snapshot hash ignores the live quote, live position value and a headline's time of day")
+    void hashIgnoresIntradayMovement() {
+        LocalDate day = LocalDate.of(2026, 9, 29);
+        Fact close = Fact.of("MARKET", "DATA", "Last daily close", 100.0, "₹", "2026-09-29", "Yahoo daily bars");
+        List<Evidence> morning = List.of(new Evidence(null, "NEWS", "RELIABLE", "Mint", "Order win", LocalDateTime.of(2026, 9, 29, 9, 0), null, LocalDateTime.now(), "HIGH", null));
+        List<Evidence> evening = List.of(new Evidence(null, "NEWS", "RELIABLE", "Mint", "Order win", LocalDateTime.of(2026, 9, 29, 18, 0), null, LocalDateTime.now(), "HIGH", null));
+        String a = ResearchContextBuilder.hash("STOCK", "TEST", day, List.of(close,
+                Fact.of("MARKET", "DATA", "Current price (LIVE)", 101.0, "₹", "2026-09-29T10:01", "Yahoo Finance quote"),
+                Fact.of("PORTFOLIO", "PORTFOLIO", "Position value", 10100.0, "₹", "2026-09-29", "Your holdings")), morning, null, 7L);
+        String b = ResearchContextBuilder.hash("STOCK", "TEST", day, List.of(close,
+                Fact.of("MARKET", "DATA", "Current price (LIVE)", 102.5, "₹", "2026-09-29T11:47", "Yahoo Finance quote"),
+                Fact.of("PORTFOLIO", "PORTFOLIO", "Position value", 10250.0, "₹", "2026-09-29", "Your holdings")), evening, null, 7L);
+        assertThat(a).isEqualTo(b);
+
+        String c = ResearchContextBuilder.hash("STOCK", "TEST", day, List.of(close,
+                Fact.of("PORTFOLIO", "PORTFOLIO", "Shares held", 200.0, "shares", "2026-09-29", "Your holdings")), morning, null, 7L);
+        assertThat(c).isNotEqualTo(a);
+    }
 }

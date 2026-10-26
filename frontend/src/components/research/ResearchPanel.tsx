@@ -93,8 +93,8 @@ function CrossChecks({ items, r }: { items: CrossCheck[]; r: ResearchResult }) {
 }
 
 /** Self-contained: loads (and if needed runs) research for a subject. */
-export function ResearchSection({ subject, title }: { subject: ResearchSubject; title?: string }) {
-  const state = useResearch(subject);
+export function ResearchSection({ subject, title, onResult }: { subject: ResearchSubject; title?: string; onResult?: (r: ResearchResult) => void }) {
+  const state = useResearch(subject, onResult);
   return <ResearchPanel state={state} title={title} />;
 }
 
@@ -126,6 +126,10 @@ export function ResearchPanel({ state, title = 'AI Research' }: { state: Researc
   return (
     <div className="card">
       {header}
+
+      {error && (
+        <p className="text-2xs text-amber-300 mb-3 flex items-center gap-1"><AlertTriangle size={11} /> {error}</p>
+      )}
 
       {running && !rep && (
         <p className="text-2xs text-gray-500 mb-3 flex items-center gap-1"><Loader2 size={11} className="animate-spin" />

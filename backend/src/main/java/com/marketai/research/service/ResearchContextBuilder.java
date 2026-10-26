@@ -103,7 +103,10 @@ public class ResearchContextBuilder {
         // History is stored under the exchange listing; a bare "RELIANCE" means the NSE one.
         if (!sym.startsWith("^") && !sym.contains(".") && !sym.contains("=")) sym = sym + ".NS";
         String base = sym.replace(".NS", "").replace(".BO", "");
-        String name = displayName != null ? displayName : stocks.findBySymbol(base).map(Stock::getName).orElse(base);
+        // The stock master's name, whichever screen asked: the name is the news query, and each
+        // screen passing its own spelling fetched different headlines for the same stock.
+        String name = stocks.findBySymbol(base).map(Stock::getName).filter(n -> !n.isBlank())
+                .orElse(displayName != null && !displayName.isBlank() ? displayName : base);
         List<Fact> facts = new ArrayList<>();
 
         TechnicalAnalysisDto ta = technical.analyse(sym);
@@ -664,16 +667,20 @@ public class ResearchContextBuilder {
                 ev.sources(), missing, quant, userId, hash);
     }
 
-    /** Values, dates and sources only — ids and retrieval times are left out so the same inputs hash the same. */
+    /**
+     * Values, dates and sources only — ids and retrieval times are left out so the same inputs
+     * hash the same. Facts that move tick by tick (the live quote, and the live-priced value of a
+     * position) are left out too, as is the time of day a headline was published: none is new
+     * information about the session, and each changed the hash on nearly every request.
+     */
     static String hash(String type, String sym, LocalDate marketDate, List<Fact> facts, List<Evidence> evidence, QuantAssessment q, Long userId) {
         StringBuilder sb = new StringBuilder().append(type).append('|').append(sym).append('|').append(marketDate).append('|').append(userId).append('\n');
         for (Fact f : facts) {
-            // Wall-clock facts would change the hash every minute; they are not new information.
-            if ("Market status".equals(f.label())) continue;
+            if (intraday(f)) continue;
             sb.append(f.category()).append('|').append(f.label()).append('|').append(f.value()).append('|').append(f.asOf()).append('\n');
         }
         List<String> ev = new ArrayList<>();
-        for (Evidence e : evidence) ev.add(e.kind() + '|' + e.source() + '|' + e.title() + '|' + e.publishedAt());
+        for (Evidence e : evidence) ev.add(e.kind() + '|' + e.source() + '|' + e.title() + '|' + (e.publishedAt() != null ? e.publishedAt().toLocalDate() : null));
         Collections.sort(ev);
         ev.forEach(x -> sb.append(x).append('\n'));
         if (q != null) sb.append(q.rating()).append('|').append(q.ruleOutput()).append('|').append(q.forecastSummary());
@@ -682,6 +689,18 @@ public class ResearchContextBuilder {
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private static final Set<String> LIVE_PORTFOLIO_FACTS = Set.of("Position value", "Current value", "Unrealised gain/loss");
+
+    /** A fact that changes with the live price or the clock rather than with the session's data. */
+    static boolean intraday(Fact f) {
+        String label = f.label() == null ? "" : f.label();
+        if ("Market status".equals(label)) return true;
+        if ("Yahoo Finance quote".equals(f.source())) return true;
+        if (!"PORTFOLIO".equals(f.category())) return false;
+        return LIVE_PORTFOLIO_FACTS.contains(label) || label.startsWith("Share of") || label.startsWith("Largest single")
+                || label.startsWith("Your exposure");
     }
 
     static String plan(String name) {

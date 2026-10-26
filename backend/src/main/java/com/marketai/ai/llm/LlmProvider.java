@@ -30,6 +30,14 @@ public interface LlmProvider {
     /** Models the provider offers, with their capabilities. */
     List<ModelInfo> listModels(ProviderSettings settings);
 
+    /**
+     * Until when this model's daily quota is known to be spent, or empty when it isn't (or the
+     * provider has no daily quota). Lets callers skip a call that would only be refused.
+     */
+    default Optional<java.time.Instant> quotaSpentUntil(String model) {
+        return Optional.empty();
+    }
+
     /** One model's entry; empty when the provider does not offer it. */
     default Optional<ModelInfo> findModel(ProviderSettings settings, String model) {
         if (model == null) return Optional.empty();

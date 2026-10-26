@@ -31,6 +31,11 @@ public class GeminiLlmProvider implements LlmProvider {
             .build();
     }
 
+    @Override
+    public java.util.Optional<java.time.Instant> quotaSpentUntil(String model) {
+        return java.util.Optional.ofNullable(geminiClient.dailyQuotaSpent(model) ? geminiClient.quotaResetsAt(model) : null);
+    }
+
     /**
      * The API lists which models can generate content but not their other capabilities, so
      * those come from the model family: Gemini chat models read images and PDFs, return JSON

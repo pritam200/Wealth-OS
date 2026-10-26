@@ -60,4 +60,20 @@ class FinalViewPolicyTest {
         assertThat(FinalViewPolicy.decide(true, quant("NO_ACTIONABLE_SIGNAL", false, "OK"), null, null).reason())
                 .startsWith("AI research unavailable");
     }
+
+    @Test
+    void aFundsViewReflectsResearchAndNeverSpeaksOfPriceData() {
+        QuantAssessment noNav = quant("NOT_RATED", false, "INSUFFICIENT_DATA");
+        FinalView flagged = FinalViewPolicy.decide(false, noNav, lean("RESEARCH_REQUIRED"), null);
+        assertThat(flagged.actionability()).isEqualTo("RESEARCH_REQUIRED");
+        assertThat(flagged.rule()).isEqualTo("RESEARCH_FLAG");
+
+        FinalView gated = FinalViewPolicy.decide(false, noNav, lean("HOLD"), null);
+        assertThat(gated.actionability()).isEqualTo("INSUFFICIENT_DATA");
+        assertThat(gated.reason()).contains("NAV history").doesNotContain("Price data");
+
+        FinalView measured = FinalViewPolicy.decide(true, quant("NOT_RATED", false, "OK"), lean("BUY"), null);
+        assertThat(measured.actionability()).isEqualTo("NO_ACTIONABLE_SIGNAL");
+        assertThat(measured.rule()).isEqualTo("FUND_NOT_RATED");
+    }
 }

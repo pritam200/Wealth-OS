@@ -10,6 +10,8 @@ package com.marketai.ai.llm;
 public class LlmUnavailableException extends RuntimeException {
 
     private final LlmErrorCategory category;
+    /** When a rate-limited or quota-spent call can be tried again, when the provider said. */
+    private java.time.Instant retryAt;
 
     public LlmUnavailableException(String message) { this(LlmErrorCategory.PROVIDER_ERROR, message); }
     public LlmUnavailableException(String message, Throwable cause) { this(LlmErrorCategory.PROVIDER_ERROR, message, cause); }
@@ -25,4 +27,11 @@ public class LlmUnavailableException extends RuntimeException {
     }
 
     public LlmErrorCategory getCategory() { return category; }
+
+    public java.time.Instant getRetryAt() { return retryAt; }
+
+    public LlmUnavailableException retryAt(java.time.Instant at) {
+        this.retryAt = at;
+        return this;
+    }
 }

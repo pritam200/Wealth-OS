@@ -139,6 +139,8 @@ export function Tab9AiAdvisor() {
   const [aiLoading, setAiLoading] = useState(false);
   const [market, setMarket] = useState<MarketOverview | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
+  // Bumped per symbol when its research completes, so the analyst panel above it reloads.
+  const [researched, setResearched] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -332,7 +334,7 @@ export function Tab9AiAdvisor() {
                     </div>
                     {open && (
                       <div className="mt-3 pt-3 border-t border-surface-border/40 space-y-3">
-                        {isStock && <AnalystPanel symbol={a.holding.symbol} name={a.holding.name} />}
+                        {isStock && <AnalystPanel symbol={a.holding.symbol} name={a.holding.name} reloadKey={researched[a.holding.symbol]} />}
                         {a.fundDetail && (
                           <div className="space-y-2 text-xs">
                             {a.fundDetail.factors.map((f, i) => (
@@ -344,7 +346,8 @@ export function Tab9AiAdvisor() {
                           </div>
                         )}
                         <ResearchSection subject={isStock ? { kind: 'stock', symbol: a.holding.symbol, name: a.holding.name } : { kind: 'fund', symbol: a.holding.symbol }}
-                          title={isStock ? 'AI Research' : 'AI fund research'} />
+                          title={isStock ? 'AI Research' : 'AI fund research'}
+                          onResult={() => setResearched(m => ({ ...m, [a.holding.symbol]: (m[a.holding.symbol] ?? 0) + 1 }))} />
                       </div>
                     )}
                   </div>
