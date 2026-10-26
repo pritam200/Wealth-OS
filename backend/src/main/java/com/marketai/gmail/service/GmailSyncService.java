@@ -47,6 +47,7 @@ public class GmailSyncService {
     private final ExcludedSenderRepository excludedSenderRepo;
     private final PdfImportService pdfImportService;
     private final com.marketai.ai.review.service.EmailReviewService emailReviewService;
+    private final com.marketai.ai.review.service.ReviewRuleService reviewRuleService;
     private final EmailLLMParserService emailLlmParserService;
     private final com.marketai.document.classify.SubjectPatternStage subjectPatternStage;
     private final com.marketai.sync.service.SyncLockService syncLockService;
@@ -584,6 +585,15 @@ public class GmailSyncService {
             } catch (Exception e) {
                 log.warn("Bulk auto-unlock failed: {}", e.getMessage());
                 actionItems.add("Locked statements could not be retried this run: " + e.getMessage());
+            }
+
+            // Items of a kind the user has already accepted or rejected are decided the same way,
+            // instead of asking the same question about every week's copy of the same email.
+            try {
+                int remembered = reviewRuleService.apply(user);
+                if (remembered > 0) summaries.add(remembered + " review item(s) decided like earlier ones of the same kind");
+            } catch (Exception e) {
+                log.warn("Remembered review decisions could not be applied for user {}: {}", userId, e.getMessage());
             }
 
             token.setLastSyncAt(LocalDateTime.now());

@@ -20,4 +20,6 @@ public class ReviewDecisionRequest {
     private String correctedCounterparty;
     private String correctedCategory;
     private String note;
+    /** ACCEPT and REJECT are remembered for items of the same kind unless this is false. */
+    private Boolean rememberForSimilar;
 }
