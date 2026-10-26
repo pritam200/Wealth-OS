@@ -21,7 +21,7 @@ class PromptLibraryTest {
 
     private static final Map<String, String> PINNED = Map.of(
         "email-classification-v1", "61fb7926c6246b79",
-        "transaction-extraction-v3", "d0944466a2246c94",
+        "transaction-extraction-v4", "b14f315d63f06aab",
         "scan-transcription-v1", "fbbe1913031b0286",
         "advisor-routing-v1", "8601dcb7de5c58af",
         "general-analyst-v2", "9fbf456c0ff07384",

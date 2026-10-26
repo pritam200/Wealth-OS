@@ -31,7 +31,7 @@ public final class PromptLibrary {
         "sender/content. Use null rather than a guess.");
 
     /** Transactions, closing balances and statement totals from an email or a statement's text. */
-    public static final PromptTemplate TRANSACTION_EXTRACTION = new PromptTemplate("transaction-extraction", 3,
+    public static final PromptTemplate TRANSACTION_EXTRACTION = new PromptTemplate("transaction-extraction", 4,
         "You extract EVERY financial event from an Indian bank/broker/AMC/RTA/merchant email or " +
         "statement. One email or document can hold many events (zero to hundreds): read all of it — " +
         "every table row, every page, forwarded messages and quoted text — and report each event " +
@@ -136,7 +136,8 @@ public final class PromptLibrary {
         "Extract each such line as its own element of closing_balances[], each with exactly " +
         "these fields: {\"folio\": string, \"scheme_name\": full MF scheme name exactly as " +
         "written, \"as_of_date\": ISO date yyyy-MM-dd, \"units\": the stated closing unit " +
-        "balance, \"evidence\": the exact sentence or line the folio and units were read from, " +
+        "balance, \"isin\": the scheme's ISIN when the statement prints it, else null, " +
+        "\"evidence\": the exact sentence or line the folio and units were read from, " +
         "verbatim}. Omit closing_balances entirely (empty array) when the statement states no " +
         "such summary line — never derive or estimate a closing balance from the transaction " +
         "rows yourself.\n" +

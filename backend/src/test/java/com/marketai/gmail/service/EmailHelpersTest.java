@@ -69,4 +69,14 @@ class EmailHelpersTest {
         assertThat(EmailLLMParserService.brand("HDFC_AMC")).isEqualTo("hdfc");
         assertThat(EmailLLMParserService.brand("Nippon India MF")).isEqualTo("nippon");
     }
+
+    @Test
+    @DisplayName("a closing balance keeps its ISIN only when the statement prints a real one")
+    void closingBalanceIsin() {
+        String text = "Axis Bluechip Fund - Direct Growth ISIN: INF846K01DP8 Closing Unit Balance: 120.500";
+        assertThat(EmailLLMParserService.statedIsin("inf846k01dp8", text)).isEqualTo("INF846K01DP8");
+        assertThat(EmailLLMParserService.statedIsin("INF209K01YN0", text)).as("not in the statement").isNull();
+        assertThat(EmailLLMParserService.statedIsin("Axis Bluechip", text)).isNull();
+        assertThat(EmailLLMParserService.statedIsin(null, text)).isNull();
+    }
 }

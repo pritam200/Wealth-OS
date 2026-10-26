@@ -1047,11 +1047,19 @@ public class EmailLLMParserService {
                 .userId(userId)
                 .folio(folio)
                 .schemeCode(schemeCode)
+                .isin(statedIsin(json.str(cb, "isin"), sourceText))
                 .asOfDate(asOfDate)
                 .statedUnits(units)
                 .sourceEmailId(gmailMessageId)
                 .build());
         }
+    }
+
+    /** The ISIN the model read, kept only when it is one and the statement prints it; two schemes in a folio match apart by it. */
+    static String statedIsin(String isin, String sourceText) {
+        if (isin == null || sourceText == null) return null;
+        String i = isin.trim().toUpperCase(Locale.ROOT);
+        return i.matches("IN[A-Z0-9]{9}[0-9]") && sourceText.toUpperCase(Locale.ROOT).contains(i) ? i : null;
     }
 
     /**
