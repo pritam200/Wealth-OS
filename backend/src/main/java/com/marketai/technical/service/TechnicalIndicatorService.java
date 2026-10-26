@@ -37,7 +37,10 @@ public class TechnicalIndicatorService {
     public static final int VOLATILITY_WINDOW = 120;
     public static final String TIMEFRAME = "1D";
 
-    @Cacheable(value = "technicals", key = "T(com.marketai.market.service.MarketDataService).canonicalSymbol(#symbol)")
+    // A "still loading" result is not cached: it would hide the downloaded history for the
+    // cache's 15 minutes after the download finished.
+    @Cacheable(value = "technicals", key = "T(com.marketai.market.service.MarketDataService).canonicalSymbol(#symbol)",
+            unless = "#result != null && #result.historyPending")
     public TechnicalAnalysisDto analyse(String symbol) {
         return analyse(marketDataService.getDailySeries(symbol, MIN_BARS));
     }
@@ -143,6 +146,7 @@ public class TechnicalIndicatorService {
                 .symbol(s.symbol())
                 .seriesStatus(s.status().name())
                 .dataIssues(s.issues())
+                .historyPending(s.pending())
                 .barsAvailable(s.size())
                 .barsRejected(s.rejected())
                 .firstBarDate(s.isEmpty() ? null : s.bars().get(0).getDate())

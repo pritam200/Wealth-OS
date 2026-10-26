@@ -37,16 +37,22 @@ class RecommendationEngineTest {
     }
 
     @Test
-    @DisplayName("No validated signal: the action comes from the trend, says so, and carries no confidence")
+    @DisplayName("No validated signal: the trend describes the position, says so, carries no confidence — and never makes a trade call")
     void trendDrivesTheActionWhenNoCallIsValidated() {
         when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "STRONG_DOWNTREND", null));
         AnalystAssessment a = engine.recommend("X", "X", -12.0, 1000.0, 100000.0);
-        assertThat(a.getNextAction()).isEqualTo("EXIT");
-        assertThat(a.getNextActionReason()).contains("not a backtested signal");
+        // The trend label has no tested edge, so a strong downtrend asks for a review, not an exit.
+        assertThat(a.getNextAction()).isEqualTo("REVIEW");
+        assertThat(a.getNextActionReason()).contains("not a backtested signal").contains("down 12.0%");
         assertThat(a.getConfidenceScore()).isNull();
 
+        // With no position, the trend is context only — no AVOID without a validated SELL.
         when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "STRONG_DOWNTREND", null));
-        assertThat(engine.recommend("X", "X", null, null, null).getNextAction()).isEqualTo("AVOID");
+        AnalystAssessment watch = engine.recommend("X", "X", null, null, null);
+        assertThat(watch.getNextAction()).isEqualTo(AnalystService.NO_ACTIONABLE_SIGNAL);
+        assertThat(watch.getNextActionReason()).contains("strong downtrend");
+        when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "UPTREND", null));
+        assertThat(engine.recommend("X", "X", null, null, null).getNextAction()).isEqualTo(AnalystService.NO_ACTIONABLE_SIGNAL);
         when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "UPTREND", null));
         assertThat(engine.recommend("X", "X", 5.0, 1000.0, 100000.0).getNextAction()).isEqualTo("CONTINUE");
         when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "DOWNTREND", null));
@@ -96,6 +102,38 @@ class RecommendationEngineTest {
     void stale() {
         when(analyst.assess(anyString(), any())).thenReturn(assessment("STALE_DATA", "UPTREND", null));
         assertThat(engine.recommend("X", "X").getNextAction()).isEqualTo("STALE_DATA");
+    }
+
+    @Test
+    @DisplayName("A symbol that has stopped getting prices says it may be suspended or delisted")
+    void staleAndInactive() {
+        when(analyst.assess(anyString(), any())).thenReturn(assessment("STALE_DATA", "UPTREND", null));
+        when(md.isInactive("X")).thenReturn(true);
+        AnalystAssessment a = engine.recommend("X", "X");
+        assertThat(a.getNextAction()).isEqualTo("STALE_DATA");
+        assertThat(a.getNextActionReason()).contains("suspended or delisted");
+    }
+
+    @Test
+    @DisplayName("History still downloading: no data yet, and the reason says it is coming rather than missing")
+    void historyPending() {
+        AnalystAssessment pending = AnalystAssessment.builder().symbol("X").rating("INSUFFICIENT_DATA")
+                .dataQuality("INSUFFICIENT").barsAvailable(0).historyPending(true)
+                .factorBreakdown(new ArrayList<>()).positives(new ArrayList<>()).risks(new ArrayList<>()).build();
+        when(analyst.assess(anyString(), any())).thenReturn(pending);
+        AnalystAssessment a = engine.recommend("X", "X");
+        assertThat(a.getNextAction()).isEqualTo("INSUFFICIENT_DATA");
+        assertThat(a.isHistoryPending()).isTrue();
+        assertThat(a.getNextActionReason()).contains("still downloading");
+    }
+
+    @Test
+    @DisplayName("A fund symbol is never sent to the stock engine, which would look for an exchange feed it doesn't have")
+    void fundSymbolOnTheStockEndpoint() {
+        AnalystAssessment a = engine.recommend("HDFCFLEXI.MF", null);
+        assertThat(a.getRating()).isEqualTo("NOT_RATED");
+        assertThat(a.getNextAction()).isEqualTo("INSUFFICIENT_DATA");
+        org.mockito.Mockito.verifyNoInteractions(analyst);
     }
 
     @Test

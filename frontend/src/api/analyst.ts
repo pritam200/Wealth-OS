@@ -25,6 +25,10 @@ export interface SignalValidation {
   baseUpRate: number | null;
   meanForwardReturnBuyPct: number | null; meanForwardReturnSellPct: number | null; meanForwardReturnAllPct: number | null;
   currentCallValidated: boolean; summary: string;
+  /** Daily bars the replay had, and the fewest with which any call could be validated. */
+  barsAvailable?: number; barsNeededToValidate?: number;
+  /** True when the history is too short for a BUY/SELL to pass validation at all. */
+  historyTooShort?: boolean;
 }
 
 export interface ModelExecution {
@@ -108,6 +112,8 @@ export interface AnalystAssessment {
   compositeScore: number | null;
   ruleOutput?: string | null;
   signalValidation?: SignalValidation | null;
+  /** History for this symbol is still downloading in the background — ask again shortly. */
+  historyPending?: boolean;
   /** Entry/stop/target for the rule's own BUY/SELL reading, validated or not. */
   modelExecution?: ModelExecution | null;
   trendAssessment?: TrendAssessment | null;
@@ -192,3 +198,12 @@ export interface IndexBenchmarks { nifty50: number | null; sensex: number | null
 export const benchmarksApi = {
   get: () => apiClient.get<IndexBenchmarks>('/api/recommendation/benchmarks'),
 };
+
+/** Back-off for re-asking while a symbol's history is still downloading. */
+export const PENDING_RETRY_MS = [5000, 15000, 45000];
+
+/** Plain wording for a validation gate no call could pass: "400 of 800 daily bars needed to validate a buy/sell call". */
+export function tooShortLabel(v: SignalValidation | null | undefined): string | null {
+  if (!v?.historyTooShort || v.barsNeededToValidate == null) return null;
+  return `${v.barsAvailable ?? 0} of ${v.barsNeededToValidate} daily bars needed to validate a buy/sell call`;
+}

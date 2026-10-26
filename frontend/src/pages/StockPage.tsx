@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CHART, tooltipStyle } from '../theme/chartTheme';
 import { marketApi } from '../api/market';
-import { recommendationApi, isInsufficient, NON_CALL_LABEL } from '../api/analyst';
+import { recommendationApi, isInsufficient, NON_CALL_LABEL, PENDING_RETRY_MS } from '../api/analyst';
 import type { AnalystAssessment } from '../api/analyst';
 import { AiCopilot } from '../components/ai/AiCopilot';
 import { AnalysisDetails } from '../components/market/AnalysisDetails';
 import { ResearchPanel } from '../components/research/ResearchPanel';
 import { useResearch } from '../components/research/useResearch';
 import type { QuoteDto, TechnicalAnalysis, PriceHistory, NewsItem } from '../types';
-import { TrendingUp, TrendingDown, ExternalLink, HelpCircle } from 'lucide-react';
+import { TrendingUp, TrendingDown, ExternalLink, HelpCircle, RotateCw, Loader2 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { format, subDays } from 'date-fns';
 
@@ -59,6 +59,8 @@ export function StockPage() {
   const [quote, setQuote] = useState<QuoteDto | null>(null);
   const [tech, setTech] = useState<TechnicalAnalysis | null>(null);
   const [assessment, setAssessment] = useState<AnalystAssessment | null>(null);
+  const [verdictFailed, setVerdictFailed] = useState(false);
+  const [verdictAttempt, setVerdictAttempt] = useState(0);
   const [history, setHistory] = useState<PriceHistory[]>([]);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [range, setRange] = useState(RANGES[1]);
@@ -82,15 +84,25 @@ export function StockPage() {
 
   // Kept separate from the Promise.all above so a recommendation outage can't blank the
   // whole page, and so a slow engine call doesn't hold up the quote/chart render.
+  useEffect(() => { setAssessment(null); setVerdictAttempt(0); }, [symbol]);
+
   useEffect(() => {
     if (!symbol) return;
     let alive = true;
-    setAssessment(null);
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    setVerdictFailed(false);
     recommendationApi.get(symbol)
-      .then(r => { if (alive) setAssessment(r.data); })
-      .catch(() => { if (alive) setAssessment(null); });
-    return () => { alive = false; };
-  }, [symbol]);
+      .then(r => {
+        if (!alive) return;
+        setAssessment(r.data);
+        // History still downloading: ask again on a back-off rather than leaving "Insufficient data" up.
+        if (r.data.historyPending && verdictAttempt < PENDING_RETRY_MS.length) {
+          retry = setTimeout(() => { if (alive) setVerdictAttempt(n => n + 1); }, PENDING_RETRY_MS[verdictAttempt]);
+        }
+      })
+      .catch(() => { if (alive) setVerdictFailed(true); });
+    return () => { alive = false; if (retry) clearTimeout(retry); };
+  }, [symbol, verdictAttempt]);
 
   useEffect(() => {
     if (!symbol) return;
@@ -269,7 +281,9 @@ export function StockPage() {
                 <h2 className="font-semibold text-ink">Technical Analysis</h2>
                 <p className="text-2xs text-gray-600 mt-0.5">Indicator values below · verdict from the recommendation engine</p>
               </div>
-              <EngineVerdict a={assessment} />
+              <EngineVerdict a={assessment} failed={verdictFailed}
+                pending={!!assessment?.historyPending && verdictAttempt < PENDING_RETRY_MS.length}
+                onRetry={() => setVerdictAttempt(n => n + 1)} />
             </div>
 
             {assessment?.nextActionReason && (
@@ -365,8 +379,25 @@ export function StockPage() {
 // literally the same value AI Advisor, the Analyst panel and the holdings badge display.
 // When the engine says it doesn't have enough data, this shows a neutral "Insufficient data"
 // chip — never a fabricated BUY/HOLD/SELL.
-function EngineVerdict({ a }: { a: AnalystAssessment | null }) {
-  if (!a) return <span className="text-xs text-gray-600 shrink-0">Verdict unavailable</span>;
+// A failed request and a still-downloading history are shown as such, not as "unavailable".
+function EngineVerdict({ a, failed, pending, onRetry }: { a: AnalystAssessment | null; failed: boolean; pending: boolean; onRetry: () => void }) {
+  if (failed) {
+    return (
+      <button type="button" onClick={onRetry} title="The recommendation engine didn't respond — click to try again."
+        className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 shrink-0">
+        <RotateCw size={12} /> Verdict failed to load · retry
+      </button>
+    );
+  }
+  if (pending) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-gray-500 shrink-0"
+        title="Price history for this symbol is still downloading; the verdict appears once it's in.">
+        <Loader2 size={12} className="animate-spin" /> Loading history…
+      </span>
+    );
+  }
+  if (!a) return <span className="inline-flex items-center gap-1 text-xs text-gray-600 shrink-0"><Loader2 size={12} className="animate-spin" /> Loading verdict…</span>;
 
   if (isInsufficient(a)) {
     return (

@@ -51,6 +51,24 @@ public record DailySeries(
         return status == SeriesStatus.STALE_DATA;
     }
 
+    /** Issue code marking a series whose history download was still waiting for its turn. */
+    public static final String HISTORY_PENDING = "HISTORY_PENDING";
+
+    /**
+     * True when there were too few bars only because this symbol's history download had not had
+     * its turn yet — the data is coming, not missing, so a caller should ask again shortly.
+     */
+    public boolean pending() {
+        return issues.stream().anyMatch(i -> HISTORY_PENDING.equals(i.code()));
+    }
+
+    /** This series with one more issue recorded. */
+    public DailySeries withIssue(DataIssue issue) {
+        List<DataIssue> more = new java.util.ArrayList<>(issues);
+        more.add(issue);
+        return new DailySeries(symbol, bars, status, List.copyOf(more), rejected, expectedSession, sessionsBehind, provider, lastUpdated);
+    }
+
     /** True when a warning-level issue falls inside the most recent {@code window} bars. */
     public boolean hasWarningWithin(int window, String code) {
         if (bars.isEmpty()) return false;

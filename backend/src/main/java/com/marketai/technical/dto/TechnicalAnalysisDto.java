@@ -84,6 +84,8 @@ public class TechnicalAnalysisDto {
     /** OK, DATA_QUALITY_WARNING, STALE_DATA or INSUFFICIENT_DATA — see {@link #dataIssues}. */
     private String seriesStatus;
     private List<DataIssue> dataIssues;
+    /** Too little history only because its download is still queued — ask again shortly. Never cached. */
+    private boolean historyPending;
 
     private Integer barsAvailable;
     private Integer barsRejected;

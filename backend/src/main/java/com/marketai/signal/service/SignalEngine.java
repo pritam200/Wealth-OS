@@ -63,12 +63,38 @@ public class SignalEngine {
     record Evaluation(SignalPayload.Type type, int composite, int ceiling, Map<String, SignalPayload.Factor> factors,
                       List<String> rationale, List<SignalPayload.Guardrail> guardrails, Double atr) {}
 
+    /**
+     * Results by the exact series they were computed from. The walk-forward replay re-runs the
+     * rule at every past session — up to ~2,400 evaluations — and a holdings page asks for every
+     * position at once, so the same unchanged history was replayed on every view. A new bar, a
+     * rewritten bar or a change in freshness gives a new key.
+     */
+    private final Map<String, SignalPayload> results = Collections.synchronizedMap(
+            new LinkedHashMap<>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, SignalPayload> eldest) {
+                    return size() > MAX_CACHED_RESULTS;
+                }
+            });
+    static final int MAX_CACHED_RESULTS = 500;
+
+    private static String resultKey(DailySeries s) {
+        PriceHistory last = s.last();
+        return String.join("|", s.symbol(), String.valueOf(s.bars().get(0).getDate()), String.valueOf(s.lastBarDate()),
+                String.valueOf(s.size()), String.valueOf(last.getClose()), String.valueOf(s.lastUpdated()),
+                s.status().name(), String.valueOf(s.expectedSession()));
+    }
+
     public SignalPayload analyse(String symbol) {
         DailySeries series = marketDataService.getDailySeries(symbol, MIN_BARS);
         List<PriceHistory> daily = series.bars();
         List<SignalPayload.Guardrail> guardrails = new ArrayList<>();
 
         if (series.status() == SeriesStatus.INSUFFICIENT_DATA) {
+            if (series.pending()) {
+                guardrails.add(guard("HISTORY_PENDING", "SUPPRESSED", "Price history is still downloading behind other symbols."));
+                return empty(series, SignalPayload.Type.INSUFFICIENT_DATA, guardrails, "Price history is still downloading; the signal appears once it's in.");
+            }
             guardrails.add(guard("INSUFFICIENT_BARS", "SUPPRESSED", daily.size() + " valid daily bars; " + MIN_BARS + " required."));
             return empty(series, SignalPayload.Type.INSUFFICIENT_DATA, guardrails, "Not enough price history to evaluate this symbol.");
         }
@@ -78,13 +104,31 @@ public class SignalEngine {
             return empty(series, SignalPayload.Type.STALE_DATA, guardrails, "Price history is stale; no signal is given on old data.");
         }
 
+        String key = resultKey(series);
+        SignalPayload cached = results.get(key);
+        if (cached != null) return cached;
+        SignalPayload computed = compute(series, daily, guardrails);
+        results.put(key, computed);
+        return computed;
+    }
+
+    private SignalPayload compute(DailySeries series, List<PriceHistory> daily, List<SignalPayload.Guardrail> guardrails) {
         Evaluation now = evaluate(daily.subList(Math.max(0, daily.size() - RULE_WINDOW), daily.size()), structureAnalyzer);
         guardrails.addAll(now.guardrails());
         SignalPayload.Validation validation = validate(daily, now.type());
 
         SignalPayload.Type shown = now.type();
         List<String> rationale = new ArrayList<>(now.rationale());
-        if ((shown == SignalPayload.Type.BUY || shown == SignalPayload.Type.SELL) && !validation.isCurrentCallValidated()) {
+        boolean call = shown == SignalPayload.Type.BUY || shown == SignalPayload.Type.SELL;
+        if (call && series.hasWarningWithin(RULE_WINDOW, "POSSIBLE_UNADJUSTED_SPLIT")) {
+            // An unadjusted split inside the window the rule reads puts its averages, RSI and ATR
+            // on two price scales, and the replay that validates the call reads the same bars.
+            // Neither can be trusted until the history is consistent, so no call is shown.
+            guardrails.add(guard("UNADJUSTED_SPLIT", "SUPPRESSED", "A possible unadjusted split or bonus within the last "
+                    + RULE_WINDOW + " bars distorts the indicators and the replay; no call until the history is consistent."));
+            rationale.add("Rule reads " + shown + ", but the price history it read contains a possible unadjusted split — shown as no actionable signal.");
+            shown = SignalPayload.Type.NO_ACTIONABLE_SIGNAL;
+        } else if (call && !validation.isCurrentCallValidated()) {
             guardrails.add(guard("UNVALIDATED_RULE", "SUPPRESSED", validation.getSummary()));
             rationale.add("Rule reads " + shown + ", but that call has no demonstrated edge on this instrument — shown as no actionable signal.");
             shown = SignalPayload.Type.NO_ACTIONABLE_SIGNAL;
@@ -240,7 +284,18 @@ public class SignalEngine {
         String summary = obs == 0 ? "Not enough history to replay the rule."
                 : String.format("Over %d past sessions: %d independent BUY calls (%s ended higher after %d sessions), %d independent SELL calls (%s ended lower); base rate %.0f%% higher.",
                     obs, buys, pct(buyHit), h, sells, pct(sellHit), base * 100);
+        // Calls h sessions apart fit at most ceil(obs / h) times into the replay, so below this
+        // much history the gate cannot be passed however the rule behaves. Said plainly, so "no
+        // signal" on a recently listed stock reads as "too young to judge", not as a verdict.
+        int needed = barsNeededToValidate();
+        boolean tooShort = bars.size() < needed;
+        if (tooShort) {
+            summary += String.format(" A BUY or SELL is only shown after %d independent calls %d sessions apart, which takes at least %d sessions "
+                    + "(about %.1f years) of history — this stock has %d, so no call can be validated yet.",
+                    MIN_INDEPENDENT_CALLS, h, needed, needed / SESSIONS_PER_YEAR, bars.size());
+        }
         return SignalPayload.Validation.builder()
+                .barsAvailable(bars.size()).barsNeededToValidate(needed).historyTooShort(tooShort)
                 .horizonSessions(h).observations(obs).buyCalls(buys).sellCalls(sells)
                 .buyHitRate(r4(buyHit)).buyHitRateCiLow(r4(buyLo)).sellHitRate(r4(sellHit)).sellHitRateCiLow(r4(sellLo))
                 .baseUpRate(r4(base))
@@ -250,6 +305,17 @@ public class SignalEngine {
                 .currentCallValidated(validated)
                 .summary(summary)
                 .build();
+    }
+
+    /** NSE sessions in a year, near enough for "about N years" in a message. */
+    private static final double SESSIONS_PER_YEAR = 248.0;
+
+    /**
+     * The fewest bars with which {@value #MIN_INDEPENDENT_CALLS} calls, {@value #VALIDATION_HORIZON}
+     * sessions apart, can all fit in the replay — the rule's window, then one horizon per call.
+     */
+    public static int barsNeededToValidate() {
+        return RULE_WINDOW + VALIDATION_HORIZON + (MIN_INDEPENDENT_CALLS - 1) * VALIDATION_HORIZON;
     }
 
     /** ATR-derived entry, stop and target — only for a validated call. 2×ATR stop, 2:1 target by construction. */

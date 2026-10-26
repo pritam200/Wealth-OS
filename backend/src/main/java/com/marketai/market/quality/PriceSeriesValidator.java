@@ -35,6 +35,8 @@ public final class PriceSeriesValidator {
 
         // Sort and de-duplicate: one bar per date, preferring the most recently written row.
         Map<LocalDate, PriceHistory> byDate = new TreeMap<>();
+        int duplicates = 0;
+        LocalDate lastDuplicate = null;
         for (PriceHistory p : rows == null ? List.<PriceHistory>of() : rows) {
             if (p == null || p.getDate() == null) { rejected++; continue; }
             if (p.getInterval() != null && !"1d".equals(p.getInterval())) continue;
@@ -53,11 +55,17 @@ public final class PriceSeriesValidator {
             PriceHistory prev = byDate.get(p.getDate());
             if (prev != null) {
                 rejected++;
-                issues.add(new DataIssue("DUPLICATE_CANDLE", DataIssue.INFO, p.getDate(),
-                        "Two stored bars for one date — kept the most recently updated."));
+                duplicates++;
+                if (lastDuplicate == null || p.getDate().isAfter(lastDuplicate)) lastDuplicate = p.getDate();
                 if (newer(prev, p)) continue;
             }
             byDate.put(p.getDate(), p);
+        }
+        // One line for all of them: a history stored twice over listed hundreds of identical
+        // "two bars for one date" notes on the stock page.
+        if (duplicates > 0) {
+            issues.add(new DataIssue("DUPLICATE_CANDLE", DataIssue.INFO, lastDuplicate,
+                    duplicates + " stored bar(s) repeated a date already stored — kept the most recently updated copy of each."));
         }
         List<PriceHistory> bars = new ArrayList<>(byDate.values());
 
@@ -134,10 +142,41 @@ public final class PriceSeriesValidator {
         return v != null && v.signum() > 0;
     }
 
-    private static boolean newer(PriceHistory kept, PriceHistory candidate) {
-        java.time.LocalDateTime a = kept.getUpdatedAt(), b = candidate.getUpdatedAt();
-        if (a == null) return false;
-        return b == null || a.isAfter(b);
+    /**
+     * True when {@code kept} should stay over {@code candidate} for the same date: the later
+     * write wins (updated, else ingested), then the later insert (higher id). Two legacy copies
+     * with no timestamps used to resolve to whichever the query returned last, so a pre-split
+     * copy could be the one kept.
+     */
+    static boolean newer(PriceHistory kept, PriceHistory candidate) {
+        int c = compareNullsFirst(written(kept), written(candidate));
+        if (c != 0) return c > 0;
+        return compareNullsFirst(kept.getId(), candidate.getId()) >= 0;
+    }
+
+    private static java.time.LocalDateTime written(PriceHistory p) {
+        return p.getUpdatedAt() != null ? p.getUpdatedAt() : p.getIngestedAt();
+    }
+
+    private static <T extends Comparable<T>> int compareNullsFirst(T a, T b) {
+        if (a == null) return b == null ? 0 : -1;
+        return b == null ? 1 : a.compareTo(b);
+    }
+
+    /**
+     * Daily rows collapsed to one per date (the copy {@link #validate} would keep), oldest first.
+     * For readers that need the stored closes without the rest of validation, such as the price
+     * chart, so a duplicated history doesn't draw every point twice.
+     */
+    public static List<PriceHistory> latestPerDate(List<PriceHistory> rows) {
+        Map<LocalDate, PriceHistory> byDate = new TreeMap<>();
+        for (PriceHistory p : rows == null ? List.<PriceHistory>of() : rows) {
+            if (p == null || p.getDate() == null) continue;
+            if (p.getInterval() != null && !"1d".equals(p.getInterval())) continue;
+            PriceHistory prev = byDate.get(p.getDate());
+            if (prev == null || !newer(prev, p)) byDate.put(p.getDate(), p);
+        }
+        return new ArrayList<>(byDate.values());
     }
 
     /**
