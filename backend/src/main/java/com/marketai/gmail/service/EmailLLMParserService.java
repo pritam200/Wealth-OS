@@ -48,6 +48,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -1288,8 +1289,12 @@ public class EmailLLMParserService {
         return switch (instrumentType == null ? "" : instrumentType) {
             case "MF" -> Extraction.orReview(toMfParsedEmail(t, transactionType, amount, date),
                 "The mutual fund scheme could not be matched to an AMFI scheme, or the transaction type was unclear.");
-            case "EQUITY" -> Extraction.orReview(toEquityParsedEmail(t, transactionType, amount, date),
-                "The stock symbol, quantity or price could not be confirmed.");
+            case "EQUITY" -> {
+                String refused = refuseAsShareTrade(t, transactionType, evidence);
+                yield refused != null ? Extraction.review(refused)
+                    : Extraction.orReview(toEquityParsedEmail(t, transactionType, amount, date),
+                        "The stock symbol, quantity or price could not be confirmed.");
+            }
             case "FD", "RD" -> toDepositParsedEmail(t, instrumentType, transactionType, amount, date);
             case "BANK", "UPI" -> toBankOrUpiParsedEmail(t, transactionType, amount, date, evidence);
             default -> Extraction.review("The kind of transaction (" + instrumentType + ") could not be determined.");
@@ -1481,6 +1486,57 @@ public class EmailLLMParserService {
             .sourceDescription("AI-extracted " + label.toLowerCase(Locale.ROOT) + ": " + symbol
                 + (ratioStated ? " " + from.stripTrailingZeros().toPlainString() + ":" + to.stripTrailingZeros().toPlainString() : ""))
             .build());
+    }
+
+    // A contract note's futures and options rows: "NSEFO - BT_O OPTIDX NIFTY 27OCT26 22300.00 PE".
+    private static final Pattern DERIVATIVE_ROW = Pattern.compile(
+        "(?i)\\b(NSEFO|BSEFO|NFO|OPTIDX|OPTSTK|FUTIDX|FUTSTK|OPTCUR|FUTCUR)\\b|\\b\\d+(?:\\.\\d+)?\\s*(CE|PE)\\b");
+
+    /**
+     * Why a share purchase or sale the model read must not be booked, or null. A futures or
+     * options row is not shares: Nifty puts were booked as Airtel and IndiGo shares, with an ISIN
+     * taken from another row of the note. And the ticker must be the company the line prints —
+     * the model read "HERO MOTORS LIMITED" as HEROMOTOCO, and its trades were priced at Hero
+     * MotoCorp's ₹5,000 for weeks.
+     */
+    String refuseAsShareTrade(JsonNode t, String transactionType, String evidence) {
+        if (!Set.of("BUY", "SELL", "RIGHTS", "BUYBACK").contains(transactionType) || evidence == null) return null;
+        if (DERIVATIVE_ROW.matcher(evidence).find()) {
+            return "This line is a futures or options trade, not shares, so it was not added to your holdings.";
+        }
+        String symbol = resolveSymbol(json.str(t, "symbol"), json.str(t, "isin"));
+        if (symbol == null) return null;   // the usual "could not be confirmed" review follows
+        String company = companyFor(symbol);
+        if (company == null || printedAs(evidence, symbol, company)) return null;
+        return "The line names " + printedName(evidence) + ", which is not " + company + " (" + symbol
+            + "), the stock it was read as — confirm which stock this is before it is added.";
+    }
+
+    /** Whether a line names this stock: its ticker as a word, or the start of its company name. */
+    static boolean printedAs(String evidence, String symbol, String company) {
+        String ev = evidence.toUpperCase(Locale.ROOT);
+        String bare = symbol.toUpperCase(Locale.ROOT).replaceAll("\\.(NS|BO)$", "");
+        if (Pattern.compile("(?<![A-Z0-9])" + Pattern.quote(bare) + "(?![A-Z0-9])").matcher(ev).find()) return true;
+        String key = companyName(company).replaceAll("[^A-Z0-9]", "");
+        if (key.length() < 4) return true;   // too short to tell anything apart
+        return ev.replaceAll("[^A-Z0-9]", "").contains(key.substring(0, Math.min(12, key.length())));
+    }
+
+    /** The words before BUY/SELL in a contract-note row, for the review's wording. */
+    private static String printedName(String evidence) {
+        Matcher m = Pattern.compile("(?i)-\\s*[A-Z]\\s+(.+?)\\s+(BUY|SELL)\\b").matcher(evidence);
+        return m.find() ? "\"" + m.group(1).trim() + "\"" : "another company";
+    }
+
+    /** The company name stored for a ticker, or null when it isn't known. */
+    private String companyFor(String symbol) {
+        String bare = symbol.toUpperCase(Locale.ROOT).replaceAll("\\.(NS|BO)$", "");
+        for (Stock s : searchStocks(bare)) {
+            String sym = s.getSymbol() == null ? "" : s.getSymbol().toUpperCase(Locale.ROOT).replaceAll("\\.(NS|BO)$", "");
+            if (sym.equals(bare) && s.getName() != null && !s.getName().isBlank()
+                    && !s.getName().replaceAll("[^A-Za-z0-9]", "").equalsIgnoreCase(bare)) return s.getName();
+        }
+        return null;
     }
 
     private ParsedEmail toEquityParsedEmail(JsonNode t, String transactionType, BigDecimal amount, LocalDate date) {

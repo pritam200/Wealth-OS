@@ -481,4 +481,14 @@ class EmailLLMParserServiceTest {
         assertThat(service.issuerNotSupportedByDomain("ZERODHA", "hdfcbank.com")).isTrue();
         assertThat(service.issuerNotSupportedByDomain("SBI_MF", "camsonline.com")).as("registrar sends for AMCs").isFalse();
     }
+
+    @Test
+    void optionsRowIsNeverBookedAsShares() throws Exception {
+        var t = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+            "{\"instrument_type\":\"EQUITY\",\"transaction_type\":\"BUY\",\"symbol\":\"INDIGO\",\"isin\":\"INE646L01027\",\"quantity\":65,\"price\":25}");
+        assertThat(service.refuseAsShareTrade(t, "BUY",
+            "NSEFO - BT_O OPTIDX NIFTY 27OCT26 22300.00 PE (BT) BUY 65 25.0000 0.0000 25.0000 0.0000 -1625.0000"))
+            .contains("futures or options");
+        assertThat(service.refuseAsShareTrade(t, "BUY", "Your SIP of Rs 500 is due")).isNull();
+    }
 }

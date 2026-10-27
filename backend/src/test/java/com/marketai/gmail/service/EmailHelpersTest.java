@@ -79,4 +79,15 @@ class EmailHelpersTest {
         assertThat(EmailLLMParserService.statedIsin("Axis Bluechip", text)).isNull();
         assertThat(EmailLLMParserService.statedIsin(null, text)).isNull();
     }
+
+    @Test
+    @DisplayName("a share trade's ticker must be the company the contract-note line prints")
+    void tickerMustMatchPrintedCompany() {
+        String heroMotors = "••••9710 09:39:13 ••••3291 09:39:13 NSE - M HERO MOTORS LIMITED BUY 500 111.5200 0.0000 111.5200 0.0000 -55760.0000";
+        assertThat(EmailLLMParserService.printedAs(heroMotors, "HEROMOTOCO.NS", "Hero MotoCorp Limited")).isFalse();
+        assertThat(EmailLLMParserService.printedAs(heroMotors.replace("HERO MOTORS LIMITED", "HERO MOTOCORP LIMITE"), "HEROMOTOCO.NS", "Hero MotoCorp Limited")).isTrue();
+        assertThat(EmailLLMParserService.printedAs("NSE - M HDFC ASSET MANAGEMEN BUY 7 2244.54", "HDFCAMC.NS", "HDFC Asset Management Company Limited")).isTrue();
+        assertThat(EmailLLMParserService.printedAs("Bought 10 RELIANCE at 1169.40", "RELIANCE.NS", "Reliance Industries Limited")).isTrue();
+        assertThat(EmailLLMParserService.printedAs("NSE - M LARSEN & TOUBRO LIMITE BUY 9 3675.69", "LT.NS", "Larsen & Toubro Ltd.")).isTrue();
+    }
 }
