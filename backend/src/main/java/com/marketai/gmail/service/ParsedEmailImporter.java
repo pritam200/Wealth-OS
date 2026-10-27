@@ -1366,7 +1366,15 @@ public class ParsedEmailImporter {
                 + "' does not look like a real scheme name — please confirm the fund.");
         }
 
-        Portfolio portfolio = getOrCreatePortfolio(userId, user);
+        String symbol;
+        if (pe.getFundName() != null) {
+            String clean = pe.getFundName().toUpperCase().replaceAll("[^A-Z0-9]", "");
+            symbol = clean.substring(0, Math.min(30, clean.length())) + ".MF";
+        } else {
+            symbol = "MFSIP.MF";
+        }
+        Portfolio portfolio = portfolioService.portfolioHoldingFund(userId, symbol, pe.getIsin()).orElse(null);
+        if (portfolio == null) portfolio = getOrCreatePortfolio(userId, user);
 
         // Units come from the document, or are derived as amount ÷ NAV. Both inputs must be
         // present *and* the NAV non-zero: a malformed email carrying "NAV: 0.00" would otherwise
@@ -1401,13 +1409,6 @@ public class ParsedEmailImporter {
             throw new ImportRejectedException("NAV for '" + pe.getFundName() + "' could not be determined.");
         }
 
-        String symbol;
-        if (pe.getFundName() != null) {
-            String clean = pe.getFundName().toUpperCase().replaceAll("[^A-Z0-9]", "");
-            symbol = clean.substring(0, Math.min(30, clean.length())) + ".MF";
-        } else {
-            symbol = "MFSIP.MF";
-        }
         // The name-derived symbol is only a label; the ISIN is the fund's identity. It finds
         // the holding when a statement spells the name differently, and it keeps a fund's
         // Growth and IDCW options apart when their names share the first 30 characters.

@@ -575,6 +575,22 @@ class PortfolioServiceTest {
     }
 
     @Test
+    void portfolioHoldingFund_findsTheCasHoldingInAnotherPortfolio() {
+        Portfolio broker = Portfolio.builder().id(PORTFOLIO_ID).name("Mirae Asset").build();
+        Portfolio funds = Portfolio.builder().id(11L).name("Mutual Funds").build();
+        when(portfolioRepository.findByUserIdOrderByIdAsc(USER_ID)).thenReturn(List.of(broker, funds));
+        Holding emailed = Holding.builder().id(1L).symbol("SBIAGGRESSIVEHYBRIDFUNDDIRECTG.MF").build();
+        Holding cas = Holding.builder().id(2L).symbol("SBIAGGRESSIVEHYBRIDFUNDDIRECTG.MF").isin("INF200K01RJ1").build();
+        when(holdingRepository.findByPortfolioIdAndSymbol(PORTFOLIO_ID, "SBIAGGRESSIVEHYBRIDFUNDDIRECTG.MF")).thenReturn(Optional.of(emailed));
+        when(holdingRepository.findByPortfolioIdAndSymbol(11L, "SBIAGGRESSIVEHYBRIDFUNDDIRECTG.MF")).thenReturn(Optional.of(cas));
+        when(holdingRepository.findByPortfolioIdAndIsinIgnoreCase(11L, "INF200K01RJ1")).thenReturn(List.of(cas));
+
+        assertThat(service.portfolioHoldingFund(USER_ID, "SBIAGGRESSIVEHYBRIDFUNDDIRECTG.MF", null)).contains(funds);
+        assertThat(service.portfolioHoldingFund(USER_ID, "OTHERNAME.MF", "INF200K01RJ1")).contains(funds);
+        assertThat(service.portfolioHoldingFund(USER_ID, "UNHELDFUND.MF", null)).isEmpty();
+    }
+
+    @Test
     void mergeDuplicateSymbols_leavesAGroupAloneWhenBothRowsHoldTheSameTrade() {
         User owner = User.builder().id(USER_ID).build();
         Portfolio pf1 = Portfolio.builder().id(PORTFOLIO_ID).user(owner).build();

@@ -320,6 +320,30 @@ public class PortfolioService {
     }
 
     /**
+     * The portfolio already holding this fund, by ISIN, else by its name-derived symbol: an
+     * emailed purchase belongs with the units a CAS loaded, which need not be in the first
+     * portfolio. Booked into the first instead, each SIP instalment the CAS already counted
+     * became a second holding of the same fund. Of several, one carrying an ISIN is preferred.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Portfolio> portfolioHoldingFund(Long userId, String nameSymbol, String isin) {
+        List<Portfolio> portfolios = getUserPortfolios(userId);
+        if (isin != null && !isin.isBlank()) {
+            for (Portfolio p : portfolios) {
+                if (!holdingRepository.findByPortfolioIdAndIsinIgnoreCase(p.getId(), isin.trim()).isEmpty()) return Optional.of(p);
+            }
+        }
+        Portfolio withoutIsin = null;
+        for (Portfolio p : portfolios) {
+            Optional<Holding> h = holdingRepository.findByPortfolioIdAndSymbol(p.getId(), nameSymbol.toUpperCase());
+            if (h.isEmpty()) continue;
+            if (h.get().getIsin() != null && !h.get().getIsin().isBlank()) return Optional.of(p);
+            if (withoutIsin == null) withoutIsin = p;
+        }
+        return Optional.ofNullable(withoutIsin);
+    }
+
+    /**
      * The symbol a fund transaction belongs under, given the name-derived symbol and the ISIN
      * (if the source stated one):
      * <ul>
