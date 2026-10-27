@@ -9,7 +9,16 @@ import java.util.Optional;
 public interface SavedPdfPasswordRepository extends JpaRepository<SavedPdfPassword, Long> {
     // Bare-domain lookup — still used where document type genuinely doesn't matter (the
     // cross-provider PAN-sharing search iterates every saved password for the user anyway).
-    Optional<SavedPdfPassword> findByUserIdAndProviderKey(Long userId, String providerKey);
+    List<SavedPdfPassword> findAllByUserIdAndProviderKeyOrderByUpdatedAtDesc(Long userId, String providerKey);
+
+    /**
+     * The most recently updated password for a sender. A sender can hold one per document type
+     * (m.Stock's contract notes and its statements), so a single-result query failed the sync
+     * of every email from it with "query did not return a unique result".
+     */
+    default Optional<SavedPdfPassword> findByUserIdAndProviderKey(Long userId, String providerKey) {
+        return findAllByUserIdAndProviderKeyOrderByUpdatedAtDesc(userId, providerKey).stream().findFirst();
+    }
 
     // The type-aware lookup: a saved password only auto-applies to a PDF of the same kind it
     // was learned from. Spring Data translates a null documentType into "IS NULL", so

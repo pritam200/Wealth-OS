@@ -890,7 +890,7 @@ public class PdfImportService {
             if (provider != null) clearedProviders.add(provider);
         }
         for (String provider : clearedProviders) {
-            savedPasswordRepo.findByUserIdAndProviderKey(userId, provider).ifPresent(sp -> {
+            savedPasswordRepo.findAllByUserIdAndProviderKeyOrderByUpdatedAtDesc(userId, provider).forEach(sp -> {
                 savedPasswordRepo.delete(sp);
                 log.info("Deleted broken saved password for provider {} (user {})", provider, userId);
             });
