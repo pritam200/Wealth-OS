@@ -3,6 +3,8 @@ import { FileText, Loader2, RefreshCw, Search, CheckCircle2, PlusCircle, AlertCi
 import { cardApi } from '../../api/card';
 import type { CardResponse, CardStatement, StatementDetail, StatementLine, LineStatus } from '../../api/card';
 import { useMaskedText } from '../shared/Amount';
+import { gmailApi } from '../../api/gmail';
+import type { PendingPdf } from '../../api/gmail';
 
 const fmtINR = (n: number | null | undefined) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n || 0);
@@ -35,6 +37,9 @@ export function CardStatementsSection({ cards, refreshKey }: { cards: CardRespon
   const [filter, setFilter] = useState<Filter>('ALL');
   const [q, setQ] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingPdf[]>([]);
+  const [lockedKey, setLockedKey] = useState(0);
+  const [statementsKey, setStatementsKey] = useState(0);
 
   useEffect(() => {
     if (cardId == null || !cards.some(c => c.id === cardId)) setCardId(cards[0]?.id ?? null);
@@ -47,7 +52,20 @@ export function CardStatementsSection({ cards, refreshKey }: { cards: CardRespon
       setStatements(sorted);
       setStatementId(sorted[0]?.id ?? null);
     }).catch(() => setStatements([]));
-  }, [cardId, refreshKey]);
+  }, [cardId, refreshKey, statementsKey]);
+
+  // This card's statement PDFs that no saved password opened, matched by the card's name in the subject.
+  useEffect(() => {
+    gmailApi.getPendingPdfs().then(r => setPending(r.data)).catch(() => setPending([]));
+  }, [lockedKey]);
+  const locked = useMemo(() => {
+    const card = cards.find(c => c.id === cardId);
+    if (!card) return [];
+    const own = card.name.toLowerCase().replace(card.issuer.toLowerCase(), '').replace(/\bbank\b/g, '').trim();
+    return pending.filter(p => (p.status === 'PASSWORD_FAILED' || p.status === 'NEEDS_PASSWORD')
+      && /credit card/i.test(p.subject ?? '')
+      && (own ? (p.subject ?? '').toLowerCase().includes(own) : (p.subject ?? '').toLowerCase().includes(card.issuer.toLowerCase())));
+  }, [pending, cards, cardId]);
 
   const loadDetail = useCallback(() => {
     if (cardId == null || statementId == null) { setDetail(null); return; }
@@ -156,10 +174,15 @@ export function CardStatementsSection({ cards, refreshKey }: { cards: CardRespon
       )}
 
       {statements.length === 0 ? (
-        <p className="text-xs text-gray-500 py-4 text-center">
-          No statement read for this card yet. Statements are read from your email on each sync; a locked statement PDF opens once
-          your PAN and date of birth are saved in Settings.
-        </p>
+        <div className="space-y-2 py-2">
+          {locked.length > 0 ? locked.map(pdf => (
+            <LockedStatement key={pdf.id} pdf={pdf} onUnlocked={() => { setLockedKey(k => k + 1); setStatementsKey(k => k + 1); }} />
+          )) : (
+            <p className="text-xs text-gray-500 py-2 text-center">
+              No statement read for this card yet. Statements are read from your email on each sync.
+            </p>
+          )}
+        </div>
       ) : loading && !detail ? (
         <div className="flex items-center gap-2 text-xs text-gray-500 py-4"><Loader2 size={12} className="animate-spin" /> Loading statement…</div>
       ) : detail && (
@@ -297,6 +320,41 @@ function Tile({ label, value, sub, tone }: { label: string; value: string; sub?:
       <div className="text-2xs text-gray-500">{label}</div>
       <div className={`text-sm font-bold font-mono ${tone === 'warn' ? 'text-neutral' : 'text-ink'}`}>{value}</div>
       {sub && <div className="text-2xs text-gray-600">{sub}</div>}
+    </div>
+  );
+}
+
+/** A statement PDF the saved PAN / date of birth didn't open: its password, entered once, is saved for this bank. */
+function LockedStatement({ pdf, onUnlocked }: { pdf: PendingPdf; onUnlocked: () => void }) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const unlock = async () => {
+    if (!password) return;
+    setBusy(true); setResult(null);
+    try {
+      const { data } = await gmailApi.unlockPdf(pdf.id, password);
+      setResult({ ok: data.unlocked, text: data.message });
+      if (data.unlocked) { setPassword(''); onUnlocked(); }
+    } catch {
+      setResult({ ok: false, text: 'Could not unlock it — check the password and try again.' });
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="rounded-lg border border-neutral/30 bg-neutral/5 p-2.5 space-y-1.5">
+      <div className="text-xs text-ink flex items-center gap-1.5"><AlertCircle size={12} className="text-neutral" /> Statement is locked</div>
+      <div className="text-2xs text-gray-500">
+        {pdf.subject} — the saved PAN and date of birth did not open it.{pdf.passwordHint ? ` Hint: ${pdf.passwordHint}` : ''} Enter its
+        password once; it is saved (encrypted) so later statements from this bank open on their own.
+      </div>
+      <div className="flex gap-2">
+        <input type="password" autoComplete="off" className="input-field text-xs py-1 flex-1" placeholder="Statement PDF password"
+          value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') unlock(); }} />
+        <button className="btn-primary text-xs px-3 py-1" disabled={busy || !password} onClick={unlock}>
+          {busy ? <Loader2 size={12} className="animate-spin" /> : 'Unlock'}
+        </button>
+      </div>
+      {result && <div className={`text-2xs ${result.ok ? 'text-bull' : 'text-bear'}`}>{result.text}</div>}
     </div>
   );
 }
