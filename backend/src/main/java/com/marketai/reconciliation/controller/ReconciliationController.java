@@ -18,6 +18,7 @@ public class ReconciliationController {
     private final com.marketai.reconciliation.service.ReconciliationIssueService issueService;
     private final com.marketai.reconciliation.service.DataAuditService dataAuditService;
     private final com.marketai.reconciliation.service.DataRebuildService dataRebuildService;
+    private final com.marketai.reconciliation.service.BrokerStatementResetService statementResetService;
 
     /** Read-only: every stored record classified VERIFIED / DUPLICATE / CONFLICT / CORRUPTED / MISSING / REQUIRES_RECONCILIATION. */
     @GetMapping("/data-audit")
@@ -49,6 +50,39 @@ public class ReconciliationController {
             @AuthenticationPrincipal User user,
             @RequestBody com.marketai.reconciliation.service.DataRebuildService.RebuildRequest req) {
         return ResponseEntity.ok(dataRebuildService.rebuild(user.getId(), req));
+    }
+
+    /** What resetting a broker portfolio's shares to its holdings statement would change. Nothing is written. */
+    @PostMapping(value = "/statement-reset/preview", consumes = "multipart/form-data")
+    public ResponseEntity<com.marketai.reconciliation.service.BrokerStatementResetService.Preview> statementResetPreview(
+            @AuthenticationPrincipal User user,
+            @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+            @RequestParam("portfolioId") Long portfolioId,
+            @RequestParam("asOf") @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate asOf) {
+        return ResponseEntity.ok(statementResetService.preview(user.getId(), portfolioId, asOf, statementRows(file)));
+    }
+
+    /** Needs a fresh backup id and confirm="RESET"; the same file and date as the preview. */
+    @PostMapping(value = "/statement-reset/apply", consumes = "multipart/form-data")
+    public ResponseEntity<com.marketai.reconciliation.service.BrokerStatementResetService.Preview> statementResetApply(
+            @AuthenticationPrincipal User user,
+            @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+            @RequestParam("portfolioId") Long portfolioId,
+            @RequestParam("asOf") @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate asOf,
+            @RequestParam("backupId") Long backupId,
+            @RequestParam("confirm") String confirm) {
+        return ResponseEntity.ok(statementResetService.apply(user.getId(), portfolioId, asOf, statementRows(file), backupId, confirm));
+    }
+
+    private static java.util.List<com.marketai.reconciliation.service.BrokerHoldingsStatement.Row> statementRows(
+            org.springframework.web.multipart.MultipartFile file) {
+        try {
+            return com.marketai.reconciliation.service.BrokerHoldingsStatement.parse(file.getBytes());
+        } catch (IllegalArgumentException e) {
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, e.getMessage());
+        } catch (java.io.IOException e) {
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, "The file could not be read.");
+        }
     }
 
     @GetMapping("/report")

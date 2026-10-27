@@ -131,6 +131,40 @@ export interface RebuildResult {
   summary: string;
 }
 
+export interface StatementResetLine {
+  symbol: string;
+  appQuantity: number;
+  appInvested: number;
+  statementQuantity: number;
+  statementInvested: number;
+  action: 'KEEP' | 'ADJUST' | 'ADD' | 'REMOVE';
+  merged: string[];
+  laterTrades: number;
+}
+
+export interface StatementResetPreview {
+  portfolioId: number;
+  portfolioName: string;
+  asOf: string;
+  lines: StatementResetLine[];
+  appInvested: number;
+  statementInvested: number;
+  holdingsBefore: number;
+  holdingsAfter: number;
+  tradesReplaced: number;
+  reviewsClosed: number;
+  summary: string | null;
+}
+
+const statementForm = (file: File, portfolioId: number, asOf: string, extra: Record<string, string> = {}) => {
+  const f = new FormData();
+  f.append('file', file);
+  f.append('portfolioId', String(portfolioId));
+  f.append('asOf', asOf);
+  Object.entries(extra).forEach(([k, v]) => f.append(k, v));
+  return f;
+};
+
 export const reconciliationApi = {
   getReport: () => apiClient.get<ReconciliationReport>('/api/reconciliation/report'),
   center: (refresh = true) => apiClient.get<ReconciliationCenter>('/api/reconciliation/center', { params: { refresh } }),
@@ -147,4 +181,9 @@ export const reconciliationApi = {
     apiClient.get<Blob>(`/api/reconciliation/backups/${id}/download`, { responseType: 'blob' }),
   rebuild: (backupId: number, remove: { entity: AuditEntity; id: number }[]) =>
     apiClient.post<RebuildResult>('/api/reconciliation/rebuild', { backupId, confirm: 'REBUILD', remove }),
+  statementResetPreview: (file: File, portfolioId: number, asOf: string) =>
+    apiClient.post<StatementResetPreview>('/api/reconciliation/statement-reset/preview', statementForm(file, portfolioId, asOf)),
+  statementResetApply: (file: File, portfolioId: number, asOf: string, backupId: number) =>
+    apiClient.post<StatementResetPreview>('/api/reconciliation/statement-reset/apply',
+      statementForm(file, portfolioId, asOf, { backupId: String(backupId), confirm: 'RESET' })),
 };

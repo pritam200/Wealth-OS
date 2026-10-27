@@ -1263,6 +1263,14 @@ public class ParsedEmailImporter {
         LocalDate date = requireDate(pe);
         BigDecimal quantity = BigDecimal.valueOf(pe.getQuantity());
 
+        // The portfolio's shares were reset to a broker statement dated on or after this trade:
+        // the trade is already inside its quantities, and booking it again would count it twice.
+        if (portfolio.getSharesAsOf() != null && !date.isAfter(portfolio.getSharesAsOf())) {
+            log.info("Trade {} {} on {} predates the {} holdings statement of {} — already reflected",
+                pe.getType(), symbol, date, portfolio.getName(), portfolio.getSharesAsOf());
+            return false;
+        }
+
         if (portfolioService.isDuplicateTrade(portfolio.getId(), symbol, date, quantity, pe.getPrice(), pe.getTradeReference(),
                 pe.getOccurrenceInSource())) {
             log.debug("Skipping duplicate trade: {} {} @ {} on {}", symbol, pe.getQuantity(), pe.getPrice(), date);

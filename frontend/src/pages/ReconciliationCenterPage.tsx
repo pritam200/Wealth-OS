@@ -6,6 +6,7 @@ import type { CheckStatus, ReconciliationCenter, StoredIssue } from '../api/reco
 import { portfolioApi } from '../api/portfolio';
 import { LoadFailure } from '../components/shared/LoadFailure';
 import { DataAuditCard } from '../components/reconciliation/DataAuditCard';
+import { StatementResetCard } from '../components/reconciliation/StatementResetCard';
 import { UnresolvedEmailEventsCard } from '../components/reconciliation/UnresolvedEmailEventsCard';
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -332,6 +333,8 @@ export function ReconciliationCenterPage({ onNavigate }: { onNavigate?: (tab: nu
       </div>
 
       <DataAuditCard />
+
+      <StatementResetCard />
 
       {data.recentlyResolved.length > 0 && (
         <div className="card space-y-2">

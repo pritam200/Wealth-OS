@@ -47,6 +47,11 @@ public class Portfolio {
     @Column(length = 500)
     private String description;
 
+    // The date of the broker holdings statement this portfolio's shares were last reset to. A
+    // share trade on or before it is already inside the statement's quantities.
+    @Column(name = "shares_as_of")
+    private java.time.LocalDate sharesAsOf;
+
     @JsonIgnore
     @OneToMany(mappedBy = "portfolio", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
