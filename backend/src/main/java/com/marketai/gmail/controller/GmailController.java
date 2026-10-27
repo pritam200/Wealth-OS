@@ -369,7 +369,7 @@ public class GmailController {
                     .summaries(Collections.singletonList("Gmail not configured"))
                     .logEntries(Collections.emptyList()).build());
         }
-        return ResponseEntity.ok(gmailSyncService.backfillCardStatements(user.getId(), "75d"));
+        return ResponseEntity.ok(gmailSyncService.backfillCardStatements(user.getId(), GmailSyncService.CARD_STATEMENT_WINDOW));
     }
 
     @PostMapping("/retry-failed")

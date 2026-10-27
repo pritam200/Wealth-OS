@@ -189,7 +189,9 @@ public class GmailSyncService {
     }
 
     /** Card statement emails: Gmail matches these subject words in any order. */
-    static final String CARD_STATEMENT_QUERY = "subject:(credit card statement)";
+    public static final String CARD_STATEMENT_QUERY = "subject:(credit card statement)";
+    /** Two statement cycles and a little more. */
+    public static final String CARD_STATEMENT_WINDOW = "75d";
 
     /**
      * Fetches the credit card statement emails of the last {@code lookbackPeriod} — the regular
@@ -279,6 +281,16 @@ public class GmailSyncService {
                     return emptyResult("Gmail token expired. Please disconnect and reconnect your Gmail account.");
                 }
                 throw httpEx;
+            }
+            // Card statements come once a month, so a 14-day window (or one history page) misses
+            // most of them. Every sync also takes in the statement emails of the last 75 days;
+            // those already handled are recognised by id below and cost nothing more.
+            try {
+                java.util.LinkedHashSet<String> withStatements = new java.util.LinkedHashSet<>(messageIds);
+                withStatements.addAll(gmailClient.listMessageIds(gmail, CARD_STATEMENT_WINDOW, CARD_STATEMENT_QUERY).ids());
+                messageIds = new ArrayList<>(withStatements);
+            } catch (Exception e) {
+                log.warn("Card statement search skipped for user {}: {}", userId, e.getMessage());
             }
 
             List<String> excludedPatterns = new ArrayList<>();
