@@ -15,6 +15,7 @@ import com.marketai.reconciliation.repository.DataBackupRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -180,6 +181,24 @@ class BrokerStatementResetTest {
         var p = service.preview(USER, PF, AS_OF, BrokerHoldingsStatement.parseCsv(CSV));
 
         assertThat(p.getReviewsClosed()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("the broker is found from share trades only: a fund filed in the portfolio doesn't make its registrar the broker")
+    void brokerSendersSkipFunds() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        when(jdbc.queryForList(sql.capture(), eq(String.class), any(), any())).thenReturn(List.of());
+        PortfolioRepository pr = mock(PortfolioRepository.class);
+        when(pr.findByIdAndUserId(PF, USER)).thenReturn(Optional.of(portfolio));
+        service = new BrokerStatementResetService(pr, mock(HoldingRepository.class), mock(TransactionRepository.class),
+            mock(PortfolioService.class), mock(DataBackupRepository.class),
+            reviewRepoWith(undated("SBI Mutual Fund <enq_sbimf@camsonline.com>", AS_OF.minusDays(3))), jdbc);
+
+        var p = service.preview(USER, PF, AS_OF, BrokerHoldingsStatement.parseCsv(CSV));
+
+        assertThat(sql.getValue()).contains("NOT LIKE '%.MF'");
+        assertThat(p.getReviewsClosed()).isZero();
     }
 
     private static EmailReviewItem undated(String sender, LocalDate queuedOn) {

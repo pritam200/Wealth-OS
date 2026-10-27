@@ -286,7 +286,7 @@ public class BrokerStatementResetService {
             SELECT DISTINCT lower(pe.sender) FROM transactions t
             JOIN holdings h ON h.id = t.holding_id
             JOIN processed_emails pe ON pe.gmail_message_id = t.source_email_id AND pe.user_id = ?
-            WHERE h.portfolio_id = ? AND pe.sender IS NOT NULL""", String.class, userId, portfolio.getId());
+            WHERE h.portfolio_id = ? AND pe.sender IS NOT NULL AND upper(h.symbol) NOT LIKE '%.MF'""", String.class, userId, portfolio.getId());
         Set<String> domains = new HashSet<>();
         for (String s : senders) {
             String d = domain(s);
