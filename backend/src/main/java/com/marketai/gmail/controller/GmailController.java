@@ -361,6 +361,17 @@ public class GmailController {
             () -> resyncResetService.resetForFullResync(userId)));
     }
 
+    /** Reads the credit card statements of the last ~2½ months, which the 14-day sync never reached. */
+    @PostMapping("/backfill-card-statements")
+    public ResponseEntity<GmailSyncResult> backfillCardStatements(@AuthenticationPrincipal User user) {
+        if (!gmailClientService.isConfigured()) {
+            return ResponseEntity.ok(GmailSyncResult.builder().imported(0).skipped(0).failed(0)
+                    .summaries(Collections.singletonList("Gmail not configured"))
+                    .logEntries(Collections.emptyList()).build());
+        }
+        return ResponseEntity.ok(gmailSyncService.backfillCardStatements(user.getId(), "75d"));
+    }
+
     @PostMapping("/retry-failed")
     public ResponseEntity<GmailSyncResult> retryFailed(@AuthenticationPrincipal User user) {
         if (!gmailClientService.isConfigured()) {

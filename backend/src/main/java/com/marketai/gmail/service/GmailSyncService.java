@@ -188,6 +188,40 @@ public class GmailSyncService {
         }
     }
 
+    /** Card statement emails: Gmail matches these subject words in any order. */
+    static final String CARD_STATEMENT_QUERY = "subject:(credit card statement)";
+
+    /**
+     * Fetches the credit card statement emails of the last {@code lookbackPeriod} — the regular
+     * sync looks back only 14 days, so statements from before the first sync were never read.
+     * Emails already handled are recognised by id and not read again.
+     */
+    public GmailSyncResult backfillCardStatements(Long userId, String lookbackPeriod) {
+        GmailToken token = tokenRepo.findByUserId(userId).orElse(null);
+        if (token == null) return emptyResult("Gmail not connected — please connect your Gmail account first.");
+        List<String> ids;
+        try {
+            Gmail gmail = gmailClient.buildGmailService(token.getAccessToken(), token.getRefreshToken(),
+                (newAccessToken, newRefreshToken, expiresIn) -> {
+                    token.setAccessToken(newAccessToken);
+                    if (newRefreshToken != null) token.setRefreshToken(newRefreshToken);
+                    token.setExpiresAt(LocalDateTime.now().plusSeconds(expiresIn != null ? expiresIn : 3600));
+                    tokenRepo.save(token);
+                });
+            ids = gmailClient.listMessageIds(gmail, lookbackPeriod, CARD_STATEMENT_QUERY).ids();
+        } catch (Exception e) {
+            log.warn("Card statement search failed for user {}: {}", userId, e.getMessage());
+            return emptyResult("Could not search Gmail for card statements: " + e.getMessage());
+        }
+        log.info("Card statement backfill for user {}: {} email(s) in the last {}", userId, ids.size(), lookbackPeriod);
+        if (ids.isEmpty()) {
+            GmailSyncResult none = emptyResult(null);
+            none.getSummaries().add("No credit card statement emails in the last " + lookbackPeriod + ".");
+            return none;
+        }
+        return syncSpecificMessages(userId, ids);
+    }
+
     /**
      * @param explicitMessageIds when non-null, exactly these messages are processed and the
      *                           date-window scan is skipped entirely.

@@ -239,6 +239,8 @@ export const gmailApi = {
   triggerSync: () => apiClient.post<GmailSyncResult>('/api/gmail/sync', {}),
   fullResync: () => apiClient.post<GmailSyncResult>('/api/gmail/resync', {}),
   retryFailed: () => apiClient.post<GmailSyncResult>('/api/gmail/retry-failed', {}),
+  // Reads the card statement emails of the last ~2½ months that the 14-day sync never reached.
+  backfillCardStatements: () => apiClient.post<GmailSyncResult>('/api/gmail/backfill-card-statements', {}, { timeout: 900_000 }),
   disconnect: () => apiClient.delete('/api/gmail/disconnect'),
   getHistory: (limit = 100) => apiClient.get<ProcessedEmailEntry[]>('/api/gmail/history', { params: { limit } }),
   // "Locked statements" — financial emails whose PDF attachment (contract note, margin

@@ -48,6 +48,7 @@ const ISSUERS = [
 
 export function CreditCardSection() {
   const [cards, setCards]     = useState<CardResponse[]>([]);
+  const [detectedKey, setDetectedKey] = useState(0);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [tips, setTips]       = useState<PointsTip[]>([]);
@@ -71,7 +72,7 @@ export function CreditCardSection() {
       <SpendAdvisor categories={categories} hasCards={cards.length > 0} />
 
       {/* ── Cards seen in email but not saved yet ── */}
-      <DetectedCardsPrompt cards={cards} onChanged={load} />
+      <DetectedCardsPrompt key={detectedKey} cards={cards} onChanged={load} />
 
       {/* ── My Cards ── */}
       <div className="card">
@@ -104,7 +105,7 @@ export function CreditCardSection() {
       <CardChargesPanel refreshKey={cards.length} />
 
       {/* ── Every statement's transactions, tallied against expenses ── */}
-      <CardStatementsSection cards={cards} refreshKey={cards.length} />
+      <CardStatementsSection cards={cards} refreshKey={cards.length} onFetched={() => { setDetectedKey(k => k + 1); load(); }} />
 
       {/* ── Rewards & Points (always visible) ── */}
       <RewardsPanel tips={tips} cards={cards} />

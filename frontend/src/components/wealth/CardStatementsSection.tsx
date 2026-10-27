@@ -26,7 +26,7 @@ type Filter = 'ALL' | 'DEBITS' | 'CREDITS' | 'ADDED' | 'MISSING';
  * expenses already on record; charges no earlier sync caught are added to expenses from the
  * statement (and can be taken back out). Payments and refunds are listed but never counted.
  */
-export function CardStatementsSection({ cards, refreshKey }: { cards: CardResponse[]; refreshKey?: number }) {
+export function CardStatementsSection({ cards, refreshKey, onFetched }: { cards: CardResponse[]; refreshKey?: number; onFetched?: () => void }) {
   const maskText = useMaskedText();
   const [cardId, setCardId] = useState<number | null>(cards[0]?.id ?? null);
   const [statements, setStatements] = useState<CardStatement[]>([]);
@@ -40,6 +40,19 @@ export function CardStatementsSection({ cards, refreshKey }: { cards: CardRespon
   const [pending, setPending] = useState<PendingPdf[]>([]);
   const [lockedKey, setLockedKey] = useState(0);
   const [statementsKey, setStatementsKey] = useState(0);
+  const [fetching, setFetching] = useState(false);
+
+  const fetchFromGmail = async () => {
+    setFetching(true); setMsg(null);
+    try {
+      const { data } = await gmailApi.backfillCardStatements();
+      setMsg(data.error ?? `Card statement emails read: ${data.imported} imported, ${data.skipped} already read or skipped`
+        + `${data.failed ? `, ${data.failed} failed` : ''}. New cards found in them are offered above.`);
+      setStatementsKey(k => k + 1); setLockedKey(k => k + 1); onFetched?.();
+    } catch {
+      setMsg('Could not fetch statements from Gmail — try again in a minute.');
+    } finally { setFetching(false); }
+  };
 
   useEffect(() => {
     if (cardId == null || !cards.some(c => c.id === cardId)) setCardId(cards[0]?.id ?? null);
@@ -143,6 +156,10 @@ export function CardStatementsSection({ cards, refreshKey }: { cards: CardRespon
           <h3 className="font-semibold text-ink text-sm">Statements &amp; transactions</h3>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <button className="btn-secondary text-xs py-1 px-2 flex items-center gap-1" disabled={fetching} onClick={fetchFromGmail}
+            title="The regular sync looks back 14 days; this reads every card statement email of the last 2½ months">
+            {fetching ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} Fetch last 2 months
+          </button>
           <select className="input-field text-xs py-1" value={cardId ?? ''} onChange={e => setCardId(Number(e.target.value))}>
             {cards.map(c => <option key={c.id} value={c.id}>{c.name}{c.lastFour ? ` ••${c.lastFour}` : ''}</option>)}
           </select>
@@ -173,6 +190,7 @@ export function CardStatementsSection({ cards, refreshKey }: { cards: CardRespon
         </div>
       )}
 
+      {msg && statements.length === 0 && <div className="text-2xs text-gray-400">{msg}</div>}
       {statements.length === 0 ? (
         <div className="space-y-2 py-2">
           {locked.length > 0 ? locked.map(pdf => (
