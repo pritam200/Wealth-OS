@@ -135,9 +135,29 @@ public class ReminderService {
             }
         });
 
+        // A card seen in a statement or payment email but not saved yet: a prompt to add it.
+        if (detectedCards != null) {
+            detectedCards.pendingFor(userId).forEach(dc -> {
+                int held = detectedCards.pendingStatementCount(dc);
+                out.add(ReminderResponse.builder()
+                    .type("NEW_CARD")
+                    .title("New card found — " + (dc.getIssuer() != null ? dc.getIssuer() : "unknown bank")
+                        + (dc.getLastFour() != null ? " ••" + dc.getLastFour() : "") + ". Add it")
+                    .subtitle(held > 0 ? held + " statement(s) waiting — they are filed onto the card when you add it, on Cards & Rewards"
+                        : "Seen in your card emails — add it on Cards & Rewards")
+                    .dueDate(today).daysUntil(0).severity("DUE_SOON").build());
+            });
+        }
+
         out.sort(Comparator.comparingLong(ReminderResponse::getDaysUntil));
         return out;
     }
+
+    // Optional so the tests that build this service by hand need not supply it.
+    private com.marketai.card.service.DetectedCardService detectedCards;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setDetectedCards(com.marketai.card.service.DetectedCardService s) { this.detectedCards = s; }
 
     private LocalDate nextMonthly(LocalDate anchor, int dayOfMonth, LocalDate today) {
         LocalDate candidate = safeDate(today.getYear(), today.getMonthValue(), dayOfMonth);

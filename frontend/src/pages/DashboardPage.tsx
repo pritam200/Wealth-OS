@@ -14,6 +14,9 @@ import { NetWorthBar } from './tabs/Tab7RiskMatrix';
 import { usePrivacyStore } from '../store/privacyStore';
 import { LoadFailure } from '../components/shared/LoadFailure';
 import { formatINR } from '../utils/currency';
+import { cardApi } from '../api/card';
+import type { CardResponse } from '../api/card';
+import { DetectedCardsPrompt } from '../components/wealth/DetectedCardsPrompt';
 
 const ISSUE_LABELS: Record<string, string> = {
   UNVERIFIABLE_NAME: 'Unverified name',
@@ -85,6 +88,15 @@ function IntegrityBanner({ report, onMerged }: { report: IntegrityReport; onMerg
       </div>
     </div>
   );
+}
+
+/* Cards found in statement or payment emails but not saved yet — the same prompt as on Cards &
+   Rewards, here so a new card is noticed without opening that tab. */
+function NewCardsBanner() {
+  const [cards, setCards] = useState<CardResponse[]>([]);
+  const [key, setKey] = useState(0);
+  useEffect(() => { cardApi.list().then(r => setCards(r.data)).catch(() => setCards([])); }, [key]);
+  return <DetectedCardsPrompt cards={cards} onChanged={() => setKey(k => k + 1)} />;
 }
 
 /* FD/RD/net-worth issues from the generalized reconciliation layer — same "flag it, never
@@ -203,6 +215,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tabId: number) => v
   return (
     <div className="space-y-6">
       {integrityReport && <IntegrityBanner report={integrityReport} onMerged={load} />}
+      <NewCardsBanner />
       {reconFailed
         ? <LoadFailure what="the data-integrity checks" onRetry={load} />
         : <ReconciliationBanner issues={otherIssues} onOpen={onNavigate ? () => onNavigate(22) : undefined} />}

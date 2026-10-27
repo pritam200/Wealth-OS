@@ -56,6 +56,18 @@ export function CardStatementsSection({ cards, refreshKey }: { cards: CardRespon
   }, [cardId, statementId]);
   useEffect(() => { loadDetail(); }, [loadDetail]);
 
+  // At least the last two months of statements are always listed; older ones on request.
+  const [showOlder, setShowOlder] = useState(false);
+  const { recent, older } = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 2);
+    const since = cutoff.toISOString().slice(0, 10);
+    const inWindow = statements.filter(s => (s.statementDate ?? s.dueDate ?? '') >= since);
+    const recent = inWindow.length >= 2 ? inWindow : statements.slice(0, 2);
+    return { recent, older: statements.filter(s => !recent.includes(s)) };
+  }, [statements]);
+  const dueText = (n: number) => n < 0 ? `${maskText(fmtINR(-n))} credit` : n === 0 ? 'nothing due' : maskText(fmtINR(n));
+
   const lines = detail?.lines ?? [];
   const shown = useMemo(() => lines.filter(l => {
     if (filter === 'DEBITS' && !l.debit) return false;
@@ -116,15 +128,32 @@ export function CardStatementsSection({ cards, refreshKey }: { cards: CardRespon
           <select className="input-field text-xs py-1" value={cardId ?? ''} onChange={e => setCardId(Number(e.target.value))}>
             {cards.map(c => <option key={c.id} value={c.id}>{c.name}{c.lastFour ? ` ••${c.lastFour}` : ''}</option>)}
           </select>
-          {statements.length > 0 && (
-            <select className="input-field text-xs py-1" value={statementId ?? ''} onChange={e => setStatementId(Number(e.target.value))}>
-              {statements.map(s => <option key={s.id} value={s.id}>
-                {s.statementDate ? `Statement ${s.statementDate}` : s.dueDate ? `Due ${s.dueDate}` : `Statement #${s.id}`}
-              </option>)}
-            </select>
-          )}
         </div>
       </div>
+
+      {statements.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-2xs text-gray-500">
+            Statements — last 2 months{older.length > 0 ? ` · ${older.length} older` : ''}
+          </div>
+          {(showOlder ? statements : recent).map(s => (
+            <button key={s.id} onClick={() => setStatementId(s.id)}
+              className={`w-full text-left rounded-lg border px-2.5 py-1.5 text-2xs flex items-center gap-3 flex-wrap ${
+                s.id === statementId ? 'border-brand/60 bg-brand/[0.06]' : 'border-surface-border hover:bg-surface-hover/60'}`}>
+              <span className="text-ink font-medium w-28">{s.statementDate ? `Statement ${s.statementDate}` : `Statement #${s.id}`}</span>
+              <span className="text-gray-400 w-24">{s.dueDate ? `due ${s.dueDate}` : 'no due date'}</span>
+              <span className="font-mono text-ink">{dueText(s.totalDue)}</span>
+              {s.minimumDue != null && s.totalDue > 0 && <span className="text-gray-500">min {maskText(fmtINR(s.minimumDue))}</span>}
+              <span className="text-gray-500 ml-auto">{s.tally ? `${s.tally.lines} line${s.tally.lines === 1 ? '' : 's'}` : 'no lines kept'}</span>
+            </button>
+          ))}
+          {older.length > 0 && (
+            <button className="text-2xs text-brand hover:underline" onClick={() => setShowOlder(v => !v)}>
+              {showOlder ? 'Show only the last 2 months' : `Show ${older.length} older statement${older.length === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </div>
+      )}
 
       {statements.length === 0 ? (
         <p className="text-xs text-gray-500 py-4 text-center">
@@ -136,8 +165,10 @@ export function CardStatementsSection({ cards, refreshKey }: { cards: CardRespon
       ) : detail && (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <Tile label="Total due" value={maskText(fmtINR(detail.statement.totalDue))}
-              sub={detail.statement.dueDate ? `by ${detail.statement.dueDate}` : undefined} />
+            <Tile label={detail.statement.totalDue < 0 ? 'Credit balance' : 'Total due'} value={maskText(fmtINR(Math.abs(detail.statement.totalDue)))}
+              sub={[detail.statement.dueDate && detail.statement.totalDue > 0 ? `by ${detail.statement.dueDate}` : null,
+                detail.statement.minimumDue != null && detail.statement.totalDue > 0 ? `min ${maskText(fmtINR(detail.statement.minimumDue))}` : null]
+                .filter(Boolean).join(' · ') || undefined} />
             <Tile label="Charges" value={maskText(fmtINR(t?.debitTotal))} sub={t ? `${t.lines - t.credits} line${t.lines - t.credits === 1 ? '' : 's'}` : undefined} />
             <Tile label="Payments & refunds" value={maskText(fmtINR(t?.creditTotal))} sub={t ? `${t.credits} line${t.credits === 1 ? '' : 's'}` : undefined} />
             <Tile label="Tally with expenses"

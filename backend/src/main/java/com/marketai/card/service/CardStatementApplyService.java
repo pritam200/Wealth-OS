@@ -56,11 +56,13 @@ public class CardStatementApplyService {
         // Like the bill import: the "due now" figure only moves forward, never back to an older cycle.
         boolean newer = card.getCurrentDueDate() == null || st.getDueDate() == null
             || !st.getDueDate().isBefore(card.getCurrentDueDate());
-        if (newer && (st.getTotalDue().compareTo(nz(card.getCurrentDue())) != 0
+        // A credit balance is nothing due, not a negative bill.
+        java.math.BigDecimal due = st.getTotalDue().max(java.math.BigDecimal.ZERO);
+        if (newer && (due.compareTo(nz(card.getCurrentDue())) != 0
                 || (st.getDueDate() != null && !st.getDueDate().equals(card.getCurrentDueDate())))) {
-            card.setCurrentDue(st.getTotalDue());
+            card.setCurrentDue(due);
             if (st.getDueDate() != null) card.setCurrentDueDate(st.getDueDate());
-            changes.add("Amount due ₹" + st.getTotalDue().toPlainString()
+            changes.add("Amount due ₹" + due.toPlainString()
                 + (st.getDueDate() != null ? " by " + st.getDueDate() : ""));
         }
         if (newer && st.getDueDate() != null && !Integer.valueOf(st.getDueDate().getDayOfMonth()).equals(card.getDueDay())) {

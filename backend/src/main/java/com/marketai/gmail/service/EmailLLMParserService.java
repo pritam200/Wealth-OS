@@ -964,9 +964,11 @@ public class EmailLLMParserService {
      */
     private com.marketai.card.service.CardStatementFacts cardStatementFacts(JsonNode node, List<JsonNode> txns, String sourceText) {
         String evidence = json.str(node, "evidence");
-        if (!SpanVerifier.appearsIn(sourceText, evidence)) return null;
         BigDecimal totalDue = json.decimal(node, "total_due");
-        if (totalDue == null || !SpanVerifier.containsAmount(evidence, totalDue)) return null;
+        if (totalDue == null || evidence == null || !SpanVerifier.containsAmount(evidence, totalDue)) return null;
+        if (!statementSummaryGrounded(sourceText, evidence, totalDue)) return null;
+        // A credit balance ("₹-120.00", "120.00 CR") is a real statement, but the sign has to be printed.
+        if (totalDue.signum() < 0 && !CREDIT_MARK.matcher(evidence).find()) return null;
         BigDecimal minimumDue = json.decimal(node, "minimum_due");
         if (minimumDue != null && !SpanVerifier.containsAmount(evidence, minimumDue)) minimumDue = null;
         LocalDate dueDate = parseDate(json.str(node, "due_date"));
@@ -1007,6 +1009,63 @@ public class EmailLLMParserService {
         var flags = com.marketai.card.service.CardStatementAnalyzer.analyze(lines, limit, totalDue);
         return new com.marketai.card.service.CardStatementFacts(json.str(node, "issuer"), last4, statementDate, dueDate,
             totalDue, minimumDue, previous, limit, available, com.marketai.card.service.CardStatementAnalyzer.toJson(flags), kept);
+    }
+
+    private static final Pattern TOTAL_DUE_LABEL = Pattern.compile(
+        "(?i)total\\s+(?:amount\\s+)?(?:due|dues|outstanding|payable)|amount\\s+payable");
+    private static final Pattern SUMMARY_PIECE = Pattern.compile(
+        "(?:₹|Rs\\.?|INR)?\\s*-?\\d[\\d,./:-]*(?:\\s*(?:DR|CR|Dr|Cr)\\b)?|[A-Za-z][A-Za-z ()*&'/-]*[A-Za-z)*]");
+    private static final Pattern CREDIT_MARK = Pattern.compile("(?i)-\\s*[\\d,]|\\d\\s*cr\\b|credit");
+
+    /**
+     * Whether a card statement's quoted summary is the document's own. A verbatim quote is best,
+     * but statements print the summary as a table — labels in one row, figures in the next — and
+     * the model's quote pairs each label with its figure. Such a quote is accepted when every
+     * label and figure in it is printed in the document, or when the total is printed just
+     * after a "Total Amount Due" label. Nothing the document doesn't print gets through.
+     */
+    static boolean statementSummaryGrounded(String sourceText, String evidence, BigDecimal totalDue) {
+        if (SpanVerifier.appearsIn(sourceText, evidence)) return true;
+        if (sourceText == null || evidence == null || evidence.isBlank()) return false;
+        Matcher piece = SUMMARY_PIECE.matcher(evidence);
+        int pieces = 0;
+        boolean allPrinted = true;
+        while (piece.find()) {
+            String p = piece.group().trim();
+            if (p.length() < 2) continue;
+            pieces++;
+            if (!SpanVerifier.appearsIn(sourceText, p)) { allPrinted = false; break; }
+        }
+        if (allPrinted && pieces >= 2) return true;
+        String flat = sourceText.replaceAll("\\s+", " ");
+        Matcher label = TOTAL_DUE_LABEL.matcher(flat);
+        while (label.find()) {
+            String after = flat.substring(label.end(), Math.min(flat.length(), label.end() + 120));
+            if (SpanVerifier.containsAmount(after, totalDue)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Re-reads a card statement's figures from an earlier extraction kept in the audit trail —
+     * the model's outputs and the text they were read from — without asking the model again.
+     * Used for statements read before ₹0 / credit-balance statements and table-shaped summaries
+     * were kept. Returns whether anything was kept or held for a detected card.
+     */
+    public boolean recoverCardStatement(Long userId, String gmailMessageId, List<String> modelOutputs, String sourceText) {
+        JsonNode node = null;
+        List<JsonNode> txns = new ArrayList<>();
+        for (String out : modelOutputs) {
+            Optional<JsonNode> root = json.parse(out);
+            if (root.isEmpty()) continue;
+            JsonNode cs = root.get().get("card_statement");
+            if (node == null && cs != null && cs.isObject()) node = cs;
+            JsonNode t = root.get().get("transactions");
+            if (t != null && t.isArray()) t.forEach(txns::add);
+        }
+        if (node == null) return false;
+        com.marketai.card.service.CardStatementFacts f = cardStatementFacts(node, txns, sourceText);
+        return f != null && importer.recordCardStatement(userId, f, gmailMessageId);
     }
 
     private void persistClosingBalances(Long userId, JsonNode closingBalances, String sourceText,

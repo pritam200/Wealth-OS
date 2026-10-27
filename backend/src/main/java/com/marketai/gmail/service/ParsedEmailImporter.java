@@ -739,6 +739,8 @@ public class ParsedEmailImporter {
         // marked imported and never retried even after the card was added. Now nothing is written
         // and the item waits in review, where accepting it after adding the card books it.
         if (card == null) {
+            // The card page offers to add a card seen here, so the bill can be accepted once it is.
+            if (detectedCards != null) detectedCards.noteCard(userId, pe.getBank(), pe.getCardLast4());
             throw new ImportRejectedException("No saved credit card matches this bill"
                 + (pe.getCardLast4() != null ? " (card ending " + pe.getCardLast4() + ")" : "")
                 + (pe.getBank() != null ? " from " + pe.getBank() : "")
@@ -853,7 +855,8 @@ public class ParsedEmailImporter {
      * (several from one issuer need the last 4 digits), or this email's statement is already on file.
      */
     public boolean recordCardStatement(Long userId, com.marketai.card.service.CardStatementFacts f, String gmailMessageId) {
-        if (f == null || f.totalDue() == null || f.totalDue().signum() <= 0) return false;
+        // ₹0 (nothing spent, or paid in full) and a credit balance are statements too, and are kept.
+        if (f == null || f.totalDue() == null) return false;
         if (cardStatementRepo.existsByUserIdAndSourceEmailId(userId, gmailMessageId)) return false;
         com.marketai.card.entity.CreditCard card = findCard(userId, f.cardLast4(), f.issuer());
         if (card == null) {
