@@ -60,8 +60,16 @@ public class DepositoryMovementCheck implements ReconciliationCheck {
         if (days.isEmpty()) return List.of();
 
         List<Holding> holdings = new ArrayList<>();
+        // A portfolio reset to its broker's holdings statement already has everything up to the
+        // statement date in its quantities; those trades were replaced by one opening lot.
+        Map<Long, LocalDate> sharesAsOf = new HashMap<>();
+        LocalDate latestAsOf = null;
         for (Portfolio p : portfolioRepository.findByUserId(userId)) {
             for (Holding h : holdingRepository.findByPortfolioId(p.getId())) if (!StatementPositions.isFund(h)) holdings.add(h);
+            if (p.getSharesAsOf() != null) {
+                sharesAsOf.put(p.getId(), p.getSharesAsOf());
+                if (latestAsOf == null || p.getSharesAsOf().isAfter(latestAsOf)) latestAsOf = p.getSharesAsOf();
+            }
         }
         Map<String, List<Holding>> bySecurity = bySecurity(days, holdings);
         Map<Long, List<Transaction>> txns = holdings.isEmpty() ? Map.of() : transactionRepository
@@ -71,6 +79,7 @@ public class DepositoryMovementCheck implements ReconciliationCheck {
         List<ReconciliationIssue> issues = new ArrayList<>();
         for (Day d : days) {
             List<Holding> matched = bySecurity.getOrDefault(d.isin(), List.of());
+            if (reflectedInStatement(d, matched, sharesAsOf, latestAsOf)) continue;
             BigDecimal booked = BigDecimal.ZERO;
             for (Holding h : matched) {
                 for (Transaction t : txns.getOrDefault(h.getId(), List.of())) {
@@ -97,6 +106,20 @@ public class DepositoryMovementCheck implements ReconciliationCheck {
                 .build());
         }
         return issues;
+    }
+
+    /**
+     * Whether a movement is already counted in a broker holdings statement the portfolio was reset
+     * to: every holding of the security is in a portfolio reset on or after the movement's date
+     * — or, for a security no longer held, some portfolio was.
+     */
+    static boolean reflectedInStatement(Day d, List<Holding> matched, Map<Long, LocalDate> sharesAsOf, LocalDate latestAsOf) {
+        if (matched.isEmpty()) return latestAsOf != null && !d.date().isAfter(latestAsOf);
+        for (Holding h : matched) {
+            LocalDate asOf = h.getPortfolio() == null ? null : sharesAsOf.get(h.getPortfolio().getId());
+            if (asOf == null || d.date().isAfter(asOf)) return false;
+        }
+        return true;
     }
 
     /** A trade that could be this movement: the right side, dated within the settlement window. */

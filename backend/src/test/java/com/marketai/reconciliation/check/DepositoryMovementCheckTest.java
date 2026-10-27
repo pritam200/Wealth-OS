@@ -86,4 +86,22 @@ class DepositoryMovementCheckTest {
         assertThat(issues).hasSize(1);
         assertThat(issues.get(0).getDescription()).startsWith("INFOSYS LIMITED").contains("No holding in your portfolio");
     }
+
+    @Test
+    @DisplayName("a movement on or before the broker statement a portfolio was reset to is already in its quantities")
+    void movementsCoveredByAStatementReset() {
+        Portfolio reset = Portfolio.builder().id(1L).sharesAsOf(LocalDate.of(2026, 10, 27)).build();
+        Portfolio other = Portfolio.builder().id(2L).build();
+        Holding inReset = Holding.builder().id(10L).portfolio(reset).symbol("LT").build();
+        Holding elsewhere = Holding.builder().id(11L).portfolio(other).symbol("LT").build();
+        var before = new DepositoryMovementCheck.Day("INE018A01030", "LT", true, LocalDate.of(2026, 10, 21), BigDecimal.ONE, 1L);
+        var after = new DepositoryMovementCheck.Day("INE018A01030", "LT", true, LocalDate.of(2026, 10, 28), BigDecimal.ONE, 2L);
+        var asOf = java.util.Map.of(1L, reset.getSharesAsOf());
+
+        assertThat(DepositoryMovementCheck.reflectedInStatement(before, List.of(inReset), asOf, reset.getSharesAsOf())).isTrue();
+        assertThat(DepositoryMovementCheck.reflectedInStatement(after, List.of(inReset), asOf, reset.getSharesAsOf())).isFalse();
+        assertThat(DepositoryMovementCheck.reflectedInStatement(before, List.of(inReset, elsewhere), asOf, reset.getSharesAsOf())).isFalse();
+        assertThat(DepositoryMovementCheck.reflectedInStatement(before, List.of(), asOf, reset.getSharesAsOf())).isTrue();
+        assertThat(DepositoryMovementCheck.reflectedInStatement(before, List.of(), java.util.Map.of(), null)).isFalse();
+    }
 }
