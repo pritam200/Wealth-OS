@@ -165,6 +165,36 @@ class BrokerStatementResetTest {
     }
 
     @Test
+    @DisplayName("undated broker items queued by the statement date close too, even once only opening lots name no sender")
+    void closesUndatedBrokerItems() {
+        PortfolioRepository pr = mock(PortfolioRepository.class);
+        when(pr.findByIdAndUserId(PF, USER)).thenReturn(Optional.of(portfolio));
+        HoldingRepository hr = mock(HoldingRepository.class);
+        when(hr.findByPortfolioId(PF)).thenReturn(List.of());
+        EmailReviewItem rof = undated("\"m.Stock by Mirae Asset\" <info@mstock.com>", AS_OF.minusDays(10));
+        EmailReviewItem later = undated("\"m.Stock by Mirae Asset\" <info@mstock.com>", AS_OF.plusDays(1));
+        EmailReviewItem bank = undated("HDFC Bank InstaAlerts <alerts@hdfcbank.bank.in>", AS_OF.minusDays(10));
+        service = new BrokerStatementResetService(pr, hr, mock(TransactionRepository.class), mock(PortfolioService.class),
+            mock(DataBackupRepository.class), reviewRepoWith(rof, later, bank), mock(JdbcTemplate.class));
+
+        var p = service.preview(USER, PF, AS_OF, BrokerHoldingsStatement.parseCsv(CSV));
+
+        assertThat(p.getReviewsClosed()).isEqualTo(1);
+    }
+
+    private static EmailReviewItem undated(String sender, LocalDate queuedOn) {
+        EmailReviewItem r = EmailReviewItem.builder().userId(USER).status(ReviewStatus.PENDING).proposedType("UNKNOWN").sender(sender).build();
+        r.setCreatedAt(queuedOn.atTime(12, 0));
+        return r;
+    }
+
+    private static EmailReviewItemRepository reviewRepoWith(EmailReviewItem... items) {
+        EmailReviewItemRepository rr = mock(EmailReviewItemRepository.class);
+        when(rr.findByUserIdAndStatusOrderByCreatedAtDesc(USER, ReviewStatus.PENDING)).thenReturn(List.of(items));
+        return rr;
+    }
+
+    @Test
     @DisplayName("apply refuses without the confirmation word or with a used backup")
     void refusesWithoutConfirmation() {
         var rows = BrokerHoldingsStatement.parseCsv(CSV);

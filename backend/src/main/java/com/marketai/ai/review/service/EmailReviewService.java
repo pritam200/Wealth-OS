@@ -129,15 +129,20 @@ public class EmailReviewService {
      *  when a rule now settles that document without reading it again. */
     @Transactional
     public int clearAttachmentItems(Long userId, String gmailMessageId, int fromIndex, int toIndex) {
-        if (gmailMessageId == null) return 0;
-        List<EmailReviewItem> stale = repo.findByUserIdAndGmailMessageIdAndStatus(userId, gmailMessageId, ReviewStatus.PENDING)
-            .stream().filter(i -> i.getItemIndex() >= fromIndex && i.getItemIndex() < toIndex).toList();
+        List<EmailReviewItem> stale = pendingInRange(userId, gmailMessageId, fromIndex, toIndex);
         if (!stale.isEmpty()) {
             repo.deleteAll(stale);
             log.info("Settled an attachment of {} by rule: cleared {} review item(s) for user {}",
                 gmailMessageId, stale.size(), userId);
         }
         return stale.size();
+    }
+
+    /** The pending items of one email whose index is in {@code [fromIndex, toIndex)}: one attachment's questions. */
+    public List<EmailReviewItem> pendingInRange(Long userId, String gmailMessageId, int fromIndex, int toIndex) {
+        if (gmailMessageId == null) return List.of();
+        return repo.findByUserIdAndGmailMessageIdAndStatus(userId, gmailMessageId, ReviewStatus.PENDING)
+            .stream().filter(i -> i.getItemIndex() >= fromIndex && i.getItemIndex() < toIndex).toList();
     }
 
     /** Drops a still-pending whole-email placeholder once a later sync has read the email in

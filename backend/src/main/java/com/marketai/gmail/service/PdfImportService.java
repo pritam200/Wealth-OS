@@ -156,8 +156,12 @@ public class PdfImportService {
         }
         // A contract note the model read is read once more by its fixed parser. That used to happen
         // only when its email was fetched again, which never happens once the email is closed.
+        // So is a statement whose lines a since-corrected sender check set aside unread.
         for (PendingPdf pdf : pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, List.of("IMPORTED", "IN_REVIEW"))) {
-            if (dueRereadByRules(pdf)) locked.add(pdf);
+            if (dueRereadByRules(pdf) || ("IN_REVIEW".equals(pdf.getStatus())
+                && emailLlmParserService.heldOnlyByStaleSenderCheck(userId, pdf.getGmailMessageId(), pdf.getFilename(), pdf.getSender()))) {
+                locked.add(pdf);
+            }
         }
         // Statements with no known password format get one model read of their email, here in the
         // background rather than in the page request.

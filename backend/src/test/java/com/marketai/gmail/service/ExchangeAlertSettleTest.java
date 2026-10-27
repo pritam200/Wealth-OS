@@ -1,14 +1,22 @@
 package com.marketai.gmail.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.marketai.ai.audit.service.AiAuditService;
+import com.marketai.ai.llm.LlmJsonParser;
+import com.marketai.ai.llm.LlmService;
 import com.marketai.ai.review.entity.EmailReviewItem;
 import com.marketai.ai.review.entity.ReviewStatus;
 import com.marketai.ai.review.repository.EmailReviewItemRepository;
 import com.marketai.ai.review.service.EmailReviewService;
+import com.marketai.document.classify.SenderTrustEvaluator;
 import com.marketai.gmail.entity.PendingPdf;
 import com.marketai.gmail.ledger.EmailFinancialEvent;
 import com.marketai.gmail.ledger.EmailFinancialEventRepository;
 import com.marketai.gmail.ledger.EventState;
 import com.marketai.gmail.ledger.FinancialEventLedger;
+import com.marketai.market.service.MarketDataService;
+import com.marketai.mf.repository.CasBalanceSnapshotRepository;
+import com.marketai.mf.service.MfSchemeLinkService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -66,6 +74,33 @@ class ExchangeAlertSettleTest {
 
         assertThat(cleared).isEqualTo(2);
         verify(repo).deleteAll(List.of(first, second));
+    }
+
+    @Test
+    @DisplayName("a statement held only by the old sender check on a domain now accepted is due a re-read; other holds are not")
+    void staleSenderHoldIsDueReread() {
+        EmailReviewService review = mock(EmailReviewService.class);
+        EmailLLMParserService parser = new EmailLLMParserService(mock(LlmService.class), new LlmJsonParser(new ObjectMapper()),
+            mock(AiAuditService.class), mock(MarketDataService.class), mock(MfSchemeLinkService.class), new SenderTrustEvaluator(),
+            review, mock(ParsedEmailImporter.class), mock(CasBalanceSnapshotRepository.class), mock(FinancialEventLedger.class));
+        String idfc = "IDFC FIRST Bank <statement@idfcfirst.bank.in>";
+        int base = EmailLLMParserService.attachmentItemIndexBase("card.pdf");
+        EmailReviewItem held = item(1, base);
+        held.setReviewReason(EmailLLMParserService.SENDER_BLOCK_PREFIX
+            + "Display name claims IDFC First but the sending domain idfcfirst.bank.in is not one of its known domains");
+        EmailReviewItem other = item(2, base + 1);
+        other.setReviewReason("No amount could be read for this transaction.");
+
+        when(review.pendingInRange(USER_ID, MSG, base - 1, base + 999)).thenReturn(List.of(held));
+        assertThat(parser.heldOnlyByStaleSenderCheck(USER_ID, MSG, "card.pdf", idfc)).isTrue();
+        assertThat(parser.heldOnlyByStaleSenderCheck(USER_ID, MSG, "card.pdf", "IDFC FIRST Bank <statement@idfc-offers.com>"))
+            .as("a sender still refused").isFalse();
+
+        when(review.pendingInRange(USER_ID, MSG, base - 1, base + 999)).thenReturn(List.of(held, other));
+        assertThat(parser.heldOnlyByStaleSenderCheck(USER_ID, MSG, "card.pdf", idfc)).as("a question of another kind").isFalse();
+
+        when(review.pendingInRange(USER_ID, MSG, base - 1, base + 999)).thenReturn(List.of());
+        assertThat(parser.heldOnlyByStaleSenderCheck(USER_ID, MSG, "card.pdf", idfc)).isFalse();
     }
 
     @Test

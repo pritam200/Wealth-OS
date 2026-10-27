@@ -3,6 +3,7 @@ package com.marketai.reconciliation.service;
 import com.marketai.ai.review.entity.EmailReviewItem;
 import com.marketai.ai.review.entity.ReviewStatus;
 import com.marketai.ai.review.repository.EmailReviewItemRepository;
+import com.marketai.document.classify.IssuerDomainRegistry;
 import com.marketai.portfolio.entity.Holding;
 import com.marketai.portfolio.entity.Portfolio;
 import com.marketai.portfolio.entity.Transaction;
@@ -274,9 +275,11 @@ public class BrokerStatementResetService {
     }
 
     /**
-     * Share trades waiting in the review queue from the broker this portfolio is for, dated on
-     * or before the statement. The broker is told by the senders of the emails whose trades
-     * were booked into this portfolio.
+     * Everything waiting in the review queue from the broker this portfolio is for, dated (or,
+     * undated, queued) on or before the statement: its trades are in the statement's quantities
+     * and its funds lines are never booked. The broker is told by the senders of the emails whose
+     * trades were booked into this portfolio, or by the registry naming this portfolio's broker,
+     * since after a reset only opening lots remain.
      */
     private List<EmailReviewItem> reviewsToClose(Long userId, Portfolio portfolio, LocalDate asOf) {
         List<String> senders = jdbc.queryForList("""
@@ -289,13 +292,14 @@ public class BrokerStatementResetService {
             String d = domain(s);
             if (d != null) domains.add(d);
         }
-        if (domains.isEmpty()) return List.of();
         List<EmailReviewItem> out = new ArrayList<>();
         for (EmailReviewItem r : reviewRepo.findByUserIdAndStatusOrderByCreatedAtDesc(userId, ReviewStatus.PENDING)) {
-            if (r.getTransactionDate() == null || r.getTransactionDate().isAfter(asOf)) continue;
-            if (!"STOCK_BUY".equals(r.getProposedType()) && !"STOCK_SELL".equals(r.getProposedType())) continue;
+            LocalDate on = r.getTransactionDate() != null ? r.getTransactionDate()
+                : r.getCreatedAt() != null ? r.getCreatedAt().toLocalDate() : null;
+            if (on == null || on.isAfter(asOf)) continue;
             String d = domain(r.getSender());
-            if (d != null && domains.contains(d)) out.add(r);
+            if (d != null && (domains.contains(d)
+                || IssuerDomainRegistry.brokerFor(d).filter(portfolio.getName()::equalsIgnoreCase).isPresent())) out.add(r);
         }
         return out;
     }

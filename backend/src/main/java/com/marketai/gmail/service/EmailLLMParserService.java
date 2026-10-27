@@ -594,7 +594,7 @@ public class EmailLLMParserService {
                     itemIndex, src, statementProvider, completion, overallConfidence);
 
                 String why = senderBlocked
-                    ? "Sender could not be verified — " + senderBlockReason
+                    ? SENDER_BLOCK_PREFIX + senderBlockReason
                     : null;
 
                 ParsedEmail pe = null;
@@ -1985,6 +1985,22 @@ public class EmailLLMParserService {
         ledger.resolveItemRange(userId, gmailMessageId, whole, whole + 1, EXCHANGE_ALERT_REASON);
         return emailReviewService.clearAttachmentItems(userId, gmailMessageId, base - 1, base + 999)
             + emailReviewService.clearAttachmentItems(userId, gmailMessageId, whole, whole + 1);
+    }
+
+    static final String SENDER_BLOCK_PREFIX = "Sender could not be verified — ";
+
+    /**
+     * True when every question left about this attachment is the sender check refusing a domain
+     * it now accepts: those lines were set aside unread, so only a fresh read brings them back.
+     * Only the header check's refusals count; the model naming another issuer can recur on a re-read.
+     */
+    public boolean heldOnlyByStaleSenderCheck(Long userId, String gmailMessageId, String filename, String sender) {
+        if (gmailMessageId == null || filename == null || !senderTrustEvaluator.evaluate(sender).permitsAutoImport()) return false;
+        int base = attachmentItemIndexBase(filename);
+        List<com.marketai.ai.review.entity.EmailReviewItem> items =
+            emailReviewService.pendingInRange(userId, gmailMessageId, base - 1, base + 999);
+        return !items.isEmpty() && items.stream().allMatch(i -> i.getReviewReason() != null
+            && i.getReviewReason().startsWith(SENDER_BLOCK_PREFIX + "Display name claims"));
     }
 
     /** True when a claimed issuer isn't among the domains {@link IssuerDomainRegistry} lists for it. */
