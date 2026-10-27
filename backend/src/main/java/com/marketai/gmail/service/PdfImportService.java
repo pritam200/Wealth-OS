@@ -118,8 +118,22 @@ public class PdfImportService {
         }
     }
 
+    /**
+     * A read that did not finish — nearly always the model out of its daily quota — waits this
+     * long before it is tried again. Retried on every 30-minute sync, a few dozen such PDFs used
+     * the whole free quota themselves, so nothing else could be read.
+     */
+    static final java.time.Duration FAILED_RETRY_WAIT = java.time.Duration.ofHours(6);
+
+    /** Whether a queued PDF should be tried again now. */
+    public static boolean dueRetry(PendingPdf pdf) {
+        if (!"FAILED".equals(pdf.getStatus()) || pdf.getUnlockedAt() == null) return true;
+        return pdf.getUnlockedAt().isBefore(LocalDateTime.now().minus(FAILED_RETRY_WAIT));
+    }
+
     public int bulkAutoUnlock(Long userId) {
         List<PendingPdf> locked = new ArrayList<>(pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, RETRYABLE_STATUSES));
+        locked.removeIf(p -> !dueRetry(p));
         // Scans set aside because no vision model was configured are read once one is. Scans the
         // model itself couldn't read are not re-sent on every sync.
         if (scanTranscriber.available()) {

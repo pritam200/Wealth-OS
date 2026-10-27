@@ -433,7 +433,7 @@ public class GmailSyncService {
                             // the fills the model could not confirm are booked, the ones it booked
                             // are recognised, and its review questions are cleared.
                             boolean rereadByRules = PdfImportService.dueRereadByRules(existingPdf);
-                            if (retryScan || rereadByRules || "NEEDS_PASSWORD".equals(existingPdf.getStatus()) || "PASSWORD_FAILED".equals(existingPdf.getStatus()) || "FAILED".equals(existingPdf.getStatus())) {
+                            if (retryScan || rereadByRules || "NEEDS_PASSWORD".equals(existingPdf.getStatus()) || "PASSWORD_FAILED".equals(existingPdf.getStatus()) || ("FAILED".equals(existingPdf.getStatus()) && PdfImportService.dueRetry(existingPdf))) {
                                 steps.add("PDF " + pdf.filename + " — retrying (" + existingPdf.getStatus() + ")");
                                 try {
                                     pdfImportService.tryAutoUnlock(userId, existingPdf);
