@@ -125,6 +125,21 @@ public class EmailReviewService {
         enqueue(userId, gmailMessageId, WHOLE_EMAIL_ITEM_INDEX, sender, subject, result);
     }
 
+    /** Drops the still-pending items one attachment queued in [{@code fromIndex}, {@code toIndex})
+     *  when a rule now settles that document without reading it again. */
+    @Transactional
+    public int clearAttachmentItems(Long userId, String gmailMessageId, int fromIndex, int toIndex) {
+        if (gmailMessageId == null) return 0;
+        List<EmailReviewItem> stale = repo.findByUserIdAndGmailMessageIdAndStatus(userId, gmailMessageId, ReviewStatus.PENDING)
+            .stream().filter(i -> i.getItemIndex() >= fromIndex && i.getItemIndex() < toIndex).toList();
+        if (!stale.isEmpty()) {
+            repo.deleteAll(stale);
+            log.info("Settled an attachment of {} by rule: cleared {} review item(s) for user {}",
+                gmailMessageId, stale.size(), userId);
+        }
+        return stale.size();
+    }
+
     /** Drops a still-pending whole-email placeholder once a later sync has read the email in
      *  full, so the queue does not keep asking about an email that has since been processed. */
     @Transactional

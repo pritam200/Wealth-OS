@@ -98,6 +98,25 @@ public class FinancialEventLedger {
         }
     }
 
+    /** Closes the open rows of one attachment's item range once a rule settles that document. Rows a person decided are kept. */
+    public void resolveItemRange(Long userId, String gmailMessageId, int fromIndex, int toIndex, String reason) {
+        if (userId == null || gmailMessageId == null) return;
+        try {
+            for (EmailFinancialEvent row : repo.findByUserIdAndGmailMessageIdOrderByIdAsc(userId, gmailMessageId)) {
+                Integer idx = row.getItemIndex();
+                if (idx == null || idx < fromIndex || idx >= toIndex) continue;
+                if (!row.getState().unresolved() || EmailFinancialEvent.BY_USER.equals(row.getResolvedBy())) continue;
+                row.setState(EventState.RESOLVED);
+                row.setReason(truncate(reason, 1000));
+                row.setLastSeenAt(LocalDateTime.now());
+                repo.save(row);
+            }
+        } catch (Exception e) {
+            FAILURES.get()[0]++;
+            log.warn("Could not close the events of an attachment of message {}: {}", gmailMessageId, e.getMessage());
+        }
+    }
+
     /** A person decided the review item: the events behind it are accounted for. */
     public void onReviewDecision(Long userId, String gmailMessageId, int itemIndex, boolean booked, String note) {
         if (userId == null || gmailMessageId == null) return;

@@ -51,6 +51,12 @@ public class PdfImportService {
 
     private static final List<String> PENDING_STATUSES = Arrays.asList("NEEDS_PASSWORD", "PASSWORD_FAILED");
     private static final List<String> RETRYABLE_STATUSES = Arrays.asList("NEEDS_PASSWORD", "PASSWORD_FAILED", "FAILED");
+    /** States an exchange's trade alert can be left in by reads from before it was recognised. */
+    private static final List<String> EXCHANGE_ALERT_SWEEP_STATUSES =
+        Arrays.asList("NEEDS_PASSWORD", "PASSWORD_FAILED", "FAILED", "IN_REVIEW", "IMPORTED", "DUPLICATE_DOCUMENT");
+    /** Of those, the ones still waiting to be read, which become read-with-nothing-to-book. */
+    private static final List<String> EXCHANGE_ALERT_OPEN_STATUSES =
+        Arrays.asList("NEEDS_PASSWORD", "PASSWORD_FAILED", "FAILED", "IN_REVIEW");
 
     /** Below this much text a PDF has no usable text layer (a scan). */
     static final int MIN_TEXT_CHARS = 40;
@@ -132,6 +138,13 @@ public class PdfImportService {
     }
 
     public int bulkAutoUnlock(Long userId) {
+        for (PendingPdf pdf : pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, EXCHANGE_ALERT_SWEEP_STATUSES)) {
+            try {
+                settleIfExchangeAlert(userId, pdf);
+            } catch (Exception e) {
+                log.warn("Could not settle exchange alert pending {}: {}", pdf.getId(), e.getMessage());
+            }
+        }
         List<PendingPdf> locked = new ArrayList<>(pendingPdfRepo.findByUserIdAndStatusInOrderByCreatedAtDesc(userId, RETRYABLE_STATUSES));
         locked.removeIf(p -> !dueRetry(p));
         // Scans set aside because no vision model was configured are read once one is. Scans the
@@ -264,8 +277,32 @@ public class PdfImportService {
         refreshManifest(userId, pdf.getGmailMessageId());
     }
 
+    /** An exchange's "trades executed" alert, recognised from its sender and subject without opening it. */
+    static boolean isExchangeAlert(PendingPdf pdf) {
+        return EmailLLMParserService.isExchangeTradeAlert(senderDomainOf(pdf.getSender()), pdf.getSubject());
+    }
+
+    /**
+     * An exchange's trade alert repeats the contract note and is never booked, so it is not
+     * unlocked: one still waiting is recorded as read with nothing to book, and the questions an
+     * earlier read of it left are cleared. One already booked or a duplicate keeps its state.
+     */
+    boolean settleIfExchangeAlert(Long userId, PendingPdf pdf) {
+        if (!isExchangeAlert(pdf)) return false;
+        int cleared = emailLlmParserService.settleExchangeAlertAttachment(userId, pdf.getGmailMessageId(), pdf.getFilename());
+        if (EXCHANGE_ALERT_OPEN_STATUSES.contains(pdf.getStatus())) {
+            pdf.setStatus(NO_TRANSACTION);
+            pdf.setReadBy("rules");
+            pdf.setResultSummary(truncate(EmailLLMParserService.EXCHANGE_ALERT_REASON));
+            pendingPdfRepo.save(pdf);
+        }
+        if (cleared > 0) refreshManifest(userId, pdf.getGmailMessageId());
+        return true;
+    }
+
     @Transactional
     public void tryAutoUnlock(Long userId, PendingPdf pdf) {
+        if (settleIfExchangeAlert(userId, pdf)) return;
         // 0. Many statements and contract notes are not encrypted at all. They used to sit in
         // PASSWORD_FAILED whenever no saved password or hint existed, because opening without
         // a password was never tried.

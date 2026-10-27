@@ -1973,6 +1973,20 @@ public class EmailLLMParserService {
             && subject.toLowerCase(Locale.ROOT).contains("trades executed");
     }
 
+    /**
+     * Settles one attachment of an exchange's trade alert from its sender and subject alone: the
+     * questions an earlier read left about it, and about the alert email itself, are cleared and
+     * their events closed. Returns the number of review items cleared.
+     */
+    public int settleExchangeAlertAttachment(Long userId, String gmailMessageId, String filename) {
+        int base = attachmentItemIndexBase(filename);
+        int whole = EmailReviewService.WHOLE_EMAIL_ITEM_INDEX;
+        ledger.resolveItemRange(userId, gmailMessageId, base - 1, base + 999, EXCHANGE_ALERT_REASON);
+        ledger.resolveItemRange(userId, gmailMessageId, whole, whole + 1, EXCHANGE_ALERT_REASON);
+        return emailReviewService.clearAttachmentItems(userId, gmailMessageId, base - 1, base + 999)
+            + emailReviewService.clearAttachmentItems(userId, gmailMessageId, whole, whole + 1);
+    }
+
     /** True when a claimed issuer isn't among the domains {@link IssuerDomainRegistry} lists for it. */
     boolean issuerNotSupportedByDomain(String claimedIssuer, String domain) {
         if (claimedIssuer == null || claimedIssuer.isBlank() || domain == null) return false;
