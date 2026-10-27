@@ -129,13 +129,13 @@ public class BrokerStatementResetService {
             }
             transactionRepo.flush();
             for (Holding h : g.holdings) {
-                if (h != keeper) holdingRepo.delete(h);
+                if (h != keeper) removeHolding(portfolio, h);
             }
             BrokerHoldingsStatement.Row row = plan.statement.get(g.base);
             if (row != null && row.quantity().signum() > 0) {
                 addOpeningLot(keeper, row, asOf, note, portfolio.getName());
             } else if (transactionRepo.findByHoldingIdOrderByTransactionDateAscIdAsc(keeper.getId()).isEmpty()) {
-                holdingRepo.delete(keeper);
+                removeHolding(portfolio, keeper);
             }
             // Otherwise it was sold out by the statement date and only its later trades remain; the
             // ledger rebuild below derives its quantity from them.
@@ -177,6 +177,11 @@ public class BrokerStatementResetService {
         done.setReviewsClosed(closed);
         done.setSummary(summary);
         return done;
+    }
+
+    private void removeHolding(Portfolio portfolio, Holding h) {
+        portfolio.getHoldings().removeIf(x -> x.getId().equals(h.getId()));
+        holdingRepo.delete(h);
     }
 
     private void addOpeningLot(Holding h, BrokerHoldingsStatement.Row row, LocalDate asOf, String note, String broker) {

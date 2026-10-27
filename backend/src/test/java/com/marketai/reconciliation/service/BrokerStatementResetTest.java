@@ -115,6 +115,7 @@ class BrokerStatementResetTest {
         Holding h = Holding.builder().id(id).portfolio(portfolio).symbol(symbol).name(symbol)
             .quantity(BigDecimal.valueOf(qty)).averageCost(new BigDecimal(avg)).build();
         holdings.put(id, h);
+        portfolio.getHoldings().add(h);
         return h;
     }
 
@@ -146,6 +147,8 @@ class BrokerStatementResetTest {
 
         assertThat(holdings.values()).extracting(Holding::getSymbol)
             .containsExactlyInAnyOrder("HEROMOTORS", "RELIANCE", "SOMEFUND.MF", "BPCL");
+        assertThat(portfolio.getHoldings()).as("orphan removal re-saves a holding still in the portfolio's collection")
+            .extracting(Holding::getSymbol).doesNotContain("HEROMOTOCO", "HEROMOTOCO.NS", "RELIANCE.NS");
         Map<String, List<Transaction>> bySymbol = new HashMap<>();
         for (Transaction t : trades) bySymbol.computeIfAbsent(t.getHolding().getSymbol(), k -> new ArrayList<>()).add(t);
         assertThat(bySymbol.get("HEROMOTORS")).singleElement().satisfies(t -> {
