@@ -64,10 +64,28 @@ public class MfPerformanceService {
         if (schemeCode == null || schemeCode.trim().isEmpty()) {
             return empty(schemeCode);
         }
-        List<MfNavHistory> history =
-                navHistoryRepository.findBySchemeCodeOrderByDateAsc(schemeCode.trim());
-        return computeFrom(schemeCode, history);
+        String code = schemeCode.trim();
+        // A fund's whole NAV history is thousands of rows; it changes once a day, when new NAVs
+        // are stored (which drops the copy here), so the figures are reused until then.
+        Computed c = reuse ? computed.get(code) : null;
+        if (c != null && System.currentTimeMillis() - c.at() < REUSE_MS) return c.metrics();
+        List<MfNavHistory> history = navHistoryRepository.findBySchemeCodeOrderByDateAsc(code);
+        MfPerformanceMetrics m = computeFrom(schemeCode, history);
+        if (reuse) computed.put(code, new Computed(m, System.currentTimeMillis()));
+        return m;
     }
+
+    /** New NAVs were stored for this scheme: its figures are worked out again on the next request. */
+    public void forget(String schemeCode) {
+        if (schemeCode != null) computed.remove(schemeCode.trim());
+    }
+
+    private record Computed(MfPerformanceMetrics metrics, long at) {}
+    private static final long REUSE_MS = 6 * 60 * 60 * 1000L;
+    private final java.util.concurrent.ConcurrentHashMap<String, Computed> computed = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @org.springframework.beans.factory.annotation.Value("${app.mf.reuse-performance:true}")
+    private boolean reuse;
 
     /**
      * Pure computation over an ascending-by-date NAV series. Separated from the repository so

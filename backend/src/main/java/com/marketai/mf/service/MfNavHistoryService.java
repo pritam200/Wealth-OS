@@ -85,6 +85,13 @@ public class MfNavHistoryService {
     private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setPerformance(MfPerformanceService performance) {
+        this.performance = performance;
+    }
+
+    private MfPerformanceService performance;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setJdbc(org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
@@ -95,6 +102,15 @@ public class MfNavHistoryService {
      * together.
      */
     private void store(List<MfNavHistory> rows) {
+        try {
+            insert(rows);
+        } finally {
+            // After the insert, so a figure worked out meanwhile is not kept from the old history.
+            if (performance != null) rows.stream().map(MfNavHistory::getSchemeCode).distinct().forEach(performance::forget);
+        }
+    }
+
+    private void insert(List<MfNavHistory> rows) {
         if (jdbc == null) {
             navHistoryRepository.saveAll(rows);
             return;

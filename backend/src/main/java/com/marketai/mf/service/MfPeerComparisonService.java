@@ -87,8 +87,18 @@ public class MfPeerComparisonService {
         }
 
         var lastNav = navHistoryService.latestNavDate(self.getSchemeCode());
-        if (lastNav.isEmpty() || lastNav.get().isBefore(LocalDate.now().minusDays(3))) {
+        if (lastNav.isEmpty()) {
+            // Nothing to judge the fund on without it: the first time, wait for the download.
             navHistoryService.fetchAndStoreHistory(self.getSchemeCode());
+        } else if (lastNav.get().isBefore(LocalDate.now().minusDays(3))) {
+            // Only missing the latest days: this answer uses the history on hand, the next one the
+            // newer NAVs, so the download stays off the request path.
+            String code = self.getSchemeCode();
+            if (fetching.add(code)) background.execute(() -> {
+                try { navHistoryService.fetchAndStoreHistory(code); }
+                catch (Exception e) { log.debug("NAV history fetch failed for {}: {}", code, e.getMessage()); }
+                finally { fetching.remove(code); }
+            });
         }
         MfPerformanceMetrics fund = performanceService.getPerformance(self.getSchemeCode());
 
@@ -138,6 +148,8 @@ public class MfPeerComparisonService {
      * One category loads at a time. A thread per category let a page of fund badges start
      * several at once, each downloading dozens of histories and holding a database connection.
      */
+    private final java.util.Set<String> fetching = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     java.util.concurrent.Executor background = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "mf-peer-load");
         t.setDaemon(true);

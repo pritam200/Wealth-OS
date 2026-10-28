@@ -669,9 +669,23 @@ public class RecommendationEngine {
     }
 
     /** Price return from the first close on or after {@code since} to the last close; null if history does not reach back. */
+    /** An index's daily closes, reused for a few minutes: one fund badge asks for the Nifty up to four times. */
+    private record Series(com.marketai.market.quality.DailySeries series, long at) {}
+    private static final long SERIES_REUSE_MS = 5 * 60_000L;
+    private final java.util.concurrent.ConcurrentHashMap<String, Series> indexSeries = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private com.marketai.market.quality.DailySeries indexSeries(String symbol) {
+        Series c = reuseAssessments ? indexSeries.get(symbol) : null;
+        if (c != null && System.currentTimeMillis() - c.at() < SERIES_REUSE_MS) return c.series();
+        com.marketai.market.quality.DailySeries s = marketDataService.getDailySeries(symbol, 2);
+        if (reuseAssessments && s.status() != com.marketai.market.quality.SeriesStatus.INSUFFICIENT_DATA)
+            indexSeries.put(symbol, new Series(s, System.currentTimeMillis()));
+        return s;
+    }
+
     private BenchmarkReturn returnSince(String symbol, LocalDate since) {
         try {
-            com.marketai.market.quality.DailySeries s = marketDataService.getDailySeries(symbol, 2);
+            com.marketai.market.quality.DailySeries s = indexSeries(symbol);
             if (s.status() == com.marketai.market.quality.SeriesStatus.INSUFFICIENT_DATA || s.bars().get(0).getDate().isAfter(since.plusDays(7))) return null;
             PriceHistory first = s.bars().stream().filter(b -> !b.getDate().isBefore(since)).findFirst().orElse(null);
             PriceHistory last = s.last();
