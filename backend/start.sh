@@ -9,10 +9,11 @@ if [ ! -f "$DIR/truststore.p12" ]; then
   exit 1
 fi
 # Run from a copy so a `mvn package` during development can't swap classes out from under the
-# running process (that shows up as NoClassDefFoundError mid-sync). Restart to pick up a build.
+# running process (that shows up as NoClassDefFoundError mid-sync). The copy lives outside
+# target/ so `mvn clean` can't delete it either. Restart to pick up a build.
 JAR="$(ls "$DIR/target/"*.jar | head -1)"
-RUN_JAR="$DIR/target/run/app.jar"
-mkdir -p "$DIR/target/run" && cp "$JAR" "$RUN_JAR"
+RUN_JAR="$DIR/.run/app.jar"
+mkdir -p "$DIR/.run" && cp "$JAR" "$RUN_JAR"
 exec "$JAVA_HOME/bin/java" \
   -Djavax.net.ssl.trustStore="$DIR/truststore.p12" \
   -Djavax.net.ssl.trustStoreType=PKCS12 \

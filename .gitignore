@@ -72,3 +72,6 @@ deploy/backups/
 
 # Local cache of the AMFI scheme list (backend/data/amfi-navall.txt)
 backend/data/
+
+# Running copy of the backend jar (see backend/start.sh)
+backend/.run/
