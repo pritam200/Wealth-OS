@@ -23,9 +23,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class WealthController {
 
     private final PortfolioContextService portfolioContextService;
+    private final com.marketai.common.cache.PageCaches caches;
 
     @GetMapping("/summary")
     public ResponseEntity<PortfolioContext> summary(@AuthenticationPrincipal User user) {
-        return ResponseEntity.ok(portfolioContextService.build(user.getId()));
+        // Shown on most pages; after an edit it is recomputed before it is shown.
+        return ResponseEntity.ok(caches.<PortfolioContext>of("wealth-summary", java.time.Duration.ofSeconds(30), true)
+            .get(user.getId(), () -> portfolioContextService.build(user.getId())));
     }
 }

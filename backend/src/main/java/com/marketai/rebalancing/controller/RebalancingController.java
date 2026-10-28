@@ -19,12 +19,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class RebalancingController {
 
     private final RebalancingService rebalancingService;
+    private final com.marketai.common.cache.PageCaches caches;
 
     @GetMapping("/suggestions")
     @Operation(summary = "Current asset-class/sector allocation, concentration flags, and read-only "
         + "trim suggestions with real tax-lot-based tax impact — never an executed trade, never a "
         + "target-allocation model")
     public ResponseEntity<RebalancingSuggestionsResponse> suggestions(@AuthenticationPrincipal User user) {
-        return ResponseEntity.ok(rebalancingService.build(user.getId()));
+        return ResponseEntity.ok(caches.<RebalancingSuggestionsResponse>of("rebalancing", java.time.Duration.ofMinutes(10), false)
+            .get(user.getId(), () -> rebalancingService.build(user.getId())));
     }
 }

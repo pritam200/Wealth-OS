@@ -62,6 +62,8 @@ public class SyncJobService {
     /** Finishes a job that ran to the end, with the outcome it actually had. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void complete(Long jobId, SyncJobStatus outcome, String resultSummary, Integer itemsProcessed) {
+        // A sync imports outside any web request; cached page results taken before it are now old.
+        com.marketai.common.cache.DataVersion.bump();
         repo.findById(jobId).ifPresent(job -> {
             job.setStatus(outcome);
             job.setResultSummary(truncate(resultSummary, 20_000));

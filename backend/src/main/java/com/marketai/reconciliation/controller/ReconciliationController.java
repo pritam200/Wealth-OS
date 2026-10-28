@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 public class ReconciliationController {
 
     private final ReconciliationService reconciliationService;
+    private final com.marketai.common.cache.PageCaches caches;
     private final com.marketai.reconciliation.service.ReconciliationCenterService centerService;
     private final com.marketai.reconciliation.service.ReconciliationIssueService issueService;
     private final com.marketai.reconciliation.service.DataAuditService dataAuditService;
@@ -87,7 +88,9 @@ public class ReconciliationController {
 
     @GetMapping("/report")
     public ResponseEntity<ReconciliationReportDto> report(@AuthenticationPrincipal User user) {
-        return ResponseEntity.ok(reconciliationService.checkAll(user.getId()));
+        // Every check, about a hundred queries: the last run shows at once, and a newer one runs behind it.
+        return ResponseEntity.ok(caches.<ReconciliationReportDto>of("reconciliation-report", java.time.Duration.ofMinutes(5), false)
+            .get(user.getId(), () -> reconciliationService.checkAll(user.getId())));
     }
 
     /** The Reconciliation Center: ingestion totals, open issues, failed emails, background jobs. */

@@ -87,12 +87,26 @@ public class TodaysActionsService {
         List<WatchAction> watch = new ArrayList<>();
         List<NotAnalysed> notAnalysed = new ArrayList<>();
 
+        // Each holding's assessment is independent and spends most of its time waiting on the
+        // database, so several run at once; the results are then read in holding order.
+        java.util.Map<Holding, java.util.concurrent.Future<AnalystAssessment>> assessed = new java.util.IdentityHashMap<>();
+        for (Holding h : holdings) {
+            BigDecimal cur = h.getCurrentValue();
+            if (cur == null || cur.compareTo(BigDecimal.ZERO) <= 0) continue;
+            boolean mf = PortfolioContextService.isMf(h);
+            assessed.put(h, ASSESSORS.submit(() -> {
+                AnalystAssessment[] out = new AnalystAssessment[1];
+                com.marketai.common.cache.InSession.run(emf, () -> out[0] = mf ? assessMf(h, ctx, userId) : assessStock(h, ctx));
+                return out[0];
+            }));
+        }
+
         for (Holding h : holdings) {
             BigDecimal cur = h.getCurrentValue();
             if (cur == null || cur.compareTo(BigDecimal.ZERO) <= 0) continue;
 
             boolean isMf = PortfolioContextService.isMf(h);
-            AnalystAssessment a = isMf ? assessMf(h, ctx, userId) : assessStock(h, ctx);
+            AnalystAssessment a = result(assessed.get(h), h.getSymbol());
             String symbol = h.getSymbol();
             String name = h.getName() != null ? h.getName() : symbol;
             String assetType = isMf ? "MF" : "STOCK";
@@ -293,6 +307,28 @@ public class TodaysActionsService {
             return "Trimming reduces exposure to a holding whose SELL signal has beaten the base rate on its own history, and frees cash to redeploy.";
         }
         return "No change expected in the near term — the position is held pending a clearer signal.";
+    }
+
+    /** Shared by every request: six at a time keeps well inside the database pool. */
+    private static final java.util.concurrent.ExecutorService ASSESSORS = java.util.concurrent.Executors.newFixedThreadPool(6, r -> {
+        Thread t = new Thread(r, "todays-actions-assess");
+        t.setDaemon(true);
+        return t;
+    });
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private jakarta.persistence.EntityManagerFactory emf;
+
+    private AnalystAssessment result(java.util.concurrent.Future<AnalystAssessment> f, String symbol) {
+        try {
+            return f.get(2, java.util.concurrent.TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (Exception e) {
+            log.warn("Today's Actions: assessment failed for {}: {}", symbol, e.getMessage());
+            return null;
+        }
     }
 
     private AnalystAssessment assessStock(Holding h, PortfolioContext ctx) {

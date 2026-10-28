@@ -83,6 +83,8 @@ export interface ReconciliationCenter {
   checks: CheckStatus[];
   /** When the checks last actually ran; null if they never have. */
   checkedAt: string | null;
+  /** The checks are running now; ask again shortly for their results. */
+  refreshing?: boolean;
 }
 
 export type AuditClass = 'VERIFIED' | 'DUPLICATE' | 'MISREAD' | 'CONFLICT' | 'CORRUPTED' | 'MISSING' | 'REQUIRES_RECONCILIATION';

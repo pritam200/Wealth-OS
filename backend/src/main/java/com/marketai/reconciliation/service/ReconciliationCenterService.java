@@ -36,6 +36,32 @@ public class ReconciliationCenterService {
     private final ScheduledJobHealthRepository jobHealthRepo;
     private final SyncJobService syncJobService;
     private final ReconciliationService reconciliationService;
+    private final jakarta.persistence.EntityManagerFactory emf;
+
+    private final java.util.concurrent.ConcurrentHashMap<Long, Boolean> refreshing = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ExecutorService checks = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "reconciliation-checks");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /** Re-runs the checks in the background, once at a time per user. */
+    void startRefresh(Long userId) {
+        if (refreshing.putIfAbsent(userId, Boolean.TRUE) != null) return;
+        checks.execute(() -> com.marketai.common.cache.InSession.run(emf, () -> {
+            try {
+                issueService.refresh(userId);
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                // A refresh running at the same moment (the one after a sync) stored the same new
+                // issue first. Running again sees what it stored.
+                try { issueService.refresh(userId); } catch (RuntimeException again) { /* what is stored is current enough */ }
+            } catch (RuntimeException e) {
+                org.slf4j.LoggerFactory.getLogger(ReconciliationCenterService.class).warn("Reconciliation checks failed for user {}: {}", userId, e.getMessage());
+            } finally {
+                refreshing.remove(userId);
+            }
+        }));
+    }
 
     @Value @Builder
     public static class Ingestion {
@@ -92,27 +118,18 @@ public class ReconciliationCenterService {
         List<CheckStatus> checks;
         /** When the checks last actually ran; null if they never have. */
         LocalDateTime checkedAt;
+        /** The checks are running now; ask again shortly for their results. */
+        boolean refreshing;
     }
 
     /**
-     * @param refresh re-run the checks first (otherwise the stored issues are shown). Not in one
-     *                transaction: the refresh runs in its own, so a refresh at the same moment
-     *                storing the same new issue first fails only that attempt, which is retried.
+     * @param refresh start a re-run of the checks in the background; the stored issues are
+     *                returned either way, with {@code refreshing} set while the run is going.
      */
     public Center center(Long userId, boolean refresh) {
-        if (refresh) {
-            try {
-                issueService.refresh(userId);
-            } catch (org.springframework.dao.DataIntegrityViolationException e) {
-                // A refresh running at the same moment (the one after a sync) stored the same new
-                // issue first. Running again sees what it stored.
-                try {
-                    issueService.refresh(userId);
-                } catch (org.springframework.dao.DataIntegrityViolationException again) {
-                    // Still racing: what is stored is current enough to show.
-                }
-            }
-        }
+        // The checks send about a hundred queries; the page shows what is stored at once and
+        // asks again while {@code refreshing} is true.
+        if (refresh) startRefresh(userId);
         List<ReconciliationIssueRecord> open = issueService.current(userId);
         List<ReconciliationIssueRecord> ignored = issueService.ignored(userId);
         List<ReconciliationIssueRecord> resolved = issueService.recentlyResolved(userId).stream().limit(20).toList();
@@ -136,6 +153,7 @@ public class ReconciliationCenterService {
                 .map(ReconciliationCenterService::withoutErrorText).toList())
             .lastSync(recent.isEmpty() ? null : com.marketai.sync.controller.SyncJobController.SyncJobDto.from(recent.get(0)))
             .checkedAt(issueService.lastRunAt(userId))
+            .refreshing(refreshing.containsKey(userId))
             .build();
     }
 

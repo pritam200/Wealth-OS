@@ -16,9 +16,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class TodaysActionsController {
 
     private final TodaysActionsService service;
+    private final com.marketai.common.cache.PageCaches caches;
 
     @GetMapping
     public ResponseEntity<TodaysActionsResponse> get(@AuthenticationPrincipal User user) {
-        return ResponseEntity.ok(service.build(user.getId()));
+        // Advisory and slow to build: the last result shows at once while a newer one is worked out.
+        return ResponseEntity.ok(caches.<TodaysActionsResponse>of("todays-actions", java.time.Duration.ofMinutes(10), false)
+            .get(user.getId(), () -> service.build(user.getId())));
     }
 }
