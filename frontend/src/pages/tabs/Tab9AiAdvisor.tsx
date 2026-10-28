@@ -86,7 +86,7 @@ async function decide(h: HoldingDto, totalMfPortfolioValue: number): Promise<Act
   if (h.symbol.endsWith('.MF')) {
     try {
       const { data } = await recommendationMfApi.get({
-        symbol: h.symbol, fundName: h.name, buyDate: h.buyDate ?? undefined, xirr: h.xirr ?? undefined,
+        symbol: h.symbol, fundName: h.name, schemeCode: h.amfiSchemeCode ?? undefined, buyDate: h.buyDate ?? undefined, xirr: h.xirr ?? undefined,
         investedValue: h.investedValue ?? 0, currentValue: h.currentValue ?? 0, quantity: h.quantity,
         totalMfPortfolioValue,
       });
