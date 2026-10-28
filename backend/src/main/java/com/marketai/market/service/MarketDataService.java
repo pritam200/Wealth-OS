@@ -59,7 +59,23 @@ public class MarketDataService {
         INDEX_SYMBOLS.put("INDIAVIX", "^INDIAVIX");
     }
 
+    /**
+     * The header ticker asks every minute from every open page; each answer is a dozen Yahoo
+     * calls (~1.5 s). One answer serves everyone for a minute.
+     */
+    private volatile MarketOverviewDto lastOverview;
+
     public MarketOverviewDto getMarketOverview() {
+        MarketOverviewDto last = lastOverview;
+        if (last != null && last.getLastUpdated() != null && last.getLastUpdated().isAfter(LocalDateTime.now().minusSeconds(60))) {
+            return last;
+        }
+        MarketOverviewDto fresh = fetchMarketOverview();
+        lastOverview = fresh;
+        return fresh;
+    }
+
+    private MarketOverviewDto fetchMarketOverview() {
         return MarketOverviewDto.builder()
                 .nifty50(fetchIndexQuote("NIFTY50", "Nifty 50"))
                 .bankNifty(fetchIndexQuote("BANKNIFTY", "Bank Nifty"))

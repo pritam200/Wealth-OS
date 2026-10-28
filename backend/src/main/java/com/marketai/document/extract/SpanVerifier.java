@@ -28,7 +28,8 @@ public final class SpanVerifier {
 
     /** Collapses runs of whitespace so extraction line-wrapping does not cause false negatives. */
     static String normalise(String s) {
-        return s == null ? "" : s.replaceAll("\\s+", " ").trim();
+        // Non-breaking and narrow spaces too: some statements separate every word with them.
+        return s == null ? "" : s.replaceAll("[\\s\\u00A0\\u2007\\u202F]+", " ").trim();
     }
 
     /** Whether {@code span} appears verbatim in {@code sourceText} (whitespace-insensitive). */
@@ -44,11 +45,11 @@ public final class SpanVerifier {
      * Two things statement PDFs do that a quote of the same line does not: wrap a word across
      * lines ("HD" / "FC" for HDFC), and print a long reference the quote then masks ("••••9622"
      * for the digits ending 9622). So whitespace may appear anywhere, and a run of two or more
-     * mask characters stands for digits (or the PDF's own masking) — every other character must
-     * still be there, in order.
+     * mask characters stands for digits (or the PDF's own masking). A "|" the quote uses to show
+     * a table's columns is layout too. Every other character must still be there, in order.
      */
     static boolean inStatementLayout(String haystack, String span) {
-        String s = span.replaceAll("\\s+", "");
+        String s = span.replaceAll("[\\s\\u00A0\\u2007\\u202F|]+", "");
         if (s.isEmpty()) return false;
         StringBuilder re = new StringBuilder();
         for (int i = 0; i < s.length(); ) {

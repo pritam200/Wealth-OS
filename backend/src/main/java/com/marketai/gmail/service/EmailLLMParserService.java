@@ -45,6 +45,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -1052,6 +1053,27 @@ public class EmailLLMParserService {
      * Used for statements read before ₹0 / credit-balance statements and table-shaped summaries
      * were kept. Returns whether anything was kept or held for a detected card.
      */
+    /**
+     * A transaction held for review, checked again against the text it was read from — no model
+     * call. The record to book when it now passes every check the original read applied
+     * (grounding, amount and date in the quoted line, instrument), else null. {@code occurrences}
+     * numbers identical lines of one document, as the original read does.
+     */
+    public ParsedEmail recheckHeld(String modelItem, String sourceText, String holderName, boolean fromDocument,
+                                   double confidence, Map<String, Integer> occurrences) {
+        if (confidence < minConfidence) return null;
+        Optional<JsonNode> t = json.parse(modelItem);
+        if (t.isEmpty() || !t.get().isObject()) return null;
+        markOwnTransfer(t.get(), holderName);
+        Extraction x = toParsedEmail(t.get(), sourceText);
+        if (x.resolved() || x.reason() != null || x.parsed() == null) return null;
+        ParsedEmail pe = x.parsed();
+        pe.setExtractionMethod(fromDocument ? com.marketai.common.ledger.Provenance.PDF_LLM : com.marketai.common.ledger.Provenance.EMAIL_LLM);
+        pe.setExtractionConfidence(confidence);
+        pe.setOccurrenceInSource(occurrences.merge(occurrenceKey(pe), 1, Integer::sum) - 1);
+        return pe;
+    }
+
     public boolean recoverCardStatement(Long userId, String gmailMessageId, List<String> modelOutputs, String sourceText) {
         JsonNode node = null;
         List<JsonNode> txns = new ArrayList<>();

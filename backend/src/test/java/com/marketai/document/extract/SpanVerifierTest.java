@@ -102,5 +102,13 @@ class SpanVerifierTest {
         assertThat(SpanVerifier.appearsIn(pdf, "03 Sep 26 UPICC/DR/••••9622/FLIPKAR/HDFC/flipkar/UPIIntent 197.00 DR")).isFalse();
         assertThat(SpanVerifier.appearsIn(pdf, "03 Sep 26 UPICC/DR/••••1111/FLIPKAR/HDFC/flipkar/UPIIntent 179.00 DR")).isFalse();
         assertThat(SpanVerifier.appearsIn(pdf, "UPICC/DR/•/FLIPKAR")).isFalse();
+
+        // Words separated by non-breaking spaces, and a table's columns quoted with "|".
+        assertThat(SpanVerifier.appearsIn("31/08/2026 CAS*FLIPKART\u00A0INTERNET\u00A0P BENGALURU 12,281.00\u00A0DR",
+            "31/08/2026 CAS*FLIPKART INTERNET P BENGALURU 12,281.00 DR")).isTrue();
+        assertThat(SpanVerifier.appearsIn("09.\nNet Amount of Dividend paid (Rs.)\n212.50\n10.",
+            "Net Amount of Dividend paid (Rs.) | 212.50")).isTrue();
+        assertThat(SpanVerifier.appearsIn("09.\nNet Amount of Dividend paid (Rs.)\n212.50\n10.",
+            "Net Amount of Dividend paid (Rs.) | 221.50")).isFalse();
     }
 }
