@@ -813,6 +813,7 @@ public class PortfolioService {
                             .broker(h.getBroker())
                             .folio(h.getFolio())
                             .isin(h.getIsin())
+                            .amfiSchemeCode(h.getAmfiSchemeCode())
                             .dpId(h.getDpId())
                             .clientId(h.getClientId())
                             .buyDate(h.getBuyDate())

@@ -214,6 +214,8 @@ export interface HoldingDto {
   weightPercent: number;
   broker?: string | null;
   folio?: string | null;
+  /** AMFI scheme code for a mutual fund; null for stocks and unlinked funds. */
+  amfiSchemeCode?: string | null;
   buyDate?: string | null;
   xirr?: number | null;
   /** Day the price is from; null when unknown. */

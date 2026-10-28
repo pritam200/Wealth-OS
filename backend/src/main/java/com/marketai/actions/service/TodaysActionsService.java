@@ -346,7 +346,9 @@ public class TodaysActionsService {
 
     private String watchCondition(String action, AnalystAssessment a) {
         switch (action) {
-            case "REVIEW": return "CONFLICTING_EVIDENCE".equals(a.getResearchActionability())
+            case "REVIEW": return a.getSymbol() != null && a.getSymbol().endsWith(".MF")
+                    ? "Compare the fund with its category before adding more or switching — a loss alone is not a reason to sell."
+                    : "CONFLICTING_EVIDENCE".equals(a.getResearchActionability())
                     ? "Research found conflicting evidence — read it on the stock page before acting."
                     : "Re-check the original thesis against the validated signal, or set a stop-loss now.";
             case "PAUSE_SIP": return "Resume once the fund's XIRR/trend improves — see reasoning.";

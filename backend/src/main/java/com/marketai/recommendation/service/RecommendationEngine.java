@@ -316,6 +316,7 @@ public class RecommendationEngine {
         // beating the funds you could hold instead? A loss the whole category shares is the
         // market, not the fund.
         PeerView peer = peerView(req, factors, positives, risks);
+        TrackRecord track = peer != null ? peer.track() : null;
 
         if (dateKnown && daysHeld < 90) {
             // Too early — XIRR is noisy on a very young position, don't act on it yet.
@@ -336,7 +337,7 @@ public class RecommendationEngine {
             risks.add(String.format("Still short-term (%d days held) — STCG applies if redeemed now", daysHeld));
             factors.add(AnalystAssessment.Factor.builder().name("Tax timing").category("HOLDING").weightPct(0)
                 .note(String.format("%d more days to reach LTCG treatment", daysToLtcg)).build());
-        } else if (peer != null && peer.laggard) {
+        } else if (peer != null && peer.laggard()) {
             String instead = peer.alternatives.isEmpty() ? "" : " Stronger funds in the same category: " + peer.alternatives + ".";
             if (sip) {
                 nextAction = "REDIRECT_SIP";
@@ -347,24 +348,34 @@ public class RecommendationEngine {
                 nextActionReason = "It " + peer.summary + " — consistently behind its category. A switch is worth considering; it is a "
                     + "redemption plus a purchase, so check the exit load and tax first." + instead;
             }
-        } else if (peer != null && peer.leader && ((!Double.isNaN(xirr) && xirr < 0) || pnlPercent < -8)) {
+        } else if (peer != null && peer.leader() && ((!Double.isNaN(xirr) && xirr < 0) || pnlPercent < -8)) {
             nextAction = sip ? "CONTINUE_SIP" : "HOLD";
             nextActionReason = String.format("Down %.1f%%, but it %s — the fall is the market, not the fund. Switching would sell low into a weaker fund.%s",
                 pnlPercent, peer.summary, sip ? " Keep the SIP running; instalments now buy more units." : "");
+        } else if (track != null && track.strong() && ((!Double.isNaN(xirr) && xirr < 0) || pnlPercent < -8)) {
+            // Your position is down, but the fund itself has done its job: the fall is the market.
+            nextAction = sip ? "CONTINUE_SIP" : "HOLD";
+            nextActionReason = String.format("Your position is down %.1f%%, but the fund has returned %s — the fall is the market, "
+                + "not the fund. Selling now would book the loss.%s", pnlPercent, track.describe(),
+                sip ? " Keep the SIP running; instalments now buy more units." : "");
         } else if ((!Double.isNaN(xirr) && xirr < 0) || pnlPercent < -8) {
             String weak = (!Double.isNaN(xirr) && xirr < 0)
                 ? String.format("XIRR of %.1f%%%s is negative", xirr, dateKnown ? String.format(" over %d days held", daysHeld) : "")
                 : String.format("Down %.1f%% overall", pnlPercent);
-            if (sip) {
+            // A switch needs evidence the fund is the problem — a weaker record than its category.
+            // Without that ranking, a loss is a reason to look closer, not to sell.
+            if (sip && track != null && track.weak()) {
                 // Rotate the SIP, not the money already in: new instalments go to a stronger fund,
                 // and the units held stay put, so no loss is booked and no exit load or tax is paid.
                 nextAction = "REDIRECT_SIP";
-                nextActionReason = weak + " — redirect future SIP instalments to a stronger fund in the same category, "
-                    + "and keep the units you already hold rather than selling them at a loss.";
+                nextActionReason = weak + ", and the fund has returned " + track.describe() + " — redirect future SIP "
+                    + "instalments to a stronger fund in the same category, and keep the units you already hold rather than selling them at a loss.";
             } else {
-                nextAction = "SWITCH_FUND";
-                nextActionReason = weak + " — this lump sum isn't compounding; a switch to a stronger fund is worth considering. "
-                    + "A switch is a redemption plus a new purchase, so check the exit load and tax first.";
+                nextAction = "REVIEW";
+                nextActionReason = weak + (track != null && !track.describe().isEmpty() ? "; the fund has returned " + track.describe() : "")
+                    + ". " + (track != null && track.weak()
+                        ? "It has lagged the market for years, not just recently — compare it with its category before deciding to switch."
+                        : "Its category ranking is not available yet, so there is no evidence the fund itself is the problem — review it, don't sell on the loss alone.");
             }
             risks.add(String.format("Underperforming (%s)", !Double.isNaN(xirr) ? String.format("XIRR %.1f%%", xirr) : String.format("%.1f%% return", pnlPercent)));
         } else if (!Double.isNaN(xirr) && xirr >= 15 && isLongTerm) {
@@ -376,6 +387,20 @@ public class RecommendationEngine {
                 nextActionReason = String.format("XIRR of %.1f%% over %d days held (long-term) is strong compounding — a further lump sum (or starting a SIP) is reasonable, staggered rather than all at once.", xirr, daysHeld);
             }
             positives.add(String.format("Strong compounding (XIRR %.1f%%) over a long holding period", xirr));
+        } else if ((track != null && track.strong()) || (peer != null && peer.leader())) {
+            // A fund that keeps beating the market (or its category) is where new money belongs.
+            String why = peer != null && peer.leader() ? "it " + peer.summary() : "it has returned " + track.describe();
+            if (sip) {
+                nextAction = "INCREASE_SIP";
+                nextActionReason = "A strong fund: " + why + ". Increasing the monthly SIP is reasonable if it fits your plan.";
+            } else {
+                nextAction = "TOP_UP";
+                nextActionReason = "A strong fund: " + why + ". Adding more here is reasonable — ideally in instalments (a SIP or STP) rather than all at once.";
+            }
+        } else if (track != null && track.weak()) {
+            nextAction = "REVIEW";
+            nextActionReason = "The fund has returned " + track.describe() + " — behind the market over 3 years and the last year. "
+                + "Nothing urgent, but compare it with its category before adding more.";
         } else if (!Double.isNaN(xirr) && xirr >= 8) {
             nextAction = sip ? "CONTINUE_SIP" : "HOLD";
             nextActionReason = sip
@@ -384,8 +409,9 @@ public class RecommendationEngine {
             positives.add(String.format("On track (XIRR %.1f%%)", xirr));
         } else {
             nextAction = sip ? "CONTINUE_SIP" : "HOLD";
-            nextActionReason = (Double.isNaN(xirr) ? "No XIRR on record" : String.format("XIRR of %.1f%%", xirr))
-                + String.format(" and a %.1f%% return so far — nothing here warrants a change today", pnlPercent)
+            String record = track != null && !track.describe().isEmpty() ? "The fund has returned " + track.describe() + "; your position is "
+                : "Your position is ";
+            nextActionReason = record + String.format("%s%.1f%% — nothing here warrants a change today", pnlPercent >= 0 ? "up " : "down ", Math.abs(pnlPercent))
                 + (sip ? "; keep the SIP running." : ".");
         }
         if ("PAUSED".equals(sipStatus) && ("HOLD".equals(nextAction) || "TOP_UP".equals(nextAction))) {
@@ -462,7 +488,37 @@ public class RecommendationEngine {
     }
 
     /** The category verdict used by {@link #recommendMf}. */
-    private record PeerView(boolean laggard, boolean leader, String summary, String alternatives) {}
+    private record PeerView(boolean laggard, boolean leader, String summary, String alternatives, TrackRecord track) {}
+
+    /**
+     * The fund's own record from its NAV history, which needs no purchase dates: trailing
+     * returns, and how far ahead of or behind the Nifty 50 it has been over the same windows
+     * (equity funds only — a debt or gold fund is not meant to track the Nifty).
+     */
+    record TrackRecord(String category, boolean equity, Double r1, Double r3, Double r5,
+                       Double vsNifty1, Double vsNifty3, Double volatility, Double maxDrawdown) {
+        /** Ahead of the Nifty over 3 years (or 1 year for a younger fund). */
+        boolean strong() {
+            return equity && (vsNifty3 != null ? vsNifty3 >= 2 : vsNifty1 != null && vsNifty1 >= 2);
+        }
+        /** Behind the Nifty over 3 years and still behind over the last year. */
+        boolean weak() {
+            return equity && vsNifty3 != null && vsNifty3 <= -3 && (vsNifty1 == null || vsNifty1 < 0);
+        }
+        /** Neither ahead nor clearly behind, or not comparable. */
+        String describe() {
+            StringBuilder b = new StringBuilder();
+            if (r3 != null) b.append(String.format("%.1f%% a year over 3 years", r3));
+            else if (r1 != null) b.append(String.format("%.1f%% over the last year", r1));
+            if (equity && (vsNifty3 != null || vsNifty1 != null)) {
+                double d = vsNifty3 != null ? vsNifty3 : vsNifty1;
+                b.append(String.format(" (%s the Nifty 50 by %.1f pts)", d >= 0 ? "ahead of" : "behind", Math.abs(d)));
+            }
+            return b.toString();
+        }
+    }
+
+    private static Double d(BigDecimal v) { return v != null ? v.doubleValue() : null; }
 
     /**
      * Ranks the fund in its SEBI category (3Y CAGR, falling back to 1Y for young funds) and against
@@ -489,8 +545,32 @@ public class RecommendationEngine {
         if (found.isEmpty()) return null;
         var c = found.get();
 
+        var bucket = com.marketai.amfi.dto.MfCategoryBucket.from(c.category());
+        boolean equity = bucket != null && !java.util.Set.of(com.marketai.amfi.dto.MfCategoryBucket.DEBT,
+            com.marketai.amfi.dto.MfCategoryBucket.LIQUID, com.marketai.amfi.dto.MfCategoryBucket.GOLD_SILVER,
+            com.marketai.amfi.dto.MfCategoryBucket.INTERNATIONAL, com.marketai.amfi.dto.MfCategoryBucket.OTHER).contains(bucket);
+        Double vs1 = null, vs3 = null;
+        var m = c.fund();
+        if (m != null && m.getObservationCount() > 0) {
+            factors.add(AnalystAssessment.Factor.builder().name("Fund track record").category("PERFORMANCE").weightPct(0)
+                .reading(m.getReturn3YCagr() != null ? String.format("%.1f%% a year (3Y)", m.getReturn3YCagr().doubleValue())
+                    : m.getReturn1Y() != null ? String.format("%.1f%% (1Y)", m.getReturn1Y().doubleValue()) : null)
+                .note(String.format("From the fund's NAV history%s%s%s%s.",
+                    m.getReturn1Y() != null ? String.format(": 1Y %.1f%%", m.getReturn1Y().doubleValue()) : "",
+                    m.getReturn3YCagr() != null ? String.format(", 3Y %.1f%% a year", m.getReturn3YCagr().doubleValue()) : "",
+                    m.getReturn5YCagr() != null ? String.format(", 5Y %.1f%% a year", m.getReturn5YCagr().doubleValue()) : "",
+                    m.getMaxDrawdownPercent() != null ? String.format("; worst fall %.1f%%", m.getMaxDrawdownPercent().abs().doubleValue()) : ""))
+                .build());
+            if (m.getAnnualisedVolatility() != null) {
+                factors.add(AnalystAssessment.Factor.builder().name("Volatility").category("RISK").weightPct(0)
+                    .reading(String.format("%.1f%% a year", m.getAnnualisedVolatility().doubleValue()))
+                    .note("How much the NAV swings — higher means a bumpier ride, not a worse fund.").build());
+            }
+        }
+
         // Fund vs Nifty 50 over the same trailing windows, from the fund's own NAV history.
-        for (String w : List.of("1Y", "3Y", "5Y")) {
+        // Only for equity funds: a debt, liquid or gold fund is not meant to beat the Nifty.
+        for (String w : equity ? List.of("1Y", "3Y", "5Y") : List.<String>of()) {
             BigDecimal f = switch (w) { case "1Y" -> c.fund().getReturn1Y(); case "3Y" -> c.fund().getReturn3YCagr(); default -> c.fund().getReturn5YCagr(); };
             if (f == null) continue;
             int years = Integer.parseInt(w.substring(0, 1));
@@ -498,10 +578,20 @@ public class RecommendationEngine {
             if (n == null || n.years < years - 0.05) continue;
             double bench = years == 1 ? n.totalPct : n.annualisedPct;
             double diff = f.doubleValue() - bench;
+            if (years == 1) vs1 = diff;
+            if (years == 3) vs3 = diff;
             factors.add(AnalystAssessment.Factor.builder().name("vs Nifty 50 (" + w + ")").category("BENCHMARK").weightPct(0)
                 .reading(String.format("%+.1f pts", diff))
                 .note(String.format("Fund %.1f%% vs Nifty 50 %.1f%%%s (NAV-based; Nifty price index excludes dividends).",
                     f.doubleValue(), bench, years == 1 ? "" : " a year")).build());
+        }
+
+        TrackRecord track = m == null || m.getObservationCount() == 0 ? null : new TrackRecord(c.category(), equity,
+            d(m.getReturn1Y()), d(m.getReturn3YCagr()), d(m.getReturn5YCagr()), vs1, vs3,
+            d(m.getAnnualisedVolatility()), m.getMaxDrawdownPercent() != null ? m.getMaxDrawdownPercent().abs().doubleValue() : null);
+        if (track != null && equity) {
+            if (track.strong()) positives.add("Consistently ahead of the Nifty 50 — " + track.describe());
+            else if (track.weak()) risks.add("Behind the Nifty 50 over 3 years and the last year — " + track.describe());
         }
 
         if (c.ranks().isEmpty()) {
@@ -509,7 +599,7 @@ public class RecommendationEngine {
                 .note(c.peerDataLoading()
                     ? String.format("Loading NAV history for %d %s peers in %s — the ranking appears on the next refresh.", c.peersInCategory(), c.plan(), c.category())
                     : String.format("Not enough peers with history in %s to rank against.", c.category())).build());
-            return null;
+            return new PeerView(false, false, null, "", track);
         }
         for (var r : c.ranks()) {
             factors.add(AnalystAssessment.Factor.builder().name("Category rank (" + r.window() + ")").category("BENCHMARK").weightPct(0)
@@ -535,7 +625,7 @@ public class RecommendationEngine {
                 l.m().getReturn3YCagr() != null ? "3Y" : "1Y",
                 (l.m().getReturn3YCagr() != null ? l.m().getReturn3YCagr() : l.m().getReturn1Y()).doubleValue()))
             .toList());
-        return new PeerView(laggard, leader, summary, alternatives);
+        return new PeerView(laggard, leader, summary, alternatives, track);
     }
 
     private String taxImpactText(BigDecimal gain, long daysToLtcg, boolean isLongTerm) {

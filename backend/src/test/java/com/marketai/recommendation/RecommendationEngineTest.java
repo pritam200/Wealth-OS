@@ -2,16 +2,24 @@ package com.marketai.recommendation;
 
 import com.marketai.analyst.dto.AnalystAssessment;
 import com.marketai.analyst.service.AnalystService;
+import com.marketai.market.entity.PriceHistory;
+import com.marketai.market.quality.DailySeries;
+import com.marketai.market.quality.SeriesStatus;
 import com.marketai.market.service.MarketDataService;
+import com.marketai.mf.dto.MfPerformanceMetrics;
+import com.marketai.mf.service.MfPeerComparisonService;
 import com.marketai.recommendation.dto.MfRecommendationRequest;
 import com.marketai.recommendation.service.RecommendationEngine;
 import com.marketai.signal.dto.SignalPayload;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -174,15 +182,65 @@ class RecommendationEngineTest {
     }
 
     @Test
-    @DisplayName("An underperforming SIP is redirected; an underperforming lump sum is a switch")
-    void underperformingSipIsRedirectedLumpSumSwitched() {
+    @DisplayName("A loss alone is a review, not a switch: without the fund's record or ranking there is no evidence the fund is the problem")
+    void lossWithoutEvidenceIsReview() {
         when(md.getDailySeries(anyString(), anyInt())).thenThrow(new RuntimeException("no data"));
-        assertThat(engine.recommendMf(fund(LocalDate.now().minusYears(2), "100000", "85000", "-4", "ACTIVE")).getNextAction())
-            .isEqualTo("REDIRECT_SIP");
-        assertThat(engine.recommendMf(fund(LocalDate.now().minusYears(2), "100000", "85000", "-4", "INFERRED")).getNextAction())
-            .isEqualTo("REDIRECT_SIP");
-        assertThat(engine.recommendMf(fund(LocalDate.now().minusYears(2), "100000", "85000", "-4", "NONE")).getNextAction())
-            .isEqualTo("SWITCH_FUND");
+        for (String sip : List.of("ACTIVE", "INFERRED", "NONE")) {
+            AnalystAssessment a = engine.recommendMf(fund(LocalDate.now().minusYears(2), "100000", "85000", "-4", sip));
+            assertThat(a.getNextAction()).isEqualTo("REVIEW");
+            assertThat(a.getNextActionReason()).contains("don't sell on the loss alone");
+        }
+    }
+
+    /** Nifty 50 rising 10% a year for four years, weekly closes. */
+    private DailySeries nifty() {
+        List<PriceHistory> bars = new ArrayList<>();
+        LocalDate start = LocalDate.now().minusYears(4).minusDays(14);
+        for (LocalDate d = start; !d.isAfter(LocalDate.now()); d = d.plusDays(7)) {
+            double years = java.time.temporal.ChronoUnit.DAYS.between(start, d) / 365.25;
+            bars.add(PriceHistory.builder().symbol("^NSEI").date(d).close(BigDecimal.valueOf(100 * Math.pow(1.10, years))).build());
+        }
+        return new DailySeries("^NSEI", bars, SeriesStatus.OK, List.of(), 0, LocalDate.now(), 0, "test", null);
+    }
+
+    private void fundRecord(String r1, String r3) {
+        MfPeerComparisonService peers = mock(MfPeerComparisonService.class);
+        MfPerformanceMetrics m = MfPerformanceMetrics.builder().observationCount(900)
+            .return1Y(new BigDecimal(r1)).return3YCagr(new BigDecimal(r3)).build();
+        when(peers.compare("123")).thenReturn(Optional.of(new MfPeerComparisonService.Comparison(
+            "123", "F", "Equity Scheme - Flexi Cap Fund", "Direct", 0, 0, true, m, List.of(), List.of())));
+        ReflectionTestUtils.setField(engine, "mfPeers", peers);
+        when(md.getDailySeries(anyString(), anyInt())).thenReturn(nifty());
+    }
+
+    private MfRecommendationRequest linked(MfRecommendationRequest r) { r.setSchemeCode("123"); return r; }
+
+    @Test
+    @DisplayName("Down, but the fund has beaten the Nifty for years: hold (or keep the SIP) — the fall is the market")
+    void lossInAStrongFundIsHold() {
+        fundRecord("14", "16");
+        AnalystAssessment a = engine.recommendMf(linked(fund(null, "100000", "88000", null, "NONE")));
+        assertThat(a.getNextAction()).isEqualTo("HOLD");
+        assertThat(a.getNextActionReason()).contains("the fall is the market");
+        assertThat(engine.recommendMf(linked(fund(null, "100000", "88000", null, "ACTIVE"))).getNextAction()).isEqualTo("CONTINUE_SIP");
+    }
+
+    @Test
+    @DisplayName("Down and behind the Nifty for years: redirect the SIP; a lump sum is reviewed, not sold on the loss")
+    void lossInAWeakFund() {
+        fundRecord("3", "4");
+        assertThat(engine.recommendMf(linked(fund(null, "100000", "88000", null, "ACTIVE"))).getNextAction()).isEqualTo("REDIRECT_SIP");
+        AnalystAssessment lump = engine.recommendMf(linked(fund(null, "100000", "88000", null, "NONE")));
+        assertThat(lump.getNextAction()).isEqualTo("REVIEW");
+        assertThat(lump.getNextActionReason()).contains("lagged the market for years");
+    }
+
+    @Test
+    @DisplayName("A strong fund without a purchase date is still an add: top up a lump sum, step up a SIP")
+    void strongFundWithoutDateIsAdd() {
+        fundRecord("14", "16");
+        assertThat(engine.recommendMf(linked(fund(null, "100000", "104000", null, "NONE"))).getNextAction()).isEqualTo("TOP_UP");
+        assertThat(engine.recommendMf(linked(fund(null, "100000", "104000", null, "ACTIVE"))).getNextAction()).isEqualTo("INCREASE_SIP");
     }
 
     @Test

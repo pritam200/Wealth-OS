@@ -62,6 +62,8 @@ public class PortfolioSummaryDto {
         private String broker;
         private String folio;
         private String isin;
+        /** AMFI scheme code for a mutual fund; null for stocks and unlinked funds. */
+        private String amfiSchemeCode;
         private String dpId;
         private String clientId;
         private java.time.LocalDate buyDate;

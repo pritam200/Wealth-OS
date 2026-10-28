@@ -623,7 +623,7 @@ export function Tab6MutualFunds() {
                         </td>
                         <td className="text-right text-gray-500">{maskText(`${h.weightPercent?.toFixed(1)}%`)}</td>
                         <td className="text-center">
-                          <MfTrendBadge symbol={h.symbol} fundName={h.name} investedValue={h.investedValue ?? 0}
+                          <MfTrendBadge symbol={h.symbol} fundName={h.name} schemeCode={h.amfiSchemeCode} investedValue={h.investedValue ?? 0}
                             currentValue={h.currentValue ?? 0} quantity={h.quantity} xirr={h.xirr} buyDate={h.buyDate}
                             totalMfPortfolioValue={combined.currentValue} />
                         </td>
@@ -697,7 +697,7 @@ export function Tab6MutualFunds() {
                         <div className="font-mono text-ink text-xs truncate">{h.symbol?.replace('.MF', '')}</div>
                         <div className="text-2xs text-gray-500 truncate">{h.name}</div>
                       </div>
-                      <MfTrendBadge symbol={h.symbol} fundName={h.name} investedValue={h.investedValue ?? 0}
+                      <MfTrendBadge symbol={h.symbol} fundName={h.name} schemeCode={h.amfiSchemeCode} investedValue={h.investedValue ?? 0}
                         currentValue={h.currentValue ?? 0} quantity={h.quantity} xirr={h.xirr} buyDate={h.buyDate}
                         totalMfPortfolioValue={combined.currentValue} />
                     </div>

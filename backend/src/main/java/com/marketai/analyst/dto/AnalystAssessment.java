@@ -63,7 +63,7 @@ public class AnalystAssessment {
      */
     private Integer confidenceScore;
     private String nextAction;    // stock: ACCUMULATE|CONTINUE|BOOK_PROFIT|EXIT|REVIEW|HOLD
-                                   // MF: CONTINUE_SIP|INCREASE_SIP|PAUSE_SIP|HOLD|PARTIAL_PROFIT_BOOKING|FULL_REDEMPTION|REBALANCE|SWITCH_FUND
+                                   // MF: CONTINUE_SIP|INCREASE_SIP|PAUSE_SIP|REDIRECT_SIP|TOP_UP|HOLD|REVIEW|PARTIAL_PROFIT_BOOKING|FULL_REDEMPTION|REBALANCE|SWITCH_FUND
     private String nextActionReason; // plain-English explanation of why THIS action was chosen (not just the composite rating)
     private String taxImpact;     // MF only — e.g. "STCG ~₹12,400 at 15% if redeemed today; LTCG in 47 days". null for stocks.
 

@@ -154,7 +154,7 @@ export interface AnalystAssessment {
 }
 
 export type MfNextAction = 'CONTINUE_SIP' | 'INCREASE_SIP' | 'PAUSE_SIP' | 'REDIRECT_SIP' | 'TOP_UP' | 'HOLD'
-  | 'PARTIAL_PROFIT_BOOKING' | 'FULL_REDEMPTION' | 'REBALANCE' | 'SWITCH_FUND';
+  | 'REVIEW' | 'PARTIAL_PROFIT_BOOKING' | 'FULL_REDEMPTION' | 'REBALANCE' | 'SWITCH_FUND';
 
 export const analystApi = {
   assess: (symbol: string, name?: string) =>
@@ -178,6 +178,7 @@ export const recommendationApi = {
 export interface MfRecommendationParams {
   symbol: string;
   fundName?: string;
+  schemeCode?: string;
   buyDate?: string;
   xirr?: number;
   investedValue: number;

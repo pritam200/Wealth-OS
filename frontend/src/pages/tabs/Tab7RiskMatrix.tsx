@@ -272,7 +272,7 @@ function HoldingsGroup({ title, Icon, holdings, inv, cur, sell, reload, showSign
                     : <span className={h.pnlPercent >= 0 ? 'text-bull' : 'text-bear'}>{masked ? '••••••' : `${h.pnlPercent >= 0 ? '+' : ''}${h.pnlPercent?.toFixed(2)}%`}</span>}</td>
                   {showSignal && (
                     <td className="text-center">{isMf
-                      ? <MfTrendBadge symbol={h.symbol} fundName={h.name} investedValue={h.investedValue ?? 0}
+                      ? <MfTrendBadge symbol={h.symbol} fundName={h.name} schemeCode={h.amfiSchemeCode} investedValue={h.investedValue ?? 0}
                           currentValue={h.currentValue ?? 0} quantity={h.quantity} xirr={h.xirr} buyDate={h.buyDate}
                           totalMfPortfolioValue={cur} />
                       : <HoldingTrendBadge symbol={h.symbol} pnlPercent={h.pnlPercent} holdingValue={h.currentValue} totalPortfolioValue={cur} />}</td>
