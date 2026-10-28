@@ -73,6 +73,17 @@ export function InvestSavingsCard() {
                     ? <>Funds you already hold here: {s.funds.slice(0, 3).map(f => `${f.name}${f.return3Y != null ? ` (3Y ${f.return3Y.toFixed(1)}% a year)` : f.return1Y != null ? ` (1Y ${f.return1Y.toFixed(1)}%)` : ''}`).join('; ')}</>
                     : <>Type: {s.where}</>}
                 </p>
+                {s.ideas?.length > 0 && (
+                  <div className="mt-2 rounded-lg bg-surface-hover/50 p-2">
+                    <div className="text-2xs text-gray-400 mb-1">{s.funds.length > 0 ? 'Or a fund you don’t hold yet' : 'Funds you could start with'}:</div>
+                    {s.ideas.map(i => (
+                      <div key={i.schemeCode} className="text-2xs py-0.5">
+                        <span className="text-ink">{i.name}</span> <span className="text-gray-500">— {i.why}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {s.ideasNote && <p className="text-2xs text-gray-600 mt-1">{s.ideasNote}</p>}
               </div>
             ))}
           </div>

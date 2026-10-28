@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import type { AnalystAssessment } from './analyst';
 
 /* ── Portfolio context (mirrors backend PortfolioContext) ──────────────── */
 
@@ -44,6 +45,8 @@ export interface PortfolioContext {
 export type AssetType = 'STOCK' | 'MF' | 'PORTFOLIO';
 
 export interface BuyAction {
+  /** The full assessment behind the action; absent for portfolio-level items. */
+  detail?: AnalystAssessment | null;
   symbol: string; name: string; assetType: AssetType;
   currentValue: number; currentPercentOfEquity: number | null;
   maxAddWithoutBreachingGuideline: number | null;
@@ -53,6 +56,8 @@ export interface BuyAction {
 }
 
 export interface SellReduceAction {
+  /** The full assessment behind the action; absent for portfolio-level items. */
+  detail?: AnalystAssessment | null;
   symbol: string; name: string; assetType: AssetType;
   currentValue: number; pnlPercent: number | null;
   action: 'FULL_EXIT' | 'SWITCH' | 'REDUCE';
@@ -67,6 +72,8 @@ export interface ReinvestmentPlan {
 }
 
 export interface BookProfitAction {
+  /** The full assessment behind the action; absent for portfolio-level items. */
+  detail?: AnalystAssessment | null;
   symbol: string; name: string; assetType: AssetType;
   currentValue: number; pnlPercent: number | null; currentProfitAmount: number | null;
   suggestedBookPercent: number; suggestedBookAmount: number;
@@ -75,11 +82,15 @@ export interface BookProfitAction {
 }
 
 export interface HoldAction {
+  /** The full assessment behind the action; absent for portfolio-level items. */
+  detail?: AnalystAssessment | null;
   symbol: string; name: string; assetType: AssetType;
   currentValue: number; pnlPercent: number | null; why: string;
 }
 
 export interface WatchAction {
+  /** The full assessment behind the action; absent for portfolio-level items. */
+  detail?: AnalystAssessment | null;
   symbol: string | null; name: string; assetType: AssetType;
   condition: string; why: string;
 }

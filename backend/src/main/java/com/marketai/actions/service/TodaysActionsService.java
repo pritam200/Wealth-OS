@@ -153,7 +153,7 @@ public class TodaysActionsService {
                     }
 
                     buy.add(BuyAction.builder()
-                        .symbol(symbol).name(name).assetType(assetType)
+                        .symbol(symbol).name(name).assetType(assetType).detail(a)
                         .currentValue(cur).currentPercentOfEquity(pctOfEquity)
                         .maxAddWithoutBreachingGuideline(maxAdd)
                         .suggestedAmount(suggested)
@@ -176,7 +176,7 @@ public class TodaysActionsService {
                 case "SWITCH_FUND":
                 case "FULL_REDEMPTION": {
                     sellReduce.add(SellReduceAction.builder()
-                        .symbol(symbol).name(name).assetType(assetType)
+                        .symbol(symbol).name(name).assetType(assetType).detail(a)
                         .currentValue(cur).pnlPercent(pnlPercent)
                         .action("EXIT".equals(action) ? "FULL_EXIT" : "SWITCH_FUND".equals(action) ? "SWITCH" : "FULL_EXIT")
                         .why(a.getNextActionReason())
@@ -191,7 +191,7 @@ public class TodaysActionsService {
                 case "NO_ACTIONABLE_SIGNAL":
                 case "HOLD": {
                     hold.add(HoldAction.builder()
-                        .symbol(symbol).name(name).assetType(assetType)
+                        .symbol(symbol).name(name).assetType(assetType).detail(a)
                         .currentValue(cur).pnlPercent(pnlPercent)
                         .why(a.getNextActionReason())
                         .build());
@@ -203,7 +203,7 @@ public class TodaysActionsService {
                 case "REDIRECT_SIP":
                 case "REBALANCE": {
                     watch.add(WatchAction.builder()
-                        .symbol(symbol).name(name).assetType(assetType)
+                        .symbol(symbol).name(name).assetType(assetType).detail(a)
                         .condition(watchCondition(action, a))
                         .why(a.getNextActionReason())
                         .build());
@@ -212,7 +212,7 @@ public class TodaysActionsService {
                 default: {
                     log.warn("Today's Actions: unmapped nextAction '{}' for {} — routing to Watch so it isn't silently dropped.", action, symbol);
                     watch.add(WatchAction.builder()
-                        .symbol(symbol).name(name).assetType(assetType)
+                        .symbol(symbol).name(name).assetType(assetType).detail(a)
                         .condition("Unrecognised action '" + action + "' — review manually.")
                         .why(a.getNextActionReason())
                         .build());
@@ -407,7 +407,7 @@ public class TodaysActionsService {
         BigDecimal bookAmount = currentValue.multiply(BigDecimal.valueOf(bookPct / 100.0)).setScale(2, RoundingMode.HALF_UP);
 
         return BookProfitAction.builder()
-            .symbol(symbol).name(name).assetType(assetType)
+            .symbol(symbol).name(name).assetType(assetType).detail(a)
             .currentValue(currentValue).pnlPercent(pnlPercent)
             .currentProfitAmount(profitAmount != null ? profitAmount.setScale(2, RoundingMode.HALF_UP) : null)
             .suggestedBookPercent(bookPct)

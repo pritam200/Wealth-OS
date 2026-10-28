@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Zap, TrendingUp, TrendingDown, Coins, PauseCircle, Eye, HelpCircle,
   RefreshCw, AlertTriangle, ChevronDown, ChevronUp, ShieldAlert,
-  Check, Clock, X, StickyNote, Wallet,
+  Check, Clock, X, StickyNote, Wallet, FileSearch, ListTodo, PiggyBank,
 } from 'lucide-react';
 import { todaysActionsApi } from '../../api/todaysActions';
 import type {
@@ -12,6 +13,9 @@ import { actionsApi } from '../../api/actions';
 import type { ActionItem, ActionStatus, ActionType } from '../../api/actions';
 import { useMaskedText } from '../../components/shared/Amount';
 import { AssetAllocationRing } from '../../components/shared/AssetAllocationRing';
+import { AssessmentModal } from '../../components/shared/AssessmentModal';
+import { InvestSavingsCard } from '../../components/wealth/InvestSavingsCard';
+import type { AnalystAssessment } from '../../api/analyst';
 
 const fmt = (n: number | null | undefined) =>
   n == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -39,9 +43,9 @@ function ActionTriggers({ resolved, onResolve, busy }: {
   if (resolved && resolved.status !== 'PENDING') {
     const tone = resolved.status === 'EXECUTED' ? 'pill-bull'
       : resolved.status === 'SKIPPED' ? 'pill-muted' : 'pill-neutral';
-    const label = resolved.status === 'EXECUTED' ? 'Executed'
-      : resolved.status === 'SKIPPED' ? 'Skipped'
-      : `Snoozed to ${resolved.snoozedUntil ?? '—'}`;
+    const label = resolved.status === 'EXECUTED' ? 'Done'
+      : resolved.status === 'SKIPPED' ? 'Not doing it'
+      : `Reminder on ${resolved.snoozedUntil ?? '—'}`;
     return (
       <div className="flex items-center gap-2 flex-wrap">
         <span className={tone}>
@@ -63,19 +67,19 @@ function ActionTriggers({ resolved, onResolve, busy }: {
       <div className="flex items-center gap-1.5 flex-wrap">
         <button onClick={() => onResolve('EXECUTED')} disabled={busy}
                 className="inline-flex items-center gap-1 text-2xs font-semibold px-2.5 py-1 rounded-lg bg-bull/10 text-bull border border-bull/25 hover:bg-bull/20 transition-colors disabled:opacity-50">
-          <Check size={11} /> Execute
+          <Check size={11} /> I did this
         </button>
         <button onClick={() => onResolve('SNOOZED', isoInDays(SNOOZE_DAYS))} disabled={busy}
                 className="inline-flex items-center gap-1 text-2xs font-semibold px-2.5 py-1 rounded-lg bg-neutral/10 text-neutral border border-neutral/25 hover:bg-neutral/20 transition-colors disabled:opacity-50">
-          <Clock size={11} /> Snooze {SNOOZE_DAYS}d
+          <Clock size={11} /> Remind me in {SNOOZE_DAYS} days
         </button>
         <button onClick={() => onResolve('SKIPPED')} disabled={busy}
                 className="inline-flex items-center gap-1 text-2xs font-semibold px-2.5 py-1 rounded-lg bg-surface-hover text-gray-400 border border-surface-border hover:text-gray-200 transition-colors disabled:opacity-50">
-          <X size={11} /> Skip
+          <X size={11} /> Not doing it
         </button>
         <button onClick={() => setNoteOpen(o => !o)} disabled={busy}
                 className="inline-flex items-center gap-1 text-2xs font-medium px-2 py-1 rounded-lg text-gray-500 hover:text-gray-300 transition-colors">
-          <StickyNote size={11} /> Note
+          <StickyNote size={11} /> Add a note
         </button>
       </div>
       {noteOpen && (
@@ -91,9 +95,36 @@ function ActionTriggers({ resolved, onResolve, busy }: {
   );
 }
 
+/** Opens everything behind an action: the reason, each factor read, positives, risks and tax. */
+function FullAnalysis({ detail, name, label, cls }: { detail?: AnalystAssessment | null; name: string; label: string; cls: string }) {
+  const [open, setOpen] = useState(false);
+  if (!detail) return null;
+  return (
+    <>
+      <button onClick={() => setOpen(true)} className="inline-flex items-center gap-1 text-2xs text-brand-light hover:text-ink">
+        <FileSearch size={11} /> See full analysis
+      </button>
+      {open && createPortal(<AssessmentModal name={name} label={label} cls={cls} data={detail} onClose={() => setOpen(false)} />, document.body)}
+    </>
+  );
+}
+
+/** The detail's positives and risks as short bullets — the "why" at a glance. */
+function WhyBullets({ detail }: { detail?: AnalystAssessment | null }) {
+  const pos = detail?.positives?.slice(0, 2) ?? [];
+  const risks = detail?.risks?.slice(0, 2) ?? [];
+  if (pos.length + risks.length === 0) return null;
+  return (
+    <ul className="space-y-0.5 mb-1.5">
+      {pos.map((p, i) => <li key={`p${i}`} className="text-2xs text-gray-400 flex gap-1.5"><span className="text-bull">+</span>{p}</li>)}
+      {risks.map((r, i) => <li key={`r${i}`} className="text-2xs text-gray-400 flex gap-1.5"><span className="text-bear">−</span>{r}</li>)}
+    </ul>
+  );
+}
+
 /* ── Collapsible section shell ── */
-function Section({ title, icon, count, tone, children, defaultOpen = true }: {
-  title: string; icon: React.ReactNode; count: number; tone: string; children: React.ReactNode; defaultOpen?: boolean;
+function Section({ title, subtitle, icon, count, tone, children, defaultOpen = true }: {
+  title: string; subtitle?: string; icon: React.ReactNode; count: number; tone: string; children: React.ReactNode; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   if (count === 0) return null;
@@ -106,6 +137,7 @@ function Section({ title, icon, count, tone, children, defaultOpen = true }: {
         </h3>
         {open ? <ChevronUp size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />}
       </button>
+      {subtitle && <p className="text-xs text-gray-500 mt-1">{subtitle}</p>}
       {open && <div className="mt-4 space-y-2.5">{children}</div>}
     </div>
   );
@@ -147,7 +179,7 @@ function BuyCard({ a, resolved, onResolve, busy }: {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-ink text-sm font-semibold truncate">{a.name}</span>
             <AssetTag assetType={a.assetType} />
-            <span className="pill-bull">Buy</span>
+            <span className="pill-bull">{a.assetType === 'MF' ? 'Add more' : 'Buy more'}</span>
           </div>
           <div className="text-2xs text-gray-500 mt-0.5">
             Currently <span className="font-mono tabular-nums">{maskText(fmt(a.currentValue))}</span>
@@ -156,18 +188,20 @@ function BuyCard({ a, resolved, onResolve, busy }: {
         </div>
         <ConfidenceBadge confidence={a.confidence} />
       </div>
-      <p className="text-2xs text-gray-300 mb-1.5">{a.why}</p>
+      <p className="text-xs text-gray-300 mb-1.5">{a.why}</p>
+      <WhyBullets detail={a.detail} />
       <div className="flex items-start gap-1.5 text-2xs text-gray-500 mb-2">
         <ShieldAlert size={11} className="shrink-0 mt-0.5 text-neutral" />
-        <span>{a.risk}</span>
+        <span>What could go wrong: {a.risk}</span>
       </div>
       {a.maxAddWithoutBreachingGuideline != null && (
         <div className="text-2xs text-gray-600 border-t border-surface-border pt-1.5 mb-2">
           {a.maxAddWithoutBreachingGuideline > 0
-            ? <>Room to add up to <span className="text-gray-300 font-mono tabular-nums">{maskText(fmt(a.maxAddWithoutBreachingGuideline))}</span> before the 25% single-position guideline (not a suggested amount — no cash balance is tracked to size one).</>
-            : <>Already at or above the 25% single-position guideline — any addition would increase concentration risk.</>}
+            ? <>You can add up to <span className="text-gray-300 font-mono tabular-nums">{maskText(fmt(a.maxAddWithoutBreachingGuideline))}</span> before this one holding is more than 25% of your portfolio.</>
+            : <>This holding is already over 25% of your portfolio — adding more raises the risk of depending on one name.</>}
         </div>
       )}
+      <div className="mb-2"><FullAnalysis detail={a.detail} name={a.name} label={a.assetType === 'MF' ? 'ADD MORE' : 'BUY MORE'} cls="text-bull border-bull/40 bg-bull/10" /></div>
       <ActionTriggers resolved={resolved} onResolve={onResolve} busy={busy} />
     </QueueCard>
   );
@@ -193,11 +227,12 @@ function SellCard({ a, resolved, onResolve, busy }: {
           </div>
         </div>
       </div>
-      <p className="text-2xs text-gray-300 mb-1.5">{a.why}</p>
-      <p className="text-2xs text-gray-500 mb-1.5">{a.riskReward}</p>
+      <p className="text-xs text-gray-300 mb-1.5">{a.why}</p>
+      <WhyBullets detail={a.detail} />
       {a.taxImpact && (
         <div className="text-2xs text-neutral bg-neutral/5 border border-neutral/20 rounded px-2 py-1 mb-2">{a.taxImpact}</div>
       )}
+      <div className="mb-2"><FullAnalysis detail={a.detail} name={a.name} label={actionLabel.toUpperCase()} cls="text-bear border-bear/40 bg-bear/10" /></div>
       <ActionTriggers resolved={resolved} onResolve={onResolve} busy={busy} />
     </QueueCard>
   );
@@ -216,7 +251,7 @@ function BookProfitCard({ a, resolved, onResolve, busy }: {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-ink text-sm font-semibold truncate">{a.name}</span>
             <AssetTag assetType={a.assetType} />
-            <span className="pill-neutral">Book profit</span>
+            <span className="pill-neutral">Take some profit</span>
           </div>
           <div className="text-2xs text-gray-500 mt-0.5">
             <span className="font-mono tabular-nums">{maskText(fmt(a.currentValue))}</span> · <span className="text-bull font-mono tabular-nums">{fmtPct(a.pnlPercent)}</span>
@@ -224,16 +259,17 @@ function BookProfitCard({ a, resolved, onResolve, busy }: {
           </div>
         </div>
       </div>
-      <p className="text-2xs text-gray-300 mb-2">{a.why}</p>
+      <p className="text-xs text-gray-300 mb-1.5">{a.why}</p>
+      <WhyBullets detail={a.detail} />
       <div className="flex items-center justify-between bg-surface-card border border-surface-border rounded-lg px-2.5 py-1.5 mb-1.5">
-        <span className="text-2xs text-gray-500">Suggested booking</span>
+        <span className="text-2xs text-gray-500">Sell this much</span>
         <span className="text-xs font-mono tabular-nums text-ink">
           {a.suggestedBookPercent.toFixed(0)}% = {maskText(fmt(a.suggestedBookAmount))}
         </span>
       </div>
       {a.taxImpact && <div className="text-2xs text-neutral bg-neutral/5 border border-neutral/20 rounded px-2 py-1 mb-1.5">{a.taxImpact}</div>}
       <button onClick={() => setShowPlan(s => !s)} className="text-2xs text-brand-light flex items-center gap-1 mb-2">
-        Reinvestment plan {showPlan ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+        Where to put the money {showPlan ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
       </button>
       {showPlan && (
         <div className="mb-2 space-y-1.5 border-t border-surface-border pt-2">
@@ -250,6 +286,7 @@ function BookProfitCard({ a, resolved, onResolve, busy }: {
           <p className="text-2xs text-gray-700 pt-1">{a.reinvestmentPlan.basis}</p>
         </div>
       )}
+      <div className="mb-2"><FullAnalysis detail={a.detail} name={a.name} label="TAKE PROFIT" cls="text-neutral border-neutral/40 bg-neutral/10" /></div>
       <ActionTriggers resolved={resolved} onResolve={onResolve} busy={busy} />
     </QueueCard>
   );
@@ -264,7 +301,8 @@ function HoldCard({ a }: { a: HoldAction }) {
           <span className="text-ink text-xs font-medium truncate">{a.name}</span>
           <AssetTag assetType={a.assetType} />
         </div>
-        <p className="text-2xs text-gray-500 truncate">{a.why}</p>
+        <p className="text-2xs text-gray-500">{a.why}</p>
+        <FullAnalysis detail={a.detail} name={a.name} label="NO CHANGE" cls="text-gray-300 border-surface-border bg-surface-hover" />
       </div>
       <div className="text-right shrink-0 text-2xs text-gray-500 font-mono tabular-nums">
         {maskText(fmt(a.currentValue))}<br />{fmtPct(a.pnlPercent)}
@@ -279,10 +317,11 @@ function WatchCard({ a }: { a: WatchAction }) {
       <div className="flex items-center gap-2 mb-0.5 flex-wrap">
         <span className="text-ink text-xs font-medium truncate">{a.name}</span>
         <AssetTag assetType={a.assetType} />
-        <span className="pill-info">Watch</span>
+        <span className="pill-info">Keep an eye on</span>
       </div>
       <p className="text-2xs text-gray-400 mb-1">{a.why}</p>
-      <p className="text-2xs text-brand-light">Trigger: {a.condition}</p>
+      <p className="text-2xs text-brand-light mb-1">What to look for: {a.condition}</p>
+      <FullAnalysis detail={a.detail} name={a.name ?? 'Portfolio'} label="KEEP AN EYE ON" cls="text-neutral border-neutral/40 bg-neutral/10" />
     </div>
   );
 }
@@ -364,8 +403,8 @@ export function Tab16TodaysActions() {
             <h2 className="text-xl font-bold text-ink mb-0.5">Action Checklist</h2>
             <p className="text-gray-500 text-sm">
               {pendingCount > 0
-                ? <><span className="font-mono tabular-nums text-gray-300">{pendingCount}</span> decision{pendingCount === 1 ? '' : 's'} waiting on you.</>
-                : 'Everything in today’s queue has been dealt with.'}
+                ? <>What to do today, and why</>
+                : 'Everything for today has been dealt with.'}
             </p>
           </div>
         </div>
@@ -386,43 +425,103 @@ export function Tab16TodaysActions() {
         </div>
       )}
 
-      {!loading && data && (
+      {!loading && data && (() => {
+        const doToday = data.buy.length + data.bookProfit.length + data.sellReduce.length;
+        const glance = [
+          { label: 'to do today', count: pendingCount, tone: 'text-brand-light', target: 'do-today' },
+          { label: 'to keep an eye on', count: data.watch.length, tone: 'text-neutral', target: 'watch' },
+          { label: 'need no change', count: data.hold.length, tone: 'text-gray-300', target: 'hold' },
+          { label: 'could not be checked', count: data.notAnalysed.length, tone: 'text-gray-500', target: 'not-analysed' },
+        ].filter(g => g.count > 0);
+        const go = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return (
         <>
-          {/* Decision queue beside the wealth context it should be judged against. */}
+          <div className="card">
+            <p className="text-sm text-gray-300">
+              {pendingCount > 0
+                ? <>You have <b className="text-ink">{pendingCount}</b> thing{pendingCount === 1 ? '' : 's'} to decide today. Each one says what to do, why, and how much — open <span className="text-brand-light">See full analysis</span> for everything behind it.</>
+                : 'Nothing needs doing today. Your holdings are listed below with the reason each one needs no change.'}
+            </p>
+            {glance.length > 0 && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+                {glance.map(g => (
+                  <button key={g.label} onClick={() => go(g.target)} className="rounded-xl border border-surface-border p-2.5 text-left hover:bg-surface-hover/60">
+                    <div className={`text-xl font-mono font-bold ${g.tone}`}>{g.count}</div>
+                    <div className="text-2xs text-gray-500">{g.label}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2 space-y-4">
-              <Section title="Buy / Increase" icon={<TrendingUp size={15} className="text-bull" />}
-                       count={data.buy.length} tone="bg-bull/15 text-bull">
-                {data.buy.map(a => (
-                  <BuyCard key={a.symbol} a={a}
-                           resolved={resolvedFor.get(`BUY:${a.symbol}`)}
-                           busy={busyKey === `BUY:${a.symbol}`}
-                           onResolve={(s, until, note) => resolve('BUY', a.symbol, a.name, a.assetType, a.maxAddWithoutBreachingGuideline, s, until, note)} />
-                ))}
-              </Section>
+              <div id="do-today" className="card">
+                <h3 className="section-title mb-0 flex items-center gap-2"><ListTodo size={15} className="text-brand-light" /> Do today</h3>
+                <p className="text-xs text-gray-500 mt-1">Mark each one when you have done it with your broker — nothing here changes your holdings by itself.</p>
+                {doToday === 0
+                  ? <p className="text-xs text-gray-500 mt-3">Nothing to buy, sell or take profit on today.</p>
+                  : (
+                    <div className="mt-4 space-y-4">
+                      {data.sellReduce.length > 0 && (
+                        <div className="space-y-2.5">
+                          <div className="text-2xs uppercase tracking-wide text-bear flex items-center gap-1.5"><TrendingDown size={12} /> Sell or reduce</div>
+                          {data.sellReduce.map(a => (
+                            <SellCard key={a.symbol} a={a}
+                                      resolved={resolvedFor.get(`REDUCE:${a.symbol}`)}
+                                      busy={busyKey === `REDUCE:${a.symbol}`}
+                                      onResolve={(s, until, note) => resolve('REDUCE', a.symbol, a.name, a.assetType, a.currentValue, s, until, note)} />
+                          ))}
+                        </div>
+                      )}
+                      {data.bookProfit.length > 0 && (
+                        <div className="space-y-2.5">
+                          <div className="text-2xs uppercase tracking-wide text-neutral flex items-center gap-1.5"><Coins size={12} /> Take some profit</div>
+                          {data.bookProfit.map(a => (
+                            <BookProfitCard key={a.symbol} a={a}
+                                            resolved={resolvedFor.get(`BOOK_PROFIT:${a.symbol}`)}
+                                            busy={busyKey === `BOOK_PROFIT:${a.symbol}`}
+                                            onResolve={(s, until, note) => resolve('BOOK_PROFIT', a.symbol, a.name, a.assetType, a.suggestedBookAmount, s, until, note)} />
+                          ))}
+                        </div>
+                      )}
+                      {data.buy.length > 0 && (
+                        <div className="space-y-2.5">
+                          <div className="text-2xs uppercase tracking-wide text-bull flex items-center gap-1.5"><TrendingUp size={12} /> Add to what you hold</div>
+                          {data.buy.map(a => (
+                            <BuyCard key={a.symbol} a={a}
+                                     resolved={resolvedFor.get(`BUY:${a.symbol}`)}
+                                     busy={busyKey === `BUY:${a.symbol}`}
+                                     onResolve={(s, until, note) => resolve('BUY', a.symbol, a.name, a.assetType, a.maxAddWithoutBreachingGuideline, s, until, note)} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+              </div>
 
-              <Section title="Book Profit" icon={<Coins size={15} className="text-neutral" />}
-                       count={data.bookProfit.length} tone="bg-neutral/15 text-neutral">
-                {data.bookProfit.map(a => (
-                  <BookProfitCard key={a.symbol} a={a}
-                                  resolved={resolvedFor.get(`BOOK_PROFIT:${a.symbol}`)}
-                                  busy={busyKey === `BOOK_PROFIT:${a.symbol}`}
-                                  onResolve={(s, until, note) => resolve('BOOK_PROFIT', a.symbol, a.name, a.assetType, a.suggestedBookAmount, s, until, note)} />
-                ))}
-              </Section>
+              <div id="new-money">
+                <div className="flex items-center gap-2 px-1 mb-2 text-xs text-gray-500"><PiggyBank size={13} className="text-brand-light" /> Want to invest new money today? Enter the amount — the split also suggests new funds you don't hold yet.</div>
+                <InvestSavingsCard />
+              </div>
 
-              <Section title="Sell / Reduce" icon={<TrendingDown size={15} className="text-bear" />}
-                       count={data.sellReduce.length} tone="bg-bear/15 text-bear">
-                {data.sellReduce.map(a => (
-                  <SellCard key={a.symbol} a={a}
-                            resolved={resolvedFor.get(`REDUCE:${a.symbol}`)}
-                            busy={busyKey === `REDUCE:${a.symbol}`}
-                            onResolve={(s, until, note) => resolve('REDUCE', a.symbol, a.name, a.assetType, a.currentValue, s, until, note)} />
-                ))}
-              </Section>
+              <div id="watch">
+                <Section title="Keep an eye on" subtitle="Nothing to do yet — each says what would change that."
+                         icon={<Eye size={15} className="text-brand-light" />}
+                         count={data.watch.length} tone="bg-brand/15 text-brand-light" defaultOpen={false}>
+                  {data.watch.map((a, i) => <WatchCard key={a.symbol ?? `pf-${i}`} a={a} />)}
+                </Section>
+              </div>
+
+              <div id="hold">
+                <Section title="No change needed" subtitle="Holdings doing their job — the reason is under each one."
+                         icon={<PauseCircle size={15} className="text-gray-400" />}
+                         count={data.hold.length} tone="bg-surface-hover text-gray-400" defaultOpen={false}>
+                  {data.hold.map(a => <HoldCard key={a.symbol} a={a} />)}
+                </Section>
+              </div>
             </div>
 
-            {/* Wealth summary + allocation ring */}
             <div className="space-y-4">
               <div className="card">
                 <h3 className="section-title"><Wallet size={15} className="text-brand-light" /> Net Worth</h3>
@@ -433,29 +532,29 @@ export function Tab16TodaysActions() {
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div className="card-flat">
-                    <div className="stat-label mb-0.5">Equity P&L</div>
+                    <div className="stat-label mb-0.5">Return on investments</div>
                     <div className={`text-sm font-mono tabular-nums font-semibold ${data.portfolioContext.equityPnl >= 0 ? 'text-bull' : 'text-bear'}`}>
                       {fmtPct(data.portfolioContext.equityPnlPercent)}
                     </div>
                   </div>
                   <div className="card-flat">
-                    <div className="stat-label mb-0.5">Analysed</div>
+                    <div className="stat-label mb-0.5">Holdings checked</div>
                     <div className="text-sm font-mono tabular-nums font-semibold text-gray-200">
-                      {data.buy.length + data.sellReduce.length + data.bookProfit.length + data.hold.length}
+                      {data.buy.length + data.sellReduce.length + data.bookProfit.length + data.hold.length + data.watch.length}
                     </div>
                   </div>
                 </div>
               </div>
 
               <div className="card">
-                <h3 className="section-title"><Coins size={15} className="text-brand-light" /> Allocation</h3>
+                <h3 className="section-title"><Coins size={15} className="text-brand-light" /> Where your money is</h3>
                 <AssetAllocationRing wealth={data.portfolioContext} />
               </div>
 
               {data.notAnalysed.length > 0 && (
-                <div className="card">
+                <div id="not-analysed" className="card">
                   <h3 className="section-title">
-                    <HelpCircle size={15} className="text-neutral" /> Not Analysed
+                    <HelpCircle size={15} className="text-neutral" /> Could not be checked
                     <span className="pill-neutral">{data.notAnalysed.length}</span>
                   </h3>
                   <div className="space-y-1.5">
@@ -478,24 +577,15 @@ export function Tab16TodaysActions() {
             </div>
           )}
 
-          <Section title="Watch" icon={<Eye size={15} className="text-brand-light" />}
-                   count={data.watch.length} tone="bg-brand/15 text-brand-light" defaultOpen={false}>
-            {data.watch.map((a, i) => <WatchCard key={a.symbol ?? `pf-${i}`} a={a} />)}
-          </Section>
-
-          <Section title="Hold" icon={<PauseCircle size={15} className="text-gray-400" />}
-                   count={data.hold.length} tone="bg-surface-hover text-gray-400" defaultOpen={false}>
-            {data.hold.map(a => <HoldCard key={a.symbol} a={a} />)}
-          </Section>
-
           {data.buy.length + data.sellReduce.length + data.bookProfit.length + data.hold.length + data.watch.length + data.notAnalysed.length === 0 && (
             <div className="card text-center py-12 text-gray-600">
-              <p className="text-sm">No holdings to analyse yet.</p>
-              <p className="text-xs mt-2">Add stocks or mutual funds under Stocks / Mutual Funds to see today's actions.</p>
+              <p className="text-sm">No holdings to look at yet.</p>
+              <p className="text-xs mt-2">Add stocks or mutual funds under Stocks / Mutual Funds to see today's checklist.</p>
             </div>
           )}
         </>
-      )}
+        );
+      })()}
     </div>
   );
 }

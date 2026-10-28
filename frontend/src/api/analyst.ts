@@ -195,7 +195,12 @@ export const recommendationMfApi = {
 
 export type InvestRisk = 'CONSERVATIVE' | 'MODERATE' | 'AGGRESSIVE';
 export interface InvestFundPick { name: string; schemeCode: string | null; return3Y: number | null; return1Y: number | null; held: number }
-export interface InvestStep { part: string; label: string; amount: number; percent: number; where: string; why: string; funds: InvestFundPick[] }
+export interface InvestIdea { name: string; schemeCode: string; return3Y: number | null; return1Y: number | null; volatility: number | null; worstFall: number | null; why: string }
+export interface InvestStep {
+  part: string; label: string; amount: number; percent: number; where: string; why: string; funds: InvestFundPick[];
+  /** Funds not held yet, strongest in the category on their own record. */
+  ideas: InvestIdea[]; ideasNote: string | null;
+}
 export interface InvestPlan {
   amount: number; horizonYears: number; risk: InvestRisk;
   current: { equity: number; debt: number; gold: number }; target: { equity: number; debt: number; gold: number };

@@ -121,6 +121,40 @@ public class MfPeerComparisonService {
                 loading.contains(key) || snap.peers().size() < universe.size(), fund, ranks, leaders));
     }
 
+    /** The strongest funds in a category, or none yet while its histories load. */
+    public record CategoryLeaders(String category, List<PeerMetrics> leaders, boolean loading) {}
+
+    /**
+     * Direct growth plans in an AMFI category ranked by 3-year return (1-year when too few have
+     * three years), optionally only those whose name contains {@code nameHas}. Reads only what
+     * is already stored; a category not loaded yet starts loading and comes back empty.
+     */
+    public CategoryLeaders leaders(String category, String nameHas, int n) {
+        String has = nameHas == null ? null : nameHas.toLowerCase(Locale.ENGLISH);
+        List<AmfiNavResult> universe = amfiNavService.all().stream()
+                .filter(r -> category.equals(r.getCategory()))
+                .filter(r -> r.getSchemeType() == null || "Open Ended".equals(r.getSchemeType()))
+                .filter(r -> isGrowth(r.getSchemeName()) && isDirect(r.getSchemeName()))
+                .filter(r -> has == null || r.getSchemeName().toLowerCase(Locale.ENGLISH).contains(has))
+                .limit(MAX_PEERS)
+                .toList();
+        if (universe.isEmpty()) return new CategoryLeaders(category, List.of(), false);
+        String key = category + "|true" + (has == null ? "" : "|" + has);
+        Snapshot snap = snapshots.get(key);
+        if (snap == null || snap.at().isBefore(Instant.now().minus(SNAPSHOT_TTL_HOURS, ChronoUnit.HOURS))) {
+            loadInBackground(key, universe);
+        }
+        if (snap == null) return new CategoryLeaders(category, List.of(), true);
+        Function<MfPerformanceMetrics, BigDecimal> by = snap.peers().stream()
+                .filter(p -> p.m().getReturn3YCagr() != null).count() >= Math.min(MIN_PEERS, Math.max(3, snap.peers().size() / 2))
+                ? MfPerformanceMetrics::getReturn3YCagr : MfPerformanceMetrics::getReturn1Y;
+        List<PeerMetrics> top = snap.peers().stream()
+                .filter(p -> by.apply(p.m()) != null)
+                .sorted(Comparator.comparing((PeerMetrics p) -> by.apply(p.m())).reversed())
+                .limit(n).toList();
+        return new CategoryLeaders(category, top, loading.contains(key));
+    }
+
     private Optional<WindowRank> rankWindow(String window, MfPerformanceMetrics fund, List<PeerMetrics> peers,
                                             Function<MfPerformanceMetrics, BigDecimal> metric) {
         BigDecimal mine = metric.apply(fund);

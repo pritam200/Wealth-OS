@@ -55,6 +55,8 @@ public class TodaysActionsResponse {
     @Data
     @Builder
     public static class BuyAction {
+        /** The full assessment behind the action — every factor read, positives, risks, tax. Null for portfolio-level items. */
+        private com.marketai.analyst.dto.AnalystAssessment detail;
         private String symbol;
         private String name;
         private String assetType; // STOCK | MF
@@ -80,6 +82,8 @@ public class TodaysActionsResponse {
     @Data
     @Builder
     public static class SellReduceAction {
+        /** The full assessment behind the action — every factor read, positives, risks, tax. Null for portfolio-level items. */
+        private com.marketai.analyst.dto.AnalystAssessment detail;
         private String symbol;
         private String name;
         private String assetType;
@@ -95,6 +99,8 @@ public class TodaysActionsResponse {
     @Data
     @Builder
     public static class BookProfitAction {
+        /** The full assessment behind the action — every factor read, positives, risks, tax. Null for portfolio-level items. */
+        private com.marketai.analyst.dto.AnalystAssessment detail;
         private String symbol;
         private String name;
         private String assetType;
@@ -128,6 +134,8 @@ public class TodaysActionsResponse {
     @Data
     @Builder
     public static class HoldAction {
+        /** The full assessment behind the action — every factor read, positives, risks, tax. Null for portfolio-level items. */
+        private com.marketai.analyst.dto.AnalystAssessment detail;
         private String symbol;
         private String name;
         private String assetType;
@@ -139,6 +147,8 @@ public class TodaysActionsResponse {
     @Data
     @Builder
     public static class WatchAction {
+        /** The full assessment behind the action — every factor read, positives, risks, tax. Null for portfolio-level items. */
+        private com.marketai.analyst.dto.AnalystAssessment detail;
         private String symbol; // null for portfolio-level (non-security) watch items
         private String name;
         private String assetType; // STOCK | MF | PORTFOLIO

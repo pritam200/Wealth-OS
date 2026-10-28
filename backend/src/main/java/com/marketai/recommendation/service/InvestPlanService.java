@@ -55,7 +55,12 @@ public class InvestPlanService {
     }
 
     public record FundPick(String name, String schemeCode, Double return3Y, Double return1Y, BigDecimal held) {}
-    public record Step(Part part, String label, BigDecimal amount, double percent, String where, String why, List<FundPick> funds) {}
+    /** A fund not held yet, among the strongest in its category on its own record. */
+    public record Idea(String name, String schemeCode, Double return3Y, Double return1Y, Double volatility, Double worstFall, String why) {}
+    public record Step(Part part, String label, BigDecimal amount, double percent, String where, String why, List<FundPick> funds,
+                       List<Idea> ideas, String ideasNote) {
+        Step withIdeas(List<Idea> i, String note) { return new Step(part, label, amount, percent, where, why, funds, i, note); }
+    }
     public record Mix(double equity, double debt, double gold) {}
     public record Plan(BigDecimal amount, int horizonYears, Risk risk, Mix current, Mix target, BigDecimal monthlySpend,
                        List<Step> steps, List<String> notes, String disclaimer) {}
@@ -74,7 +79,58 @@ public class InvestPlanService {
         BigDecimal spend = monthlySpend(userId);
         BigDecimal liquidFunds = own.getOrDefault(Part.EMERGENCY, List.of()).stream().map(FundPick::held).reduce(BigDecimal.ZERO, BigDecimal::add);
         Holdings h = holdingsByClass(ctx, holdings);
-        return plan(amount, horizonYears, risk, spend, nz(ctx.getCashValue()).add(liquidFunds), nz(ctx.getCardDues()), h, own);
+        Plan p = plan(amount, horizonYears, risk, spend, nz(ctx.getCashValue()).add(liquidFunds), nz(ctx.getCardDues()), h, own);
+        java.util.Set<String> held = new java.util.HashSet<>();
+        own.values().forEach(l -> l.forEach(f -> { if (f.schemeCode() != null) held.add(f.schemeCode()); }));
+        List<Step> steps = p.steps().stream().map(st -> withIdeas(st, held)).toList();
+        return new Plan(p.amount(), p.horizonYears(), p.risk(), p.current(), p.target(), p.monthlySpend(), steps, p.notes(), p.disclaimer());
+    }
+
+    /** The AMFI category each part draws new-fund ideas from, and a word the name must contain (gold). */
+    private static final Map<Part, String[]> IDEA_CATEGORY = Map.of(
+        Part.EMERGENCY, new String[] { "Debt Scheme - Liquid Fund", null },
+        Part.EQUITY_CORE, new String[] { "Equity Scheme - Large Cap Fund", null },
+        Part.EQUITY_FLEXI, new String[] { "Equity Scheme - Flexi Cap Fund", null },
+        Part.EQUITY_MIDSMALL, new String[] { "Equity Scheme - Mid Cap Fund", null },
+        Part.DEBT, new String[] { "Debt Scheme - Short Duration Fund", null },
+        Part.GOLD, new String[] { "Other Scheme - FoF Domestic", "gold" });
+
+    /** Up to three funds not already held, strongest 3-year record in the part's category first. */
+    private Step withIdeas(Step st, java.util.Set<String> held) {
+        String[] cat = IDEA_CATEGORY.get(st.part());
+        if (cat == null || peers == null) return st;
+        try {
+            var found = peers.leaders(cat[0], cat[1], 6);
+            if (found.leaders().isEmpty()) {
+                return st.withIdeas(List.of(), found.loading()
+                    ? "Fund ideas for this part are being worked out from AMFI data — check back in a few minutes."
+                    : null);
+            }
+            List<Idea> ideas = found.leaders().stream()
+                .filter(l -> !held.contains(l.schemeCode()))
+                .limit(3)
+                .map(l -> idea(l, st.part()))
+                .toList();
+            return st.withIdeas(ideas, "Direct growth plans ranked by their own 3-year return in \"" + cat[0].replaceFirst("^.* - ", "")
+                + "\". Past returns are not a promise of future ones — compare expense ratio and exit load before choosing.");
+        } catch (Exception e) {
+            log.debug("No fund ideas for {}: {}", st.part(), e.getMessage());
+            return st;
+        }
+    }
+
+    private static Idea idea(MfPeerComparisonService.PeerMetrics l, Part part) {
+        var m = l.m();
+        Double r3 = m.getReturn3YCagr() != null ? m.getReturn3YCagr().doubleValue() : null;
+        Double r1 = m.getReturn1Y() != null ? m.getReturn1Y().doubleValue() : null;
+        Double vol = m.getAnnualisedVolatility() != null ? m.getAnnualisedVolatility().doubleValue() : null;
+        Double fall = m.getMaxDrawdownPercent() != null ? m.getMaxDrawdownPercent().abs().doubleValue() : null;
+        StringBuilder why = new StringBuilder();
+        if (r3 != null) why.append(String.format("%.1f%% a year over 3 years", r3));
+        if (r1 != null) why.append(why.length() > 0 ? ", " : "").append(String.format("%.1f%% in the last year", r1));
+        if (fall != null) why.append(String.format("; its worst fall was %.0f%%", fall));
+        if (vol != null && part.name().startsWith("EQUITY")) why.append(String.format(", swings about %.0f%% a year", vol));
+        return new Idea(l.name(), l.schemeCode(), r3, r1, vol, fall, why.append('.').toString());
     }
 
     /** What is already held, by asset class, in rupees. */
@@ -206,7 +262,7 @@ public class InvestPlanService {
     }
 
     private static Step step(Part p, BigDecimal amount, BigDecimal of, String why, List<FundPick> funds) {
-        return new Step(p, p.label, amount, pct(amount, of), p.where, why, funds);
+        return new Step(p, p.label, amount, pct(amount, of), p.where, why, funds, List.of(), null);
     }
 
     /** Direct stocks and equity funds; FD, RD, EPF and debt funds; gold funds. Hybrid funds split 65/35. Bank cash is the emergency fund, not an investment. */
