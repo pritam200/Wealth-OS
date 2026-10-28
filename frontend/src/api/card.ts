@@ -114,6 +114,8 @@ export const cardApi = {
   delete:     (id: number) => apiClient.delete(`/api/cards/${id}`),
   updatePoints: (id: number, pointsBalance: number) =>
     apiClient.put<CardResponse>(`/api/cards/${id}/points`, { pointsBalance }),
+  earnPoints: (id: number, points: number, note?: string) =>
+    apiClient.post<CardResponse>(`/api/cards/${id}/rewards/earn`, { points, note }),
   recommend:  (category: string, amount: number, merchant?: string) =>
     apiClient.post<RecommendResult[]>('/api/cards/recommend', { category, amount, merchant }),
   statements: (id: number) => apiClient.get<CardStatement[]>(`/api/cards/${id}/statements`),

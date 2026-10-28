@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CreditCard as CardIcon, Plus, Trash2, Sparkles, Gift,
-  TrendingUp, Wand2, ChevronDown, ChevronUp, Search, AlertTriangle, Ban,
+  TrendingUp, Wand2, ChevronDown, ChevronUp, Search, AlertTriangle, Ban, Pencil, X,
 } from 'lucide-react';
+import { CardFace } from './CardFace';
 import { cardApi } from '../../api/card';
 import type { CardResponse, CatalogEntry, RecommendResult, PointsTip, CardStatement } from '../../api/card';
 import { useMaskedText } from '../shared/Amount';
@@ -96,7 +98,7 @@ export function CreditCardSection() {
           ? <p className="text-gray-600 text-xs text-center py-6">No cards yet. Add one to track reward points and card bills — or browse benefits of popular cards below.</p>
           : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {cards.map(c => <CardTile key={c.id} card={c} onDelete={async () => { await cardApi.delete(c.id); load(); }} onPoints={load} />)}
+              {cards.map(c => <CardTile key={c.id} card={c} categories={categories} onDelete={async () => { await cardApi.delete(c.id); load(); }} onPoints={load} />)}
             </div>
           )}
       </div>
@@ -612,34 +614,34 @@ function StatementPanel({ card, onApplied }: { card: CardResponse; onApplied: ()
   );
 }
 
-function CardTile({ card, onDelete, onPoints }: { card: CardResponse; onDelete: () => void; onPoints: () => void }) {
+function CardTile({ card, categories, onDelete, onPoints }: { card: CardResponse; categories: string[]; onDelete: () => void; onPoints: () => void }) {
   const maskText = useMaskedText();
   const [expanded, setExpanded] = useState(false);
-  const [editPts, setEditPts]   = useState(false);
-  const [pts, setPts]           = useState(String(card.pointsBalance));
-  const grad = ISSUER_GRAD[card.issuer] ?? 'from-gray-700 to-gray-900';
+  const [editing, setEditing]   = useState(false);
   const topCats = Object.entries(card.rewardRates || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
 
-  const savePts = async () => { await cardApi.updatePoints(card.id, Number(pts)); setEditPts(false); onPoints(); };
-
   return (
-    <div className="rounded-xl overflow-hidden border border-surface-border">
-      {/* Card face */}
-      <div className={`bg-gradient-to-br ${grad} p-4 relative`}>
-        <div className="flex justify-between items-start">
-          <div>
-            <div className="text-ink/70 text-2xs uppercase tracking-wider">{card.issuer}</div>
-            <div className="text-ink font-semibold text-sm">{card.name}</div>
+    <div className="rounded-xl overflow-hidden border border-surface-border bg-surface-card">
+      <div className="p-3 pb-0">
+        <CardFace name={card.name} issuer={card.issuer} network={card.network} lastFour={card.lastFour}>
+          <div className="flex items-center gap-1 shrink-0">
+            <button onClick={() => setEditing(true)} title="Edit card" className="p-1 rounded bg-black/20 hover:bg-black/40"><Pencil size={12} /></button>
+            <button onClick={() => { if (window.confirm(`Remove ${card.name}?`)) onDelete(); }} title="Remove card" className="p-1 rounded bg-black/20 hover:bg-black/40"><Trash2 size={12} /></button>
           </div>
-          <button onClick={onDelete} className="text-ink/50 hover:text-ink"><Trash2 size={13} /></button>
-        </div>
-        <div className="mt-4 flex justify-between items-end">
-          <div className="text-ink/90 font-mono text-sm tracking-widest">•••• {card.lastFour || '••••'}</div>
-          <div className="text-ink/70 text-2xs">{card.network}</div>
-        </div>
+        </CardFace>
       </div>
-      {/* Details */}
-      <div className="bg-surface-card p-3">
+      <div className="p-3">
+        <button onClick={() => setEditing(true)}
+          className="w-full flex items-center justify-between rounded-lg border border-neutral/25 bg-neutral/5 px-3 py-2 mb-2 hover:bg-neutral/10 text-left">
+          <span className="flex items-center gap-2">
+            <Gift size={14} className="text-neutral" />
+            <span>
+              <span className="block text-sm font-mono text-ink">{maskText(card.pointsBalance.toLocaleString('en-IN'))} points</span>
+              <span className="block text-2xs text-gray-500">worth about {maskText(fmtINR(card.pointsCashValue))}</span>
+            </span>
+          </span>
+          <span className="text-2xs text-brand-light flex items-center gap-1"><Pencil size={10} /> Update points</span>
+        </button>
         {card.currentDue != null && card.currentDue > 0 && (
           <div className="flex items-center justify-between mb-2 bg-bear/10 border border-bear/20 rounded px-2 py-1">
             <span className="text-2xs text-bear font-medium">Bill due{card.currentDueDate ? ` by ${card.currentDueDate}` : ''}</span>
@@ -662,25 +664,11 @@ function CardTile({ card, onDelete, onPoints }: { card: CardResponse; onDelete: 
             ))}
           </div>
         )}
-        <div className="flex items-center justify-between text-2xs">
-          <div className="flex items-center gap-1.5">
-            <Gift size={11} className="text-neutral" />
-            {editPts ? (
-              <span className="flex items-center gap-1">
-                <input type="number" value={pts} onChange={e => setPts(e.target.value)} className="input-field text-2xs w-20 py-0.5" />
-                <button onClick={savePts} className="text-bull">✓</button>
-                <button onClick={() => { setEditPts(false); setPts(String(card.pointsBalance)); }} className="text-gray-500">✕</button>
-              </span>
-            ) : (
-              <button onClick={() => setEditPts(true)} className="text-gray-400 hover:text-ink">
-                {maskText(card.pointsBalance.toLocaleString('en-IN'))} pts · <span className="text-gray-300">{maskText(fmtINR(card.pointsCashValue))}</span>
-              </button>
-            )}
-          </div>
-          <button onClick={() => setExpanded(e => !e)} className="text-gray-500 flex items-center gap-0.5">
+        {card.benefits && (
+          <button onClick={() => setExpanded(e => !e)} className="text-2xs text-gray-500 flex items-center gap-0.5">
             Benefits {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </button>
-        </div>
+        )}
         {expanded && card.benefits && (
           <ul className="mt-2 space-y-1 border-t border-surface-border/40 pt-2">
             {card.benefits.split('\n').map((b, i) => (
@@ -688,6 +676,121 @@ function CardTile({ card, onDelete, onPoints }: { card: CardResponse; onDelete: 
             ))}
           </ul>
         )}
+      </div>
+      {editing && createPortal(<EditCardModal card={card} categories={categories} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); onPoints(); }} />, document.body)}
+    </div>
+  );
+}
+
+/** Every detail of a card in one place: the points balance, points just earned, fees, dates and reward rates. */
+function EditCardModal({ card, categories, onClose, onSaved }: {
+  card: CardResponse; categories: string[]; onClose: () => void; onSaved: () => void;
+}) {
+  const [f, setF] = useState({
+    name: card.name, issuer: card.issuer, network: card.network, lastFour: card.lastFour ?? '',
+    annualFee: String(card.annualFee ?? ''), pointValue: String(card.pointValue ?? ''),
+    creditLimit: card.creditLimit != null ? String(card.creditLimit) : '',
+    billingDay: card.billingDay != null ? String(card.billingDay) : '', dueDay: card.dueDay != null ? String(card.dueDay) : '',
+    points: String(card.pointsBalance), earned: '', earnedNote: '',
+  });
+  const [rates, setRates] = useState<Record<string, string>>(
+    Object.fromEntries(Object.entries(card.rewardRates || {}).map(([k, v]) => [k, String(v)])));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF(x => ({ ...x, [k]: e.target.value }));
+  const num = (v: string) => (v.trim() === '' ? undefined : Number(v));
+  const day = (v: string) => { const n = num(v); return n != null && n >= 1 && n <= 31 ? n : undefined; };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const save = async () => {
+    setSaving(true); setError(null);
+    try {
+      const rr: Record<string, number> = {};
+      Object.entries(rates).forEach(([k, v]) => { if (v.trim() !== '' && !isNaN(Number(v))) rr[k] = Number(v); });
+      await cardApi.update(card.id, {
+        name: f.name.trim() || undefined, issuer: f.issuer, network: f.network,
+        lastFour: f.lastFour.replace(/\D/g, '').slice(0, 4) || undefined,
+        annualFee: num(f.annualFee), pointValue: num(f.pointValue), creditLimit: num(f.creditLimit),
+        billingDay: day(f.billingDay), dueDay: day(f.dueDay),
+        rewardRates: Object.keys(rr).length ? rr : undefined,
+      });
+      // Points go through the rewards ledger, so every change is kept in the card's history.
+      const balance = num(f.points);
+      if (balance != null && balance !== card.pointsBalance) await cardApi.updatePoints(card.id, Math.max(0, Math.round(balance)));
+      const earned = num(f.earned);
+      if (earned != null && earned > 0) await cardApi.earnPoints(card.id, Math.round(earned), f.earnedNote.trim() || undefined);
+      onSaved();
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      setError(`Could not save${msg ? `: ${msg}` : '.'}`);
+    } finally { setSaving(false); }
+  };
+
+  const field = (label: string, el: React.ReactNode, hint?: string) => (
+    <label className="block text-2xs text-gray-500">{label}{el}{hint && <span className="block text-gray-600 mt-0.5">{hint}</span>}</label>
+  );
+  const cats = Array.from(new Set([...categories, ...Object.keys(card.rewardRates || {})]));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-surface rounded-xl border border-surface-border shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-surface-border">
+          <h3 className="text-ink font-bold text-sm">Edit card</h3>
+          <button aria-label="Close" onClick={onClose} className="btn-icon text-gray-500 hover:text-ink"><X size={16} /></button>
+        </div>
+        <div className="p-4 space-y-4 overflow-y-auto">
+          <div className="max-w-xs mx-auto">
+            <CardFace name={f.name || card.name} issuer={f.issuer} network={f.network} lastFour={f.lastFour || null} />
+          </div>
+
+          <div className="rounded-lg border border-neutral/25 bg-neutral/5 p-3 space-y-2">
+            <div className="text-xs text-ink font-semibold flex items-center gap-1.5"><Gift size={13} className="text-neutral" /> Reward points</div>
+            <div className="grid grid-cols-2 gap-2">
+              {field('Points balance now', <input type="number" min={0} value={f.points} onChange={set('points')} className="input-field text-xs mt-1 w-full" />, 'As shown in your bank app or statement')}
+              {field('Value of 1 point (₹)', <input type="number" step="0.01" min={0} value={f.pointValue} onChange={set('pointValue')} className="input-field text-xs mt-1 w-full" />)}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {field('Or add points just earned', <input type="number" min={0} value={f.earned} onChange={set('earned')} placeholder="e.g. 500" className="input-field text-xs mt-1 w-full" />)}
+              {field('Note (optional)', <input value={f.earnedNote} onChange={set('earnedNote')} placeholder="Welcome bonus" maxLength={200} className="input-field text-xs mt-1 w-full" />)}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {field('Card name', <input value={f.name} onChange={set('name')} className="input-field text-xs mt-1 w-full" />)}
+            {field('Last 4 digits', <input value={f.lastFour} inputMode="numeric" onChange={e => setF(x => ({ ...x, lastFour: e.target.value.replace(/\D/g, '').slice(0, 4) }))} className="input-field text-xs mt-1 w-full" />)}
+            {field('Bank', <select value={f.issuer} onChange={set('issuer')} className="input-field text-xs mt-1 w-full">{Array.from(new Set([f.issuer, ...ISSUERS])).map(i => <option key={i}>{i}</option>)}</select>)}
+            {field('Network', <select value={f.network} onChange={set('network')} className="input-field text-xs mt-1 w-full">{Array.from(new Set([f.network, 'Visa', 'Mastercard', 'RuPay', 'Amex', 'Diners', 'Other'])).map(n => <option key={n}>{n}</option>)}</select>)}
+            {field('Annual fee (₹)', <input type="number" min={0} value={f.annualFee} onChange={set('annualFee')} className="input-field text-xs mt-1 w-full" />)}
+            {field('Credit limit (₹)', <input type="number" min={0} value={f.creditLimit} onChange={set('creditLimit')} className="input-field text-xs mt-1 w-full" />)}
+            {field('Statement day', <input type="number" min={1} max={31} value={f.billingDay} onChange={set('billingDay')} placeholder="1–31" className="input-field text-xs mt-1 w-full" />)}
+            {field('Payment due day', <input type="number" min={1} max={31} value={f.dueDay} onChange={set('dueDay')} placeholder="1–31" className="input-field text-xs mt-1 w-full" />)}
+          </div>
+
+          {cats.length > 0 && (
+            <div>
+              <div className="text-2xs text-gray-500 mb-1.5">Reward rate by spend type (% back)</div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {cats.map(cat => (
+                  <div key={cat} className="flex items-center gap-1">
+                    <span className="text-2xs text-gray-400 flex-1 truncate">{cat}</span>
+                    <input type="number" step="0.1" min={0} value={rates[cat] ?? ''} onChange={e => setRates(r => ({ ...r, [cat]: e.target.value }))}
+                      placeholder="%" className="input-field text-2xs w-16 py-0.5" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {error && <p className="text-xs text-bear">{error}</p>}
+        </div>
+        <div className="flex gap-2 p-4 border-t border-surface-border">
+          <button onClick={save} disabled={saving} className="btn-primary text-xs py-2 flex-1">{saving ? 'Saving…' : 'Save changes'}</button>
+          <button onClick={onClose} className="btn-ghost text-xs py-2 flex-1">Cancel</button>
+        </div>
       </div>
     </div>
   );
@@ -709,6 +812,9 @@ function AddCardForm({ catalog, categories, onDone, onCancel }:
   const [rates, setRates]     = useState<Record<string, string>>({});
 
   const chosen = catalog.find(c => c.name === selected);
+  const preview = mode === 'catalog'
+    ? (chosen ? { name: chosen.name, issuer: chosen.issuer, network: chosen.network } : null)
+    : (name ? { name, issuer, network } : null);
 
   const submit = async () => {
     setSaving(true);
@@ -728,6 +834,9 @@ function AddCardForm({ catalog, categories, onDone, onCancel }:
 
   return (
     <div className="bg-surface-hover rounded-lg p-3 mb-4 border border-surface-border">
+      <div className="max-w-xs mx-auto mb-3">
+        <CardFace name={preview?.name ?? 'Your new card'} issuer={preview?.issuer ?? 'Choose a card'} network={preview?.network ?? 'Visa'} lastFour={lastFour || null} />
+      </div>
       <div className="flex gap-2 mb-3">
         <button onClick={() => setMode('catalog')} className={`text-xs px-3 py-1 rounded ${mode === 'catalog' ? 'bg-brand text-white' : 'text-gray-400'}`}>From Catalog</button>
         <button onClick={() => setMode('custom')} className={`text-xs px-3 py-1 rounded ${mode === 'custom' ? 'bg-brand text-white' : 'text-gray-400'}`}>Custom</button>
