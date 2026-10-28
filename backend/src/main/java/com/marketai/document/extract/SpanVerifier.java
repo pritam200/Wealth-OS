@@ -33,7 +33,40 @@ public final class SpanVerifier {
 
     /** Whether {@code span} appears verbatim in {@code sourceText} (whitespace-insensitive). */
     public static boolean appearsIn(String sourceText, String span) {
-        return span != null && !span.isBlank() && normalise(sourceText).contains(normalise(span));
+        return span != null && !span.isBlank() && found(normalise(sourceText), normalise(span));
+    }
+
+    private static boolean found(String haystack, String span) {
+        return haystack.contains(span) || inStatementLayout(haystack, span);
+    }
+
+    /**
+     * Two things statement PDFs do that a quote of the same line does not: wrap a word across
+     * lines ("HD" / "FC" for HDFC), and print a long reference the quote then masks ("••••9622"
+     * for the digits ending 9622). So whitespace may appear anywhere, and a run of two or more
+     * mask characters stands for digits (or the PDF's own masking) — every other character must
+     * still be there, in order.
+     */
+    static boolean inStatementLayout(String haystack, String span) {
+        String s = span.replaceAll("\\s+", "");
+        if (s.isEmpty()) return false;
+        StringBuilder re = new StringBuilder();
+        for (int i = 0; i < s.length(); ) {
+            int j = i;
+            while (j < s.length() && isMask(s.charAt(j))) j++;
+            if (j - i >= 2) {
+                re.append("[\\d•*xX]+\\s*");
+                i = j;
+                continue;
+            }
+            re.append(java.util.regex.Pattern.quote(String.valueOf(s.charAt(i)))).append("\\s*");
+            i++;
+        }
+        return java.util.regex.Pattern.compile(re.toString()).matcher(haystack).find();
+    }
+
+    private static boolean isMask(char c) {
+        return c == '•' || c == '*';
     }
 
     public static Result verify(String sourceText, List<ExtractedField> fields) {
@@ -46,7 +79,7 @@ public final class SpanVerifier {
         List<String> unfound = new ArrayList<>();
 
         for (ExtractedField f : fields) {
-            if (!haystack.contains(normalise(f.sourceSpan()))) {
+            if (!found(haystack, normalise(f.sourceSpan()))) {
                 unfound.add(f.name());
             }
         }

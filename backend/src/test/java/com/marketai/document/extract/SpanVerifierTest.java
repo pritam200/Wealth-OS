@@ -89,4 +89,18 @@ class SpanVerifierTest {
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("named");
     }
+
+    @Test
+    @DisplayName("A statement line is found when the PDF wraps a word across lines or prints a reference the quote masks")
+    void statementLayout() {
+        String pdf = "Purchases, EMIs & Other Debits \n03 Sep 26\nUPICC/DR/123456789622/FLIPKAR/HD\nFC/flipkar/UPIIntent  179.00 DR\n";
+        assertThat(SpanVerifier.appearsIn(pdf, "03 Sep 26 UPICC/DR/••••9622/FLIPKAR/HDFC/flipkar/UPIIntent 179.00 DR")).isTrue();
+        assertThat(SpanVerifier.appearsIn(pdf, "03 Sep 26 UPICC/DR/123456789622/FLIPKAR/HDFC/flipkar/UPIIntent 179.00 DR")).isTrue();
+
+        // Every other character still has to be there: a different amount, or different
+        // digits after the mask, is not found.
+        assertThat(SpanVerifier.appearsIn(pdf, "03 Sep 26 UPICC/DR/••••9622/FLIPKAR/HDFC/flipkar/UPIIntent 197.00 DR")).isFalse();
+        assertThat(SpanVerifier.appearsIn(pdf, "03 Sep 26 UPICC/DR/••••1111/FLIPKAR/HDFC/flipkar/UPIIntent 179.00 DR")).isFalse();
+        assertThat(SpanVerifier.appearsIn(pdf, "UPICC/DR/•/FLIPKAR")).isFalse();
+    }
 }
