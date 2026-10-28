@@ -197,7 +197,7 @@ export function Tab9AiAdvisor() {
           </div>
           <div>
             <h2 className="text-xl font-bold text-ink mb-0.5">AI Advisor</h2>
-            <p className="text-gray-500 text-xs">Your action for today — continue, accumulate, or exit each position</p>
+            <p className="text-gray-500 text-xs">Research each holding — the verdict, the full analysis behind it, and an AI review of the portfolio</p>
           </div>
         </div>
         <button onClick={load} className="btn-secondary flex items-center gap-1.5 text-sm">
@@ -279,7 +279,7 @@ export function Tab9AiAdvisor() {
 
           {/* Per-holding actions */}
           <div>
-            <h3 className="section-title"><div className="icon-badge-bull"><ShieldCheck size={15} /></div> Today's Actions</h3>
+            <h3 className="section-title"><div className="icon-badge-bull"><ShieldCheck size={15} /></div> Verdict for each holding</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {actions.map(a => {
                 const meta = ACTION_META[a.kind] ?? ACTION_META.HOLD;

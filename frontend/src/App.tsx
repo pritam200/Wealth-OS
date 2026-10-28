@@ -57,8 +57,8 @@ const NAV_SECTIONS: readonly NavSection[] = [
     tabs: [
       { id: 0, label: 'Dashboard' },
       { id: 7, label: 'Net Worth & Risk' },
-      { id: 9, label: 'Daily Actions' },
-      { id: 16, label: "Today's Investment Actions" },
+      { id: 9, label: 'AI Advisor' },
+      { id: 16, label: 'Action Checklist' },
       { id: 20, label: 'Cash Flow Forecast' },
     ],
   },

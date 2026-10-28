@@ -361,7 +361,7 @@ export function Tab16TodaysActions() {
             <Zap size={20} />
           </div>
           <div>
-            <h2 className="text-xl font-bold text-ink mb-0.5">Today's Investment Actions</h2>
+            <h2 className="text-xl font-bold text-ink mb-0.5">Action Checklist</h2>
             <p className="text-gray-500 text-sm">
               {pendingCount > 0
                 ? <><span className="font-mono tabular-nums text-gray-300">{pendingCount}</span> decision{pendingCount === 1 ? '' : 's'} waiting on you.</>
