@@ -46,6 +46,24 @@ public class DataQualityService {
                          Map<String, Long> bySource, boolean hasAuthoritativeSource, LocalDateTime lastVerifiedAt,
                          List<AccountHealth> accounts, List<HoldingHealth> holdings, List<String> warnings) {}
 
+    private record Recent(java.time.Instant at, Health health) {}
+
+    private final java.util.concurrent.ConcurrentHashMap<Long, Recent> recent = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * {@link #health(Long, boolean)} for the user's own accounts, reused for 30 seconds. It is
+     * about fourteen queries, and every portfolio summary, wealth summary and research context
+     * asked for it to decorate holdings, several times per page. The data quality page itself
+     * reads it fresh.
+     */
+    public Health recentHealth(Long userId) {
+        Recent r = recent.get(userId);
+        if (r != null && r.at().plusSeconds(30).isAfter(java.time.Instant.now())) return r.health();
+        Health h = health(userId, false);
+        recent.put(userId, new Recent(java.time.Instant.now(), h));
+        return h;
+    }
+
     public Health health(Long userId, boolean includeFamily) {
         Set<Long> accountIds = access.accessibleAccountIds(userId, includeFamily);
         if (accountIds.isEmpty()) return empty();

@@ -24,7 +24,7 @@ public class HoldingVerificationOverlay {
     public void annotate(Long userId, List<HoldingDto> holdings) {
         if (holdings == null || holdings.isEmpty()) return;
         try {
-            var health = quality.health(userId, false);
+            var health = quality.recentHealth(userId);
             if (health.holdings().isEmpty()) return;
             for (HoldingDto h : holdings) {
                 // The same fund can sit in several accounts: surface the most concerning state, then the least verified.

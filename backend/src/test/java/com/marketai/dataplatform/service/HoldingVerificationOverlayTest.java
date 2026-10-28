@@ -29,7 +29,7 @@ class HoldingVerificationOverlayTest {
     @Test @DisplayName("a holding is annotated by ISIN, keeping its own quantity and adding the institution's beside it")
     void annotatesByIsin() {
         DataQualityService q = mock(DataQualityService.class);
-        when(q.health(anyLong(), anyBoolean())).thenReturn(health(hh("INF1", null, "112", "NEEDS_RECONCILIATION")));
+        when(q.recentHealth(anyLong())).thenReturn(health(hh("INF1", null, "112", "NEEDS_RECONCILIATION")));
         HoldingDto h = HoldingDto.builder().isin("inf1").symbol("X.MF").quantity(new BigDecimal("100")).build();
         new HoldingVerificationOverlay(q).annotate(1L, List.of(h));
         assertThat(h.getVerificationState()).isEqualTo("NEEDS_RECONCILIATION");
@@ -41,7 +41,7 @@ class HoldingVerificationOverlayTest {
     @Test @DisplayName("without an ISIN it falls back to the symbol ignoring the exchange suffix; an unrelated holding is left unannotated")
     void symbolFallback() {
         DataQualityService q = mock(DataQualityService.class);
-        when(q.health(anyLong(), anyBoolean())).thenReturn(health(hh(null, "INFY", null, "UNVERIFIED")));
+        when(q.recentHealth(anyLong())).thenReturn(health(hh(null, "INFY", null, "UNVERIFIED")));
         HoldingDto infy = HoldingDto.builder().symbol("INFY.NS").build();
         HoldingDto other = HoldingDto.builder().symbol("TCS.NS").build();
         new HoldingVerificationOverlay(q).annotate(1L, List.of(infy, other));
@@ -52,7 +52,7 @@ class HoldingVerificationOverlayTest {
     @Test @DisplayName("if the ledger cannot be read the holdings are returned untouched, not failed")
     void failureIsHarmless() {
         DataQualityService q = mock(DataQualityService.class);
-        when(q.health(anyLong(), anyBoolean())).thenThrow(new IllegalStateException("db down"));
+        when(q.recentHealth(anyLong())).thenThrow(new IllegalStateException("db down"));
         HoldingDto h = HoldingDto.builder().symbol("A").build();
         new HoldingVerificationOverlay(q).annotate(1L, List.of(h));
         assertThat(h.getVerificationState()).isNull();

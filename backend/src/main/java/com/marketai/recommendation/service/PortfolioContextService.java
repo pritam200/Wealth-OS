@@ -332,7 +332,7 @@ public class PortfolioContextService {
     private void addLedgerQualityGaps(Long userId, List<String> gaps) {
         if (dataQualityService == null) return;
         try {
-            var h = dataQualityService.health(userId, false);
+            var h = dataQualityService.recentHealth(userId);
             if (h.scorePercent() == null) return;   // no canonical ledger for this user: nothing to declare
             if (!h.hasAuthoritativeSource()) {
                 gaps.add("No bank, broker or account-aggregator source is connected, so holdings and returns are built from emails and manual entries and are not verified.");

@@ -80,7 +80,7 @@ public class RecommendationEngine {
                 .nextActionReason("Mutual funds are assessed by the fund engine, from NAVs and holding details — not from exchange prices.")
                 .build();
         }
-        AnalystAssessment a = analystService.assess(symbol, displayName);
+        AnalystAssessment a = assessed(symbol, displayName);
         if (a == null) {
             log.warn("analystService.assess returned null for {}", symbol);
             return AnalystAssessment.builder()
@@ -126,6 +126,52 @@ public class RecommendationEngine {
         NextActionDecision decision = researchGate(a, decideNextAction(a, pnlPercent, concentration));
         a.setNextAction(decision.kind);
         a.setNextActionReason(decision.reason);
+        return a;
+    }
+
+    /**
+     * How long a stock's assessment is reused. It costs a dozen database round trips plus quote
+     * and news calls, and a holdings page asks for every held stock on each visit. Shared by every
+     * screen, so the holdings badge and the AI Advisor still read the same assessment.
+     */
+    static final java.time.Duration ASSESSMENT_TTL = java.time.Duration.ofMinutes(10);
+
+    private record Assessed(java.time.Instant at, AnalystAssessment a) {}
+
+    private final java.util.concurrent.ConcurrentHashMap<String, Assessed> assessments = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** On in the running app; an engine built directly (tests) assesses afresh every time. */
+    @org.springframework.beans.factory.annotation.Value("${app.recommendation.reuse-assessments:true}")
+    private boolean reuseAssessments;
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper COPIER = new com.fasterxml.jackson.databind.ObjectMapper()
+        .findAndRegisterModules()
+        .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+    /**
+     * The assessment, from the last 10 minutes when there is one. Each caller gets its own copy:
+     * the position's P&L and exposure are written onto it below. A result whose history is still
+     * downloading, or that has no usable data, is not kept.
+     */
+    private AnalystAssessment assessed(String symbol, String displayName) {
+        if (!reuseAssessments) return analystService.assess(symbol, displayName);
+        String key = symbol + "|" + displayName;
+        Assessed hit = assessments.get(key);
+        if (hit != null && hit.at().plus(ASSESSMENT_TTL).isAfter(java.time.Instant.now())) {
+            try {
+                return COPIER.convertValue(hit.a(), AnalystAssessment.class);
+            } catch (IllegalArgumentException e) {
+                assessments.remove(key);
+            }
+        }
+        AnalystAssessment a = analystService.assess(symbol, displayName);
+        if (a != null && !a.isHistoryPending() && DataQuality.of(a.getDataQuality()).isUsable()) {
+            try {
+                assessments.put(key, new Assessed(java.time.Instant.now(), COPIER.convertValue(a, AnalystAssessment.class)));
+            } catch (IllegalArgumentException e) {
+                log.debug("Assessment for {} not kept: {}", symbol, e.getMessage());
+            }
+        }
         return a;
     }
 

@@ -44,3 +44,53 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+/*
+ * Every database round trip costs ~100 ms (the database is remote), so the heavy summaries take
+ * seconds each, and pages kept asking for the same ones: several sections of one page at once,
+ * and again on every page switch. Identical GETs in flight share one request, and the summaries
+ * below are reused for a short while. Any change (POST/PUT/PATCH/DELETE) empties the reuse
+ * cache, so what a page shows after an edit is never older than the edit.
+ */
+const REUSE_MS = 20_000;
+const REUSABLE = [
+  /^\/api\/wealth\/summary$/,
+  /^\/api\/portfolios$/,
+  /^\/api\/portfolios\/combined-summary$/,
+  /^\/api\/portfolios\/\d+\/summary$/,
+  /^\/api\/tracking\/summary$/,
+  /^\/api\/market\/overview$/,
+];
+const inFlight = new Map<string, Promise<unknown>>();
+const reused = new Map<string, { at: number; res: unknown }>();
+const rawGet = apiClient.get.bind(apiClient);
+
+apiClient.get = ((url: string, config?: Parameters<typeof rawGet>[1]) => {
+  // A cancellable or non-JSON request is the caller's own; it is never shared.
+  if (config?.signal || (config?.responseType && config.responseType !== 'json')) return rawGet(url, config);
+  const key = url + (config?.params ? `?${JSON.stringify(config.params)}` : '');
+  const kept = reused.get(key);
+  if (kept && Date.now() - kept.at < REUSE_MS) return Promise.resolve(kept.res);
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+  const p = rawGet(url, config)
+    .then(res => {
+      if (!config?.params && REUSABLE.some(r => r.test(url))) reused.set(key, { at: Date.now(), res });
+      return res;
+    })
+    .finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}) as typeof apiClient.get;
+
+apiClient.interceptors.request.use(config => {
+  if (config.method && config.method.toLowerCase() !== 'get') reused.clear();
+  return config;
+});
+
+// And again once the change has landed, so a summary read while it ran is not kept.
+const afterChange = (method?: string) => { if (method && method.toLowerCase() !== 'get') reused.clear(); };
+apiClient.interceptors.response.use(
+  res => { afterChange(res.config?.method); return res; },
+  error => { afterChange(error.config?.method); return Promise.reject(error); },
+);

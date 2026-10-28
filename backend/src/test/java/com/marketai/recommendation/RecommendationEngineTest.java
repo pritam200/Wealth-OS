@@ -202,4 +202,20 @@ class RecommendationEngineTest {
         assertThat(a.getNextAction()).isEqualTo("HOLD");
         assertThat(a.getTaxImpact()).contains("purchase dates are not on record").doesNotContain("LTCG:");
     }
+
+    @Test
+    @DisplayName("A stock's assessment is reused for a while, and each position gets its own copy")
+    void assessmentReusedWithoutSharingPositions() {
+        org.springframework.test.util.ReflectionTestUtils.setField(engine, "reuseAssessments", true);
+        when(analyst.assess(anyString(), any())).thenReturn(assessment(AnalystService.NO_ACTIONABLE_SIGNAL, "UPTREND", null));
+
+        AnalystAssessment big = engine.recommend("X", "X", 5.0, 40000.0, 100000.0);
+        AnalystAssessment small = engine.recommend("X", "X", 5.0, 1000.0, 100000.0);
+
+        org.mockito.Mockito.verify(analyst, org.mockito.Mockito.times(1)).assess(anyString(), any());
+        assertThat(big.getFactorBreakdown()).singleElement().satisfies(f -> assertThat(f.getReading()).isEqualTo("40%"));
+        assertThat(small.getFactorBreakdown()).singleElement().satisfies(f -> assertThat(f.getReading()).isEqualTo("1%"));
+        assertThat(small.getSignalValidation().getSummary()).isEqualTo("record");
+        assertThat(small.getPriceDate()).isEqualTo(LocalDate.of(2026, 9, 29));
+    }
 }

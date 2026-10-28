@@ -521,7 +521,7 @@ public class ResearchContextBuilder {
     private void dataProvenanceFacts(Long userId, String symbolOrCode, List<Fact> f) {
         if (dataQuality == null) return;
         try {
-            var h = dataQuality.health(userId, false);
+            var h = dataQuality.recentHealth(userId);
             String at = LocalDate.now(IST).toString();
             if (h.scorePercent() == null) {
                 f.add(Fact.text("PORTFOLIO", "PORTFOLIO", "Portfolio data quality", "No verifiable ledger yet", at, "Wealth-OS data platform"));
