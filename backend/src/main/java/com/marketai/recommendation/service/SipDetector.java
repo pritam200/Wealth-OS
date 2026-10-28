@@ -48,14 +48,39 @@ public class SipDetector {
         if (paused != null) return new SipInfo("PAUSED", paused.getAmount());
 
         List<LocalDate> buys = new ArrayList<>();
+        boolean statedSip = false;
         for (var p : portfolioRepository.findByUserId(userId)) {
             Holding h = holdingRepository.findByPortfolioIdAndSymbol(p.getId(), symbol).orElse(null);
             if (h == null) continue;
             for (Transaction t : transactionRepository.findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId())) {
-                if (t.getType() == Transaction.TransactionType.BUY && t.getTransactionDate() != null) buys.add(t.getTransactionDate());
+                if (t.getType() != Transaction.TransactionType.BUY || t.getTransactionDate() == null) continue;
+                // An opening balance from a holdings summary is not a purchase.
+                if (t.getNotes() != null && OPENING_BALANCE.matcher(t.getNotes()).find()) continue;
+                if (t.getNotes() != null && SIP_NOTE.matcher(t.getNotes()).find()) statedSip = true;
+                buys.add(t.getTransactionDate());
             }
         }
-        return looksMonthly(buys, LocalDate.now()) ? new SipInfo("INFERRED", null) : SipInfo.NONE;
+        LocalDate today = LocalDate.now();
+        return statedSip || looksMonthly(buys, today) || looksDailyOrWeekly(buys, today)
+            ? new SipInfo("INFERRED", null) : SipInfo.NONE;
+    }
+
+    /** The fund house's own line says so: "SIP instalment 240/1303". */
+    static final java.util.regex.Pattern SIP_NOTE = java.util.regex.Pattern.compile("(?i)\\bsip\\b|systematic investment");
+    static final java.util.regex.Pattern OPENING_BALANCE = java.util.regex.Pattern.compile("(?i)imported from cas summary|opening balance");
+
+    /**
+     * A daily or weekly SIP: three or more purchases on distinct dates, none more than 8 days
+     * apart, the latest within the last 15 days.
+     */
+    static boolean looksDailyOrWeekly(List<LocalDate> dates, LocalDate today) {
+        List<LocalDate> d = dates.stream().distinct().sorted().toList();
+        if (d.size() < 3) return false;
+        if (ChronoUnit.DAYS.between(d.get(d.size() - 1), today) > 15) return false;
+        for (int i = 1; i < d.size(); i++) {
+            if (ChronoUnit.DAYS.between(d.get(i - 1), d.get(i)) > 8) return false;
+        }
+        return true;
     }
 
     /**

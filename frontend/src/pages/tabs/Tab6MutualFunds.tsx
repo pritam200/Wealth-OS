@@ -1,5 +1,5 @@
 import { VerificationBadge } from '../../components/portfolio/VerificationBadge';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { portfolioApi } from '../../api/portfolio';
 import { benchmarksApi } from '../../api/analyst';
 import type { IndexBenchmarks } from '../../api/analyst';
@@ -329,6 +329,9 @@ function TransactionHistoryModal({ holding, portfolioId, onClose }: {
   );
 }
 
+const SIP_NOTE = /\bsip\b|systematic/i;
+const OPENING_BALANCE = /imported from cas summary|opening balance/i;
+
 /* ── Recent MF Purchases Section ── */
 function RecentPurchases({ onRefresh: externalRefresh }: { onRefresh?: () => void }) {
   const maskText = useMaskedText();
@@ -354,8 +357,28 @@ function RecentPurchases({ onRefresh: externalRefresh }: { onRefresh?: () => voi
     externalRefresh?.();
   };
 
+  // A fund is on a SIP when any of its purchases says so ("SIP instalment 240/1303"), or when it
+  // was bought more than once for about the same amount — a daily or weekly SIP's lines often
+  // come without the note. An opening balance from a holdings summary is not a purchase at all.
+  const sipFunds = useMemo(() => {
+    const byFund = new Map<string, TransactionDto[]>();
+    for (const t of txns) {
+      if (OPENING_BALANCE.test(t.notes ?? '')) continue;
+      const k = (t.symbol || '').toUpperCase();
+      byFund.set(k, [...(byFund.get(k) ?? []), t]);
+    }
+    const out = new Set<string>();
+    for (const [k, list] of byFund) {
+      if (list.some(t => SIP_NOTE.test(t.notes ?? ''))) { out.add(k); continue; }
+      const amounts = list.map(t => t.totalAmount ?? 0).filter(a => a > 0);
+      if (amounts.length >= 2 && Math.max(...amounts) <= Math.min(...amounts) * 1.1) out.add(k);
+    }
+    return out;
+  }, [txns]);
+
   const inferType = (t: TransactionDto): string => {
-    if (t.notes?.toLowerCase().includes('sip')) return 'SIP';
+    if (OPENING_BALANCE.test(t.notes ?? '')) return 'Opening balance';
+    if (SIP_NOTE.test(t.notes ?? '') || sipFunds.has((t.symbol || '').toUpperCase())) return 'SIP';
     return 'Lump Sum';
   };
 
@@ -436,7 +459,7 @@ function RecentPurchases({ onRefresh: externalRefresh }: { onRefresh?: () => voi
                   <td className="text-right num text-gray-400">{fmtUnits(t.quantity)}</td>
                   <td className="text-right num text-gray-400">{fmtNav(t.price)}</td>
                   <td className="text-center">
-                    <span className={`badge text-2xs ${inferType(t) === 'SIP' ? 'badge-brand' : 'badge-gold'}`}>
+                    <span className={`badge text-2xs ${inferType(t) === 'SIP' ? 'badge-brand' : inferType(t) === 'Opening balance' ? 'badge-neutral' : 'badge-gold'}`}>
                       {inferType(t)}
                     </span>
                   </td>
