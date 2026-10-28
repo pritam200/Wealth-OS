@@ -77,9 +77,33 @@ public class MfNavHistoryService {
             log.debug("MF NAV history for {} already up to date ({} rows)", code, points.size());
             return 0;
         }
-        navHistoryRepository.saveAll(toInsert);
+        store(toInsert);
         log.info("MF NAV history {}: stored {} new of {} points returned", code, toInsert.size(), points.size());
         return toInsert.size();
+    }
+
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setJdbc(org.springframework.jdbc.core.JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /**
+     * A first fetch is thousands of NAVs. Saved through JPA (identity ids) each was its own
+     * round trip to the remote database, minutes per scheme; one batched insert sends them
+     * together.
+     */
+    private void store(List<MfNavHistory> rows) {
+        if (jdbc == null) {
+            navHistoryRepository.saveAll(rows);
+            return;
+        }
+        jdbc.batchUpdate("insert into mf_nav_history (date, nav, scheme_code) values (?, ?, ?)", rows, 500, (ps, r) -> {
+            ps.setObject(1, r.getDate());
+            ps.setBigDecimal(2, r.getNav());
+            ps.setString(3, r.getSchemeCode());
+        });
     }
 
     /** Date of the most recently stored NAV for a scheme, if any. */

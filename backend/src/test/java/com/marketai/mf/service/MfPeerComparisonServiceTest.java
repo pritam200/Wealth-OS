@@ -22,6 +22,7 @@ class MfPeerComparisonServiceTest {
     private final MfNavHistoryService nav = mock(MfNavHistoryService.class);
     private final MfPerformanceService perf = mock(MfPerformanceService.class);
     private final MfPeerComparisonService svc = new MfPeerComparisonService(amfi, nav, perf);
+    { svc.background = Runnable::run; }   // the background load, run in place
 
     private static AmfiNavResult scheme(String code, String name) {
         return AmfiNavResult.builder().schemeCode(code).schemeName(name).category(CAT).schemeType("Open Ended").build();

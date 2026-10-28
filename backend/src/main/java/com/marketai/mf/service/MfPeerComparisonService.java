@@ -78,10 +78,12 @@ public class MfPeerComparisonService {
 
         String key = self.getCategory() + "|" + direct;
         Snapshot snap = snapshots.get(key);
+        // Building a snapshot reads the full NAV history of up to 80 peers. On the request path
+        // that held the badge's request (and its connection) for minutes, once per category,
+        // so it is built in the background; until then the comparison says peers are loading.
         if (snap == null || snap.at().isBefore(Instant.now().minus(SNAPSHOT_TTL_HOURS, ChronoUnit.HOURS))) {
-            snap = buildSnapshot(universe);
-            snapshots.put(key, snap);
-            if (snap.peers().size() < universe.size()) loadInBackground(key, universe);
+            loadInBackground(key, universe);
+            snap = snapshots.getOrDefault(key, snap != null ? snap : new Snapshot(Instant.now(), List.of(), universe.size()));
         }
 
         var lastNav = navHistoryService.latestNavDate(self.getSchemeCode());
@@ -132,9 +134,19 @@ public class MfPeerComparisonService {
         return new Snapshot(Instant.now(), out, universe.size());
     }
 
+    /**
+     * One category loads at a time. A thread per category let a page of fund badges start
+     * several at once, each downloading dozens of histories and holding a database connection.
+     */
+    java.util.concurrent.Executor background = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "mf-peer-load");
+        t.setDaemon(true);
+        return t;
+    });
+
     private void loadInBackground(String key, List<AmfiNavResult> universe) {
         if (!loading.add(key)) return;
-        Thread t = new Thread(() -> {
+        background.execute(() -> {
             try {
                 for (AmfiNavResult r : universe) {
                     var last = navHistoryService.latestNavDate(r.getSchemeCode());
@@ -149,9 +161,7 @@ public class MfPeerComparisonService {
             } finally {
                 loading.remove(key);
             }
-        }, "mf-peer-load");
-        t.setDaemon(true);
-        t.start();
+        });
     }
 
     static boolean isDirect(String name) {

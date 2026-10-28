@@ -39,6 +39,9 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
+        # Counts each request's SQL statements for logs/slow-requests.log; never changes them.
+        session_factory:
+          statement_inspector: com.marketai.common.web.QueryCounter
         jdbc:
           time_zone: Asia/Kolkata
           # Updates written in one round trip per 50 rows instead of one each.
