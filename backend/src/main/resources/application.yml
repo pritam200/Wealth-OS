@@ -23,10 +23,13 @@ spring:
     username: ${DB_USER:marketai}
     password: ${DB_PASSWORD:marketai_pass}
     driver-class-name: org.postgresql.Driver
+    # The database is remote (~100 ms a round trip), so each request holds its connection far
+    # longer than on a local database; 10 let one busy page starve every other request.
     hikari:
-      maximum-pool-size: 10
+      maximum-pool-size: ${DB_POOL_SIZE:20}
       minimum-idle: 2
       connection-timeout: 30000
+      keepalive-time: 120000
 
   jpa:
     hibernate:
@@ -38,6 +41,9 @@ spring:
         format_sql: true
         jdbc:
           time_zone: Asia/Kolkata
+          # Updates written in one round trip per 50 rows instead of one each.
+          batch_size: 50
+        order_updates: true
 
   data:
     redis:

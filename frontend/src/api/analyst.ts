@@ -164,14 +164,14 @@ export const analystApi = {
 // The one endpoint every UI surface should call for BUY/HOLD/SELL + next action —
 // same underlying engine as analystApi.assess, with optional portfolio (P&L) context.
 export const recommendationApi = {
-  get: (symbol: string, opts?: { name?: string; pnlPercent?: number; holdingValue?: number; totalPortfolioValue?: number }) => {
+  get: (symbol: string, opts?: { name?: string; pnlPercent?: number; holdingValue?: number; totalPortfolioValue?: number }, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     if (opts?.name) params.set('name', opts.name);
     if (opts?.pnlPercent !== undefined && opts.pnlPercent !== null) params.set('pnlPercent', String(opts.pnlPercent));
     if (opts?.holdingValue !== undefined && opts.holdingValue !== null) params.set('holdingValue', String(opts.holdingValue));
     if (opts?.totalPortfolioValue !== undefined && opts.totalPortfolioValue !== null) params.set('totalPortfolioValue', String(opts.totalPortfolioValue));
     const qs = params.toString();
-    return apiClient.get<AnalystAssessment>(`/api/recommendation/${encodeURIComponent(symbol)}${qs ? `?${qs}` : ''}`);
+    return apiClient.get<AnalystAssessment>(`/api/recommendation/${encodeURIComponent(symbol)}${qs ? `?${qs}` : ''}`, { signal });
   },
 };
 
@@ -189,7 +189,7 @@ export interface MfRecommendationParams {
 // Dedicated MF recommendation engine — tax-aware (STCG/LTCG), holding-period-aware,
 // portfolio-concentration-aware. Not the stock engine; MFs shouldn't use stock-shaped logic.
 export const recommendationMfApi = {
-  get: (params: MfRecommendationParams) => apiClient.post<AnalystAssessment>('/api/recommendation/mf', params),
+  get: (params: MfRecommendationParams, signal?: AbortSignal) => apiClient.post<AnalystAssessment>('/api/recommendation/mf', params, { signal }),
 };
 
 export interface IndexBenchmarks { nifty50: number | null; sensex: number | null; bankNifty: number | null }
@@ -198,6 +198,32 @@ export interface IndexBenchmarks { nifty50: number | null; sensex: number | null
 export const benchmarksApi = {
   get: () => apiClient.get<IndexBenchmarks>('/api/recommendation/benchmarks'),
 };
+
+/**
+ * Holding-row badges take turns: a page of 85 rows asking at once took every browser connection
+ * and every backend database connection, so the table and every other page waited behind them.
+ */
+const BADGE_CONCURRENCY = 3;
+let badgesRunning = 0;
+const badgesWaiting: (() => void)[] = [];
+
+function badgeTurn(): Promise<() => void> {
+  return new Promise(resolve => {
+    const go = () => { badgesRunning++; resolve(() => { badgesRunning--; badgesWaiting.shift()?.(); }); };
+    if (badgesRunning < BADGE_CONCURRENCY) go(); else badgesWaiting.push(go);
+  });
+}
+
+/** Runs one badge request when a turn is free; a badge that has gone away by then is skipped. */
+export async function inBadgeTurn<T>(run: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  const done = await badgeTurn();
+  try {
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    return await run();
+  } finally {
+    done();
+  }
+}
 
 /** Back-off for re-asking while a symbol's history is still downloading. */
 export const PENDING_RETRY_MS = [5000, 15000, 45000];

@@ -382,10 +382,11 @@ public class MarketDataService {
             // page asks for dozens of symbols at once, and letting them all run pinned the whole
             // pool, so every other request waited behind them. Only a few run at a time; a symbol
             // that cannot get a turn is queued for a background download, and the caller reports
-            // its history as still loading.
+            // its history as still loading. A request never waits for a turn: waiting up to 45 s
+            // with its connection held starved the pool after every market close.
             if (waitForTurn) {
                 historyBackfillGate.acquire();
-            } else if (!historyBackfillGate.tryAcquire(45, java.util.concurrent.TimeUnit.SECONDS)) {
+            } else if (!historyBackfillGate.tryAcquire()) {
                 log.info("History top-up for {} deferred — other symbols are still loading; queued in the background", symbol);
                 queueBackfill(symbol);
                 return Freshness.DEFERRED;

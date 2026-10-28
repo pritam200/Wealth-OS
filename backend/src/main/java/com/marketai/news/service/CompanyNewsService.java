@@ -37,7 +37,28 @@ public class CompanyNewsService {
     /** What was tried and whether it answered — recorded with research so a gap is visible. */
     public record Fetch(List<NewsSentimentAnalyzer.Headline> headlines, List<String> sourcesOk, List<String> sourcesFailed) {}
 
+    /**
+     * How long a company's headlines are reused. A holdings page asks for every held stock at
+     * once, and fetching Google News for each one, every time, kept each request (and its
+     * database connection) waiting on the feed.
+     */
+    static final java.time.Duration COMPANY_NEWS_TTL = java.time.Duration.ofMinutes(30);
+
+    private record Cached(java.time.Instant at, Fetch fetch) {}
+
+    private final java.util.concurrent.ConcurrentHashMap<String, Cached> companyNews = new java.util.concurrent.ConcurrentHashMap<>();
+
     public Fetch forCompany(String base, String name) {
+        String key = base + "|" + name;
+        Cached hit = companyNews.get(key);
+        if (hit != null && hit.at().plus(COMPANY_NEWS_TTL).isAfter(java.time.Instant.now())) return hit.fetch();
+        Fetch fetch = fetchCompany(base, name);
+        // A failed fetch is not kept, so the next ask tries again.
+        if (fetch.sourcesFailed().isEmpty()) companyNews.put(key, new Cached(java.time.Instant.now(), fetch));
+        return fetch;
+    }
+
+    private Fetch fetchCompany(String base, String name) {
         List<NewsSentimentAnalyzer.Headline> out = new ArrayList<>();
         List<String> ok = new ArrayList<>(), failed = new ArrayList<>();
         String query = (name != null && name.length() > 2 ? name : base) + " stock NSE";

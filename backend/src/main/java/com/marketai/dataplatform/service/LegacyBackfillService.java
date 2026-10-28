@@ -43,8 +43,11 @@ public class LegacyBackfillService {
         List<Transaction> rows = legacy.findForUserBetween(userId, LocalDate.of(1990, 1, 1), LocalDate.of(2100, 1, 1));
         int created = 0, present = 0, rejected = 0, email = 0, manual = 0;
         List<String> errors = new java.util.ArrayList<>();
+        // One query for what is already migrated: this runs on every startup, and asking per
+        // transaction cost a round trip each to the remote database.
+        java.util.Set<Long> migrated = new java.util.HashSet<>(canonical.findLegacyTransactionIds(userId));
         for (Transaction t : rows) {
-            if (canonical.findByUserIdAndLegacyTransactionId(userId, t.getId()).isPresent()) { present++; continue; }
+            if (migrated.contains(t.getId())) { present++; continue; }
             boolean fromEmail = isEmail(t);
             try {
                 RawRecord rec = new RawRecord(RecordKind.TRANSACTION, null, recordId(t), payload(t, fromEmail), LegacyTransactionNormalizer.SCHEMA);

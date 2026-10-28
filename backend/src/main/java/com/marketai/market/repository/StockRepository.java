@@ -9,6 +9,7 @@ import java.util.Optional;
 
 public interface StockRepository extends JpaRepository<Stock, Long> {
     Optional<Stock> findBySymbol(String symbol);
+    List<Stock> findBySymbolIn(java.util.Collection<String> symbols);
     boolean existsBySymbol(String symbol);
 
     @Query("SELECT s FROM Stock s WHERE UPPER(s.symbol) LIKE UPPER(CONCAT('%', :q, '%')) " +

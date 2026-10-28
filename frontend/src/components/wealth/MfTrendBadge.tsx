@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { TrendingUp, Minus, AlertTriangle, Loader2, HelpCircle } from 'lucide-react';
-import { recommendationMfApi, isInsufficient } from '../../api/analyst';
+import { recommendationMfApi, isInsufficient, inBadgeTurn } from '../../api/analyst';
 import type { AnalystAssessment } from '../../api/analyst';
 
 const NEXT_ACTION_META: Record<string, { label: string; tone: 'buy' | 'hold' | 'watch' | 'sell' | 'none' }> = {
@@ -49,15 +49,16 @@ export function MfTrendBadge({ symbol, fundName, investedValue, currentValue, qu
 
   useEffect(() => {
     let alive = true;
+    const abort = new AbortController();
     setLoading(true);
-    recommendationMfApi.get({
+    inBadgeTurn(() => recommendationMfApi.get({
       symbol, fundName, buyDate: buyDate ?? undefined, xirr: xirr ?? undefined,
       investedValue, currentValue, quantity, totalMfPortfolioValue,
-    })
+    }, abort.signal), abort.signal)
       .then(({ data }) => { if (alive) setData(data); })
       .catch(() => { if (alive) setFailed(true); })
       .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
+    return () => { alive = false; abort.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, investedValue, currentValue, xirr, buyDate, totalMfPortfolioValue]);
 

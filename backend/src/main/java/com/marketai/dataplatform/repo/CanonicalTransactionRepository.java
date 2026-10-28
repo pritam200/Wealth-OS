@@ -26,6 +26,9 @@ public interface CanonicalTransactionRepository extends JpaRepository<CanonicalT
 
     Optional<CanonicalTransaction> findByUserIdAndLegacyTransactionId(Long userId, Long legacyTransactionId);
 
+    @Query("select t.legacyTransactionId from CanonicalTransaction t where t.userId = :userId and t.legacyTransactionId is not null")
+    List<Long> findLegacyTransactionIds(@Param("userId") Long userId);
+
     List<CanonicalTransaction> findByAccountIdAndAssetIdAndStatusIn(Long accountId, Long assetId, Collection<TxnStatus> statuses);
 
     List<CanonicalTransaction> findByUserIdAndStatusIn(Long userId, Collection<TxnStatus> statuses);

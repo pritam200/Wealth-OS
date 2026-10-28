@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -90,9 +91,13 @@ class PortfolioContextServiceTest {
             .build();
     }
 
+    private final java.util.List<Stock> stocks = new java.util.ArrayList<>();
+
     private void withStock(String symbol, String sector) {
-        when(stockRepo.findBySymbol(symbol))
-            .thenReturn(Optional.of(Stock.builder().symbol(symbol).sector(sector).build()));
+        Stock stock = Stock.builder().symbol(symbol).sector(sector).build();
+        stocks.add(stock);
+        when(stockRepo.findBySymbol(symbol)).thenReturn(Optional.of(stock));
+        when(stockRepo.findBySymbolIn(any())).thenReturn(java.util.List.copyOf(stocks));
     }
 
     @Test

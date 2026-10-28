@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowUpRight, ArrowDownRight, Minus, Loader2, HelpCircle, RotateCw } from 'lucide-react';
-import { recommendationApi, isInsufficient, hitRateLabel, tooShortLabel, PENDING_RETRY_MS } from '../../api/analyst';
+import { recommendationApi, isInsufficient, hitRateLabel, tooShortLabel, PENDING_RETRY_MS, inBadgeTurn } from '../../api/analyst';
 import type { AnalystAssessment } from '../../api/analyst';
 
 // Same next-action vocabulary AI Advisor and the Analyst panel use — this badge used to
@@ -52,9 +52,10 @@ export function HoldingTrendBadge({ symbol, pnlPercent, holdingValue, totalPortf
     if (symbol.endsWith('.MF')) return; // MFs use a dedicated engine (MfTrendBadge)
     let alive = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    const abort = new AbortController();
     setLoading(true);
     setFailed(false);
-    recommendationApi.get(symbol, { pnlPercent, holdingValue, totalPortfolioValue })
+    inBadgeTurn(() => recommendationApi.get(symbol, { pnlPercent, holdingValue, totalPortfolioValue }, abort.signal), abort.signal)
       .then(({ data }) => {
         if (!alive) return;
         setData(data);
@@ -64,7 +65,7 @@ export function HoldingTrendBadge({ symbol, pnlPercent, holdingValue, totalPortf
       })
       .catch(() => { if (alive) setFailed(true); })
       .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; if (retry) clearTimeout(retry); };
+    return () => { alive = false; abort.abort(); if (retry) clearTimeout(retry); };
   }, [symbol, pnlPercent, holdingValue, totalPortfolioValue, attempt]);
 
   if (symbol.endsWith('.MF')) return <span className="text-2xs text-gray-700">—</span>;

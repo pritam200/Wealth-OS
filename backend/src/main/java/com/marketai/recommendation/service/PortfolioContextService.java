@@ -19,10 +19,13 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import com.marketai.common.quality.DataQuality;
 
 /**
@@ -178,6 +181,7 @@ public class PortfolioContextService {
 
         /* ── Per-stock exposure ─────────────────────────────────── */
         List<PortfolioContext.Exposure> topStocks = new ArrayList<>();
+        Map<String, String> sectors = sectorsOf(stocks);
         for (Holding h : stocks) {
             BigDecimal cur = nz(h.getCurrentValue());
             if (cur.compareTo(BigDecimal.ZERO) <= 0) continue;
@@ -187,7 +191,7 @@ public class PortfolioContextService {
                 .percentOfTotalAssets(pct(cur, totalAssets))
                 .percentOfEquity(pct(cur, equityValue))
                 .holdingCount(1)
-                .sector(sectorOf(h.getSymbol()))
+                .sector(h.getSymbol() != null ? sectors.get(h.getSymbol()) : null)
                 .build());
         }
         topStocks.sort(Comparator.comparing(
@@ -351,15 +355,23 @@ public class PortfolioContextService {
         return h.getName() != null ? h.getName() : "Unknown";
     }
 
-    /** Sector as recorded on the Stock row; null when it hasn't been fetched yet. */
-    private String sectorOf(String symbol) {
-        if (symbol == null) return null;
+    /**
+     * Sector as recorded on each stock's Stock row, in one query; a symbol is missing when its
+     * sector hasn't been fetched yet. Asking per stock cost a database round trip each.
+     */
+    private Map<String, String> sectorsOf(List<Holding> stocks) {
+        Set<String> symbols = new HashSet<>();
+        for (Holding h : stocks) if (h.getSymbol() != null) symbols.add(h.getSymbol());
+        Map<String, String> out = new HashMap<>();
+        if (symbols.isEmpty()) return out;
         try {
-            Optional<Stock> s = stockRepository.findBySymbol(symbol);
-            return s.map(Stock::getSector).orElse(null);
+            for (Stock s : stockRepository.findBySymbolIn(symbols)) {
+                if (s.getSector() != null) out.putIfAbsent(s.getSymbol(), s.getSector());
+            }
         } catch (Exception e) {
-            return null;
+            log.debug("Sectors unavailable: {}", e.getMessage());
         }
+        return out;
     }
 
     private static BigDecimal nz(BigDecimal v) { return v != null ? v : BigDecimal.ZERO; }
