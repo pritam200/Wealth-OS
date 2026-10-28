@@ -193,6 +193,21 @@ export const recommendationMfApi = {
   get: (params: MfRecommendationParams, signal?: AbortSignal) => apiClient.post<AnalystAssessment>('/api/recommendation/mf', params, { signal }),
 };
 
+export type InvestRisk = 'CONSERVATIVE' | 'MODERATE' | 'AGGRESSIVE';
+export interface InvestFundPick { name: string; schemeCode: string | null; return3Y: number | null; return1Y: number | null; held: number }
+export interface InvestStep { part: string; label: string; amount: number; percent: number; where: string; why: string; funds: InvestFundPick[] }
+export interface InvestPlan {
+  amount: number; horizonYears: number; risk: InvestRisk;
+  current: { equity: number; debt: number; gold: number }; target: { equity: number; debt: number; gold: number };
+  monthlySpend: number; steps: InvestStep[]; notes: string[]; disclaimer: string;
+}
+
+// Where a sum of savings could go, by stated rules — dues, emergency fund, then a target mix.
+export const investPlanApi = {
+  suggest: (amount: number, horizonYears: number, risk: InvestRisk) =>
+    apiClient.post<InvestPlan>('/api/recommendation/invest-plan', { amount, horizonYears, risk }),
+};
+
 export interface IndexBenchmarks { nifty50: number | null; sensex: number | null; bankNifty: number | null }
 
 // Real trailing index returns — replaces hardcoded benchmark strings on the Mutual Funds tab.

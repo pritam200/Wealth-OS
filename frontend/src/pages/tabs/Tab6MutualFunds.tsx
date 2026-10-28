@@ -8,6 +8,7 @@ import { StatTile } from '../../components/shared/StatTile';
 import { useMaskedText } from '../../components/shared/Amount';
 import { MfTrendBadge } from '../../components/wealth/MfTrendBadge';
 import { RedeemedInvestments } from '../../components/wealth/RedeemedInvestments';
+import { InvestSavingsCard } from '../../components/wealth/InvestSavingsCard';
 import type { PortfolioSummary, Portfolio, HoldingDto, TransactionDto } from '../../types';
 import { Plus, TrendingUp, X, PieChart, Wallet, Layers, Clock, ChevronDown, ChevronUp, Calendar, ArrowUpRight, ArrowDownRight, Filter, RefreshCw, Lightbulb, BarChart3 } from 'lucide-react';
 import { format, parseISO, isAfter, startOfMonth, subDays } from 'date-fns';
@@ -649,6 +650,9 @@ export function Tab6MutualFunds() {
               </div>
             )}
           </CollapsibleSection>
+
+          {/* Where new savings could go */}
+          <InvestSavingsCard />
 
           {/* 3. Asset Allocation + 4. Performance & Analytics — side by side */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
