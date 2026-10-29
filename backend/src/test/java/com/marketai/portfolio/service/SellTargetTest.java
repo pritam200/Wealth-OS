@@ -35,7 +35,8 @@ class SellTargetTest {
         holdings = mock(HoldingRepository.class);
         service = new PortfolioService(portfolios, holdings, mock(TransactionRepository.class),
             mock(com.marketai.auth.repository.UserRepository.class), mock(com.marketai.market.service.MarketDataService.class),
-            mock(com.marketai.redemption.service.RedemptionService.class), mock(com.marketai.mf.service.MfNavHistoryService.class));
+            mock(com.marketai.redemption.service.RedemptionService.class), mock(com.marketai.mf.service.MfNavHistoryService.class),
+            mock(com.marketai.market.repository.PriceHistoryRepository.class));
         when(portfolios.findByUserIdOrderByIdAsc(USER_ID)).thenReturn(List.of(
             Portfolio.builder().id(MSTOCK).name("mStock").build(),
             Portfolio.builder().id(GENERAL).name("My stocks").build(),

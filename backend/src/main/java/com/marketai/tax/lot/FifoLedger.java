@@ -21,26 +21,45 @@ public final class FifoLedger {
     /**
      * One buy or sell, in the order it happened — or a split, when {@code splitMultiplier} is
      * set (units and price are then ignored). A bonus allotment is a buy at nil cost.
+     *
+     * <p>{@code fmv20180131} is the fair-market value per unit on 31 Jan 2018 for grandfathering
+     * (s.55). Only meaningful on buys dated on or before that day; ignored otherwise.
      */
     public record Trade(String id, LocalDate date, boolean buy, BigDecimal units, BigDecimal pricePerUnit,
-                        BigDecimal splitMultiplier) {
+                        BigDecimal splitMultiplier, BigDecimal fmv20180131) {
         public Trade(String id, LocalDate date, boolean buy, BigDecimal units, BigDecimal pricePerUnit) {
-            this(id, date, buy, units, pricePerUnit, null);
+            this(id, date, buy, units, pricePerUnit, null, null);
+        }
+
+        public Trade(String id, LocalDate date, boolean buy, BigDecimal units, BigDecimal pricePerUnit,
+                     BigDecimal splitMultiplier) {
+            this(id, date, buy, units, pricePerUnit, splitMultiplier, null);
         }
 
         public static Trade split(String id, LocalDate date, BigDecimal multiplier) {
-            return new Trade(id, date, false, null, null, multiplier);
+            return new Trade(id, date, false, null, null, multiplier, null);
+        }
+
+        public static Trade buy(String id, LocalDate date, BigDecimal units, BigDecimal pricePerUnit,
+                                BigDecimal fmv20180131) {
+            return new Trade(id, date, true, units, pricePerUnit, null, fmv20180131);
         }
 
         /** The one mapping from a ledger row, so every replay reads the ledger the same way. */
         public static Trade of(com.marketai.portfolio.entity.Transaction t) {
+            return of(t, null);
+        }
+
+        /** Same as {@link #of(com.marketai.portfolio.entity.Transaction)} with an optional FMV for grandfathering. */
+        public static Trade of(com.marketai.portfolio.entity.Transaction t, BigDecimal fmv20180131) {
             String id = "TXN-" + t.getId();
             BigDecimal m = t.splitMultiplier();
             if (m != null) return split(id, t.getTransactionDate(), m);
             if (t.getType() == com.marketai.portfolio.entity.Transaction.TransactionType.SPLIT) {
-                return new Trade(id, t.getTransactionDate(), false, null, null, null); // unusable ratio: skipped
+                return new Trade(id, t.getTransactionDate(), false, null, null, null, null); // unusable ratio: skipped
             }
-            return new Trade(id, t.getTransactionDate(), t.addsUnits(), t.getQuantity(), netPrice(t));
+            BigDecimal fmv = t.addsUnits() ? fmv20180131 : null;
+            return new Trade(id, t.getTransactionDate(), t.addsUnits(), t.getQuantity(), netPrice(t), null, fmv);
         }
     }
 
@@ -112,7 +131,11 @@ public final class FifoLedger {
             }
             if (t.date() == null || t.units() == null || t.pricePerUnit() == null || t.units().signum() <= 0) continue;
             if (t.buy()) {
-                lots.add(new TaxLot(t.id(), t.date(), t.units(), t.pricePerUnit(), null));
+                BigDecimal fmv = t.fmv20180131();
+                if (fmv != null && (t.date() == null || !t.date().isBefore(CapitalGainsRates.GRANDFATHER_DATE.plusDays(1)))) {
+                    fmv = null; // grandfathering only applies to lots held on 31 Jan 2018
+                }
+                lots.add(new TaxLot(t.id(), t.date(), t.units(), t.pricePerUnit(), fmv));
                 remaining.add(t.units());
                 continue;
             }
@@ -124,8 +147,10 @@ public final class FifoLedger {
                 remaining.set(i, avail.subtract(take));
                 toSell = toSell.subtract(take);
                 TaxLot lot = lots.get(i);
+                BigDecimal salePx = t.pricePerUnit();
+                BigDecimal cost = lot.effectiveCostPerUnit(salePx).multiply(take);
                 disposals.add(new Disposal(t.id(), t.date(), lot.lotId(), lot.acquiredOn(), take,
-                    t.pricePerUnit().multiply(take), lot.costPerUnit().multiply(take), lot.isLongTermAsOf(t.date())));
+                    salePx.multiply(take), cost, lot.isLongTermAsOf(t.date())));
             }
             if (toSell.signum() > 0) unmatched = unmatched.add(toSell);
         }

@@ -46,6 +46,16 @@ public final class CapitalGainsRates {
     /** Health and education cess, applied on top of tax plus surcharge. */
     public static final BigDecimal CESS_RATE = new BigDecimal("0.04");
 
+    /**
+     * Tax after the 4% health-and-education cess. Every screen that quotes a capital-gains
+     * liability must go through this so the summary, a redemption estimate and a what-if sale
+     * cannot disagree about the cess.
+     */
+    public static BigDecimal withCess(BigDecimal baseTax) {
+        if (baseTax == null || baseTax.signum() <= 0) return java.math.BigDecimal.ZERO.setScale(2);
+        return baseTax.add(baseTax.multiply(CESS_RATE)).setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+
     /** Surcharge on long-term gains under this section is capped at 15%. */
     public static final BigDecimal MAX_LTCG_SURCHARGE = new BigDecimal("0.15");
 

@@ -11,6 +11,7 @@ import com.marketai.auth.repository.RefreshTokenRepository;
 import com.marketai.auth.repository.RoleRepository;
 import com.marketai.auth.repository.UserRepository;
 import com.marketai.auth.security.JwtService;
+import com.marketai.auth.security.RefreshTokenHasher;
 import com.marketai.common.exception.DuplicateResourceException;
 import com.marketai.common.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -91,7 +92,7 @@ public class AuthService {
 
     @Transactional
     public AuthResponse refreshToken(RefreshTokenRequest request) {
-        RefreshToken storedToken = refreshTokenRepository.findByToken(request.getRefreshToken())
+        RefreshToken storedToken = findRefreshToken(request.getRefreshToken())
                 .orElseThrow(() -> new ResourceNotFoundException("RefreshToken", "token", "provided"));
 
         if (storedToken.isRevoked() || storedToken.getExpiresAt().isBefore(Instant.now())) {
@@ -107,6 +108,18 @@ public class AuthService {
         return buildAuthResponse(user);
     }
 
+    /**
+     * Look up by SHA-256 of the bearer value. Legacy rows that still store the UUID plaintext
+     * are accepted once and rewritten hashed on the next issuance (this row is revoked either way).
+     */
+    private java.util.Optional<RefreshToken> findRefreshToken(String presented) {
+        if (presented == null || presented.isBlank()) return java.util.Optional.empty();
+        java.util.Optional<RefreshToken> hashed = refreshTokenRepository.findByToken(RefreshTokenHasher.hash(presented));
+        if (hashed.isPresent()) return hashed;
+        return refreshTokenRepository.findByToken(presented)
+            .filter(rt -> !RefreshTokenHasher.looksHashed(rt.getToken()));
+    }
+
     @Transactional
     public void logout(String email) {
         User user = userRepository.findByEmail(email)
@@ -120,7 +133,7 @@ public class AuthService {
         String refreshTokenValue = UUID.randomUUID().toString();
 
         RefreshToken refreshToken = RefreshToken.builder()
-                .token(refreshTokenValue)
+                .token(RefreshTokenHasher.hash(refreshTokenValue))
                 .user(user)
                 .expiresAt(Instant.now().plusMillis(refreshExpirationMs))
                 .build();

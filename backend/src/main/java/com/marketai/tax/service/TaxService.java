@@ -55,10 +55,20 @@ public class TaxService {
                 && !r.getRedemptionDate().isBefore(from) && !r.getRedemptionDate().isAfter(to)
                 && r.getCapitalGain() != null)
             .toList();
-        BigDecimal mfLt = mfInYear.stream().filter(r -> "LTCG".equals(r.getGainType()))
-            .map(MfRedemption::getCapitalGain).reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal mfSt = mfInYear.stream().filter(r -> !"LTCG".equals(r.getGainType()))
-            .map(MfRedemption::getCapitalGain).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal mfLt = BigDecimal.ZERO;
+        BigDecimal mfSt = BigDecimal.ZERO;
+        for (MfRedemption r : mfInYear) {
+            // FIFO-booked rows carry the ST/LT split explicitly (including MIXED). Older rows
+            // only have gainType + capitalGain — treat non-LTCG as short-term.
+            if (r.getShortTermGain() != null || r.getLongTermGain() != null) {
+                mfSt = mfSt.add(r.getShortTermGain() != null ? r.getShortTermGain() : BigDecimal.ZERO);
+                mfLt = mfLt.add(r.getLongTermGain() != null ? r.getLongTermGain() : BigDecimal.ZERO);
+            } else if ("LTCG".equals(r.getGainType())) {
+                mfLt = mfLt.add(r.getCapitalGain());
+            } else {
+                mfSt = mfSt.add(r.getCapitalGain());
+            }
+        }
         PortfolioService.RealisedEquity equity = portfolioService.realisedEquity(userId, from, to);
 
         // Set-off, as the Act applies it within a year: a short-term loss reduces long-term
@@ -77,16 +87,19 @@ public class TaxService {
         BigDecimal totalInv = cg.add(div).add(intr);
 
         // Capital-gains tax is exact given the lots: short-term at the STCG rate, long-term at
-        // the LTCG rate above the yearly exemption — the same rate table every other screen uses.
-        // Only dividends and interest are a range, because they are taxed at the user's slab.
-        BigDecimal cgTax = st.multiply(CapitalGainsRates.STCG_RATE)
+        // the LTCG rate above the yearly exemption, then the 4% cess — the same path
+        // DisposalCalculator / RedemptionService use. Only dividends and interest are a range,
+        // because they are taxed at the user's slab. Surcharge is not applied (needs total income).
+        BigDecimal cgTaxBase = st.multiply(CapitalGainsRates.STCG_RATE)
             .add(lt.subtract(CapitalGainsRates.LTCG_EXEMPTION).max(BigDecimal.ZERO).multiply(CapitalGainsRates.LTCG_RATE));
+        BigDecimal cgTax = CapitalGainsRates.withCess(cgTaxBase);
         BigDecimal low  = cgTax.add(div.add(intr).multiply(new BigDecimal("0.10")));
         BigDecimal high = cgTax.add(div.add(intr).multiply(new BigDecimal("0.30")));
 
         List<String> notes = new ArrayList<>();
-        notes.add(String.format("Realised capital gains: short-term ₹%s taxed at %s%%, long-term ₹%s taxed at %s%% above the ₹1.25L exemption. "
-            + "Equity sales are matched to purchases first-in-first-out; losses are set off as the Act allows.",
+        notes.add(String.format("Realised capital gains: short-term ₹%s taxed at %s%%, long-term ₹%s taxed at %s%% above the ₹1.25L exemption, "
+            + "plus 4%% health-and-education cess. Equity and MF sales are matched to purchases first-in-first-out; "
+            + "losses are set off as the Act allows. Surcharge is not included (needs total-income context).",
             strip(st), CapitalGainsRates.STCG_RATE.movePointRight(2).stripTrailingZeros().toPlainString(),
             strip(lt), CapitalGainsRates.LTCG_RATE.movePointRight(2).stripTrailingZeros().toPlainString()));
         if (equity.unmatchedUnits().signum() > 0) {
@@ -155,14 +168,30 @@ public class TaxService {
         }
 
         for (MfRedemption r : redemptions) {
-            BigDecimal gain = r.getCapitalGain() == null ? BigDecimal.ZERO : r.getCapitalGain();
             LocalDate acquiredOn = r.getHoldingPeriodDays() != null
                 ? r.getRedemptionDate().minusDays(r.getHoldingPeriodDays()) : null;
-            pending.add(new Pending(r.getRedemptionDate(), new CapitalGainsExportRow(
-                r.getSymbol(), r.getFundName(), null,
-                acquiredOn, r.getRedemptionDate(),
-                r.getUnitsRedeemed(), r.getInvestedValueAtRedemption(), r.getRedeemedAmount(),
-                r.getGainType(), gain, BigDecimal.ZERO), "LTCG".equals(r.getGainType()), gain));
+            // FIFO-booked MIXED rows become two export lines so the ITR tool sees each parcel.
+            if (r.getShortTermGain() != null || r.getLongTermGain() != null) {
+                BigDecimal st = r.getShortTermGain() != null ? r.getShortTermGain() : BigDecimal.ZERO;
+                BigDecimal lt = r.getLongTermGain() != null ? r.getLongTermGain() : BigDecimal.ZERO;
+                if (st.signum() != 0) {
+                    pending.add(new Pending(r.getRedemptionDate(), new CapitalGainsExportRow(
+                        r.getSymbol(), r.getFundName(), null, acquiredOn, r.getRedemptionDate(),
+                        r.getUnitsRedeemed(), null, null, "STCG", st, BigDecimal.ZERO), false, st));
+                }
+                if (lt.signum() != 0) {
+                    pending.add(new Pending(r.getRedemptionDate(), new CapitalGainsExportRow(
+                        r.getSymbol(), r.getFundName(), null, acquiredOn, r.getRedemptionDate(),
+                        r.getUnitsRedeemed(), null, null, "LTCG", lt, BigDecimal.ZERO), true, lt));
+                }
+            } else {
+                BigDecimal gain = r.getCapitalGain() == null ? BigDecimal.ZERO : r.getCapitalGain();
+                pending.add(new Pending(r.getRedemptionDate(), new CapitalGainsExportRow(
+                    r.getSymbol(), r.getFundName(), null,
+                    acquiredOn, r.getRedemptionDate(),
+                    r.getUnitsRedeemed(), r.getInvestedValueAtRedemption(), r.getRedeemedAmount(),
+                    r.getGainType(), gain, BigDecimal.ZERO), "LTCG".equals(r.getGainType()), gain));
+            }
         }
 
         FyExemptionLedger ledger = FyExemptionLedger.empty(from);

@@ -16,10 +16,14 @@ public class GmailToken {
     @JoinColumn(name = "user_id", unique = true, nullable = false)
     private User user;
 
-    @Column(length = 2000)
+    /** OAuth access token — AES-GCM encrypted at rest via {@link com.marketai.gmail.security.EncryptedStringConverter}. */
+    @Convert(converter = com.marketai.gmail.security.EncryptedStringConverter.class)
+    @Column(length = 4000)
     private String accessToken;
 
-    @Column(length = 2000)
+    /** OAuth refresh token — AES-GCM encrypted at rest. */
+    @Convert(converter = com.marketai.gmail.security.EncryptedStringConverter.class)
+    @Column(length = 4000)
     private String refreshToken;
 
     private LocalDateTime expiresAt;

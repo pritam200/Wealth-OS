@@ -48,10 +48,18 @@ public class MfRedemption {
     private Long holdingPeriodDays;
 
     @Column(length = 10)
-    private String gainType; // STCG | LTCG
+    private String gainType; // STCG | LTCG | MIXED
 
     @Column(precision = 18, scale = 2)
     private BigDecimal capitalGain;
+
+    /** Short-term parcel of {@link #capitalGain}; null on rows written before FIFO booking. */
+    @Column(name = "short_term_gain", precision = 18, scale = 2)
+    private BigDecimal shortTermGain;
+
+    /** Long-term parcel of {@link #capitalGain}; null on rows written before FIFO booking. */
+    @Column(name = "long_term_gain", precision = 18, scale = 2)
+    private BigDecimal longTermGain;
 
     @Column(precision = 18, scale = 2)
     private BigDecimal estimatedTax;

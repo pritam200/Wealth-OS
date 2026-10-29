@@ -22,9 +22,9 @@ import java.util.regex.Pattern;
  * the same pipeline as every other source, as a record from the EMAIL source, and waits for an
  * authoritative source to corroborate it. It never decides anything itself.
  *
- * <p>Must never disturb the import it observes: it runs in its own transaction and swallows and
- * logs every failure. The legacy tables remain what the existing screens read; this adds the
- * provenance-carrying record beside them.
+ * <p>Runs in its own transaction so a canonical failure cannot roll back the legacy booking the
+ * screens still read. Failures are no longer silent: {@link #record} returns false and the
+ * importer flags the fingerprint for review so dual-write divergence is visible.
  */
 @Service
 @Slf4j
@@ -49,17 +49,25 @@ public class EmailSignalRecorder {
     /**
      * @param lineFingerprint the importer's content fingerprint for this line: the same value
      *                        stored on the legacy row, so migrating that row later is recognised as the same record
+     * @return true when the signal was written (or intentionally skipped as unsupported);
+     *         false when the canonical write failed after a supported type was attempted
      */
-    public void record(Long userId, ParsedEmail pe, String gmailMessageId, String lineFingerprint) {
+    public boolean record(Long userId, ParsedEmail pe, String gmailMessageId, String lineFingerprint) {
         try {
-            if (pe == null || pe.getType() == null || !EmailEventNormalizer.SUPPORTED.contains(pe.getType().name())) return;
+            if (pe == null || pe.getType() == null || !EmailEventNormalizer.SUPPORTED.contains(pe.getType().name())) {
+                return true; // nothing to write — not a divergence
+            }
             String payload = mapper.writeValueAsString(payload(pe, gmailMessageId));
             String recordId = lineFingerprint != null ? lineFingerprint : gmailMessageId;
             RawRecord rec = new RawRecord(RecordKind.TRANSACTION, null, recordId, payload, EmailEventNormalizer.SCHEMA);
             isolated.executeWithoutResult(s -> pipeline.ingest(new IngestionPipeline.Request(userId, null, null,
                 SourceType.EMAIL, PROVIDER, ProviderMode.LIVE, List.of(rec), null)));
+            return true;
         } catch (Exception e) {
-            log.warn("event=email_signal_failed userId={} error={}", userId, e.getClass().getSimpleName());
+            log.error("event=email_signal_failed userId={} messageId={} type={} error={} — legacy row booked without canonical signal",
+                userId, gmailMessageId, pe != null && pe.getType() != null ? pe.getType().name() : null,
+                e.toString());
+            return false;
         }
     }
 

@@ -2,28 +2,31 @@ package com.marketai.redemption.service;
 
 import com.marketai.portfolio.entity.Holding;
 import com.marketai.portfolio.entity.Portfolio;
+import com.marketai.portfolio.entity.Transaction;
 import com.marketai.portfolio.repository.HoldingRepository;
 import com.marketai.portfolio.repository.PortfolioRepository;
+import com.marketai.portfolio.repository.TransactionRepository;
 import com.marketai.redemption.dto.DeploymentPlan;
 import com.marketai.redemption.entity.MfRedemption;
 import com.marketai.redemption.entity.Reinvestment;
 import com.marketai.redemption.repository.MfRedemptionRepository;
 import com.marketai.tax.lot.CapitalGainsRates;
+import com.marketai.tax.lot.FifoLedger;
 import com.marketai.tax.lot.FyExemptionLedger;
-import com.marketai.technical.dto.TechnicalAnalysisDto;
 import com.marketai.technical.service.TechnicalIndicatorService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 @Service
@@ -36,63 +39,150 @@ public class RedemptionService {
     private final MfRedemptionRepository redemptionRepo;
     private final PortfolioRepository portfolioRepository;
     private final HoldingRepository holdingRepository;
+    private final TransactionRepository transactionRepository;
     private final TechnicalIndicatorService technicalIndicatorService;
 
     /**
      * Called from PortfolioService.sellHolding when the sold symbol is a mutual fund. This is
      * the one realized-gain record for a redemption.
      *
-     * @param costBasis cost of the units redeemed, taken before the sale was replayed into the
-     *                  holding (a full redemption zeroes the holding's average cost)
-     * @param redemptionDate the day of the redemption, not the day it was imported
+     * <p>Tax classification and cost come from a FIFO replay of the holding's ledger — the same
+     * statutory matching equity sales use — not from the position's weighted-average cost and a
+     * single first-buy date. A SIP redeemed in one go therefore splits correctly into short-term
+     * and long-term parcels. {@code costBasisFallback} is used only when the ledger cannot explain
+     * the sale (no purchase rows, or unmatched units).
+     *
+     * @param saleTransactionId the SELL row just written; its FIFO disposals are what this books
      */
     @Transactional
     public MfRedemption recordRedemption(Long userId, Holding holding, BigDecimal unitsRedeemed, BigDecimal nav,
-                                         BigDecimal costBasis, LocalDate redemptionDate) {
-        BigDecimal redeemedAmount = nav.multiply(unitsRedeemed).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal investedPortion = costBasis.setScale(2, RoundingMode.HALF_UP);
-        BigDecimal gain = redeemedAmount.subtract(investedPortion);
-
+                                         BigDecimal costBasisFallback, LocalDate redemptionDate,
+                                         Long saleTransactionId) {
         LocalDate today = redemptionDate;
-        long daysHeld = holding.getBuyDate() != null ? ChronoUnit.DAYS.between(holding.getBuyDate(), today) : 0;
-        boolean isLongTerm = daysHeld >= 365;
-        String gainType = isLongTerm ? "LTCG" : "STCG";
-        BigDecimal tax = estimateTax(userId, gain, isLongTerm, today);
+        BigDecimal redeemedAmount = nav.multiply(unitsRedeemed).setScale(2, RoundingMode.HALF_UP);
+
+        FifoSplit split = fifoSplit(holding, saleTransactionId, unitsRedeemed, nav, costBasisFallback, today);
+        BigDecimal gain = split.stGain.add(split.ltGain);
+        String gainType = split.gainType();
+        BigDecimal tax = estimateTax(userId, split.stGain, split.ltGain, today);
 
         MfRedemption redemption = MfRedemption.builder()
             .userId(userId).symbol(holding.getSymbol()).fundName(holding.getName())
             .unitsRedeemed(unitsRedeemed).navAtRedemption(nav).redeemedAmount(redeemedAmount)
-            .investedValueAtRedemption(investedPortion).redemptionDate(today)
-            .holdingPeriodDays(daysHeld).gainType(gainType).capitalGain(gain).estimatedTax(tax)
+            .investedValueAtRedemption(split.cost).redemptionDate(today)
+            .holdingPeriodDays(split.holdingPeriodDays).gainType(gainType)
+            .capitalGain(gain).shortTermGain(split.stGain).longTermGain(split.ltGain)
+            .estimatedTax(tax)
             .reinvestedAmount(BigDecimal.ZERO).status("ACTIVE")
             .build();
         return redemptionRepo.save(redemption);
     }
 
-    /**
-     * Estimated tax on this redemption's gain.
-     *
-     * <p>Two rules this gets right that the previous local constants did not. The short-term rate
-     * is 20%, not 15% — raised by the Finance (No.2) Act 2024 — and the rates now come from
-     * {@link CapitalGainsRates}, the one place they are maintained, rather than being duplicated
-     * here where they went stale. And the ₹1,25,000 long-term exemption is consumed from a
-     * running financial-year balance via {@link FyExemptionLedger}: applying it afresh to every
-     * redemption reported ₹0 tax on four ₹1,20,000 gains in one year, where the real figure is
-     * 12.5% of (₹4,80,000 − ₹1,25,000).
-     */
-    private BigDecimal estimateTax(Long userId, BigDecimal gain, boolean isLongTerm, LocalDate asOf) {
-        if (gain == null || gain.signum() <= 0) return BigDecimal.ZERO;
-        if (!isLongTerm) {
-            return gain.multiply(CapitalGainsRates.STCG_RATE).setScale(2, RoundingMode.HALF_UP);
+    /** Compatibility for callers/tests that do not have a sale transaction id. */
+    @Transactional
+    public MfRedemption recordRedemption(Long userId, Holding holding, BigDecimal unitsRedeemed, BigDecimal nav,
+                                         BigDecimal costBasis, LocalDate redemptionDate) {
+        return recordRedemption(userId, holding, unitsRedeemed, nav, costBasis, redemptionDate, null);
+    }
+
+    private record FifoSplit(BigDecimal cost, BigDecimal stGain, BigDecimal ltGain, Long holdingPeriodDays) {
+        String gainType() {
+            boolean st = stGain != null && stGain.signum() != 0;
+            boolean lt = ltGain != null && ltGain.signum() != 0;
+            if (st && lt) return "MIXED";
+            if (lt) return "LTCG";
+            return "STCG";
         }
+    }
+
+    private FifoSplit fifoSplit(Holding holding, Long saleTransactionId, BigDecimal unitsRedeemed,
+                                BigDecimal nav, BigDecimal costBasisFallback, LocalDate redemptionDate) {
+        if (holding.getId() == null) {
+            return averageCostFallback(holding, unitsRedeemed, nav, costBasisFallback, redemptionDate);
+        }
+        List<Transaction> ledger = transactionRepository
+            .findByHoldingIdOrderByTransactionDateAscIdAsc(holding.getId());
+        if (ledger.isEmpty()) {
+            return averageCostFallback(holding, unitsRedeemed, nav, costBasisFallback, redemptionDate);
+        }
+        List<FifoLedger.Trade> trades = ledger.stream().map(FifoLedger.Trade::of).toList();
+        FifoLedger.Result r = FifoLedger.replay(trades);
+
+        List<FifoLedger.Disposal> mine = r.disposals().stream()
+            .filter(d -> saleTransactionId == null
+                ? d.soldOn().equals(redemptionDate)
+                : ("TXN-" + saleTransactionId).equals(d.saleId()))
+            .toList();
+        // Same-day sales without an id: take the last matching unitsRedeemed worth of disposals.
+        if (saleTransactionId == null && !mine.isEmpty()) {
+            BigDecimal need = unitsRedeemed;
+            List<FifoLedger.Disposal> take = new ArrayList<>();
+            for (int i = mine.size() - 1; i >= 0 && need.signum() > 0; i--) {
+                FifoLedger.Disposal d = mine.get(i);
+                take.add(d);
+                need = need.subtract(d.units());
+            }
+            mine = take;
+        }
+        if (mine.isEmpty() || r.unmatchedUnits().signum() > 0 && saleTransactionId != null
+                && mine.stream().map(FifoLedger.Disposal::units).reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .compareTo(unitsRedeemed) != 0) {
+            // Ledger cannot explain this sale cleanly — do not invent lot ages.
+            if (r.unmatchedUnits().signum() > 0) {
+                log.warn("MF redemption {} used average-cost fallback: unmatched units {}",
+                    holding.getSymbol(), r.unmatchedUnits());
+            }
+            return averageCostFallback(holding, unitsRedeemed, nav, costBasisFallback, redemptionDate);
+        }
+
+        BigDecimal cost = BigDecimal.ZERO, st = BigDecimal.ZERO, lt = BigDecimal.ZERO;
+        LocalDate earliest = null;
+        for (FifoLedger.Disposal d : mine) {
+            cost = cost.add(d.cost());
+            if (d.longTerm()) lt = lt.add(d.gain());
+            else st = st.add(d.gain());
+            if (earliest == null || d.acquiredOn().isBefore(earliest)) earliest = d.acquiredOn();
+        }
+        Long days = earliest != null ? ChronoUnit.DAYS.between(earliest, redemptionDate) : null;
+        return new FifoSplit(cost.setScale(2, RoundingMode.HALF_UP),
+            st.setScale(2, RoundingMode.HALF_UP), lt.setScale(2, RoundingMode.HALF_UP), days);
+    }
+
+    private FifoSplit averageCostFallback(Holding holding, BigDecimal unitsRedeemed, BigDecimal nav,
+                                          BigDecimal costBasisFallback, LocalDate redemptionDate) {
+        BigDecimal cost = costBasisFallback != null
+            ? costBasisFallback.setScale(2, RoundingMode.HALF_UP)
+            : holding.getAverageCost().multiply(unitsRedeemed).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal proceeds = nav.multiply(unitsRedeemed).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal gain = proceeds.subtract(cost);
+        boolean longTerm = CapitalGainsRates.isLongTerm(holding.getBuyDate(), redemptionDate);
+        Long days = holding.getBuyDate() != null
+            ? ChronoUnit.DAYS.between(holding.getBuyDate(), redemptionDate) : null;
+        return longTerm
+            ? new FifoSplit(cost, BigDecimal.ZERO.setScale(2), gain.setScale(2, RoundingMode.HALF_UP), days)
+            : new FifoSplit(cost, gain.setScale(2, RoundingMode.HALF_UP), BigDecimal.ZERO.setScale(2), days);
+    }
+
+    /**
+     * Estimated tax on this redemption's gains, including the 4% cess. Short-term and long-term
+     * parcels are taxed separately; the ₹1,25,000 long-term exemption is consumed from a running
+     * financial-year balance via {@link FyExemptionLedger}.
+     */
+    private BigDecimal estimateTax(Long userId, BigDecimal stGain, BigDecimal ltGain, LocalDate asOf) {
+        BigDecimal st = stGain == null ? BigDecimal.ZERO : stGain.max(BigDecimal.ZERO);
+        BigDecimal lt = ltGain == null ? BigDecimal.ZERO : ltGain.max(BigDecimal.ZERO);
+        BigDecimal stTax = st.multiply(CapitalGainsRates.STCG_RATE);
+
         int fyStartYear = FyExemptionLedger.fyStartYearFor(asOf);
         LocalDate fyStart = LocalDate.of(fyStartYear, 4, 1);
         LocalDate fyEnd = LocalDate.of(fyStartYear + 1, 3, 31);
         BigDecimal alreadyRealised = redemptionRepo.sumLongTermGainsInFy(userId, fyStart, fyEnd);
         FyExemptionLedger ledger = new FyExemptionLedger(fyStartYear,
             alreadyRealised != null ? alreadyRealised : BigDecimal.ZERO);
-        BigDecimal taxable = gain.subtract(ledger.remainingExemption()).max(BigDecimal.ZERO);
-        return taxable.multiply(CapitalGainsRates.LTCG_RATE).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal taxableLt = lt.subtract(ledger.remainingExemption()).max(BigDecimal.ZERO);
+        BigDecimal ltTax = taxableLt.multiply(CapitalGainsRates.LTCG_RATE);
+
+        return CapitalGainsRates.withCess(stTax.add(ltTax));
     }
 
     /**
@@ -185,6 +275,7 @@ public class RedemptionService {
         } catch (Exception e) {
             log.debug("Could not list existing MF holdings: {}", e.getMessage());
         }
+        names.sort(Comparator.naturalOrder());
         return names;
     }
 }

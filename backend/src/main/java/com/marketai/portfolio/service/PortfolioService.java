@@ -43,6 +43,7 @@ public class PortfolioService {
     private final MarketDataService marketDataService;
     private final RedemptionService redemptionService;
     private final com.marketai.mf.service.MfNavHistoryService mfNavHistoryService;
+    private final com.marketai.market.repository.PriceHistoryRepository priceHistoryRepository;
 
     @Transactional
     public Portfolio createPortfolio(Long userId, String name, String description) {
@@ -851,6 +852,7 @@ public class PortfolioService {
                 .currentValue(currentValue)
                 .totalPnl(totalPnl)
                 .totalPnlPercent(totalPnlPct)
+                .cagr(portfolioCagr(holdings, txnsByHolding, currentValue))
                 .stocksInvested(sumWhere(holdings, false, Holding::getInvestedValue))
                 .stocksCurrentValue(sumWhere(holdings, false, Holding::getCurrentValue))
                 .mfInvested(sumWhere(holdings, true, Holding::getInvestedValue))
@@ -863,6 +865,31 @@ public class PortfolioService {
                 .allocation(allocation)
                 .lastUpdated(LocalDateTime.now())
                 .build();
+    }
+
+    /**
+     * Portfolio-level annualised return from every holding's dated cash flows plus today's
+     * value — the same XIRR solver each holding uses. Null when there aren't enough flows.
+     */
+    private BigDecimal portfolioCagr(List<Holding> holdings,
+                                     Map<Long, List<Transaction>> txnsByHolding,
+                                     BigDecimal currentValue) {
+        List<com.marketai.portfolio.util.XirrCalculator.CashFlow> flows = new ArrayList<>();
+        for (Holding h : holdings) {
+            for (Transaction t : txnsByHolding.getOrDefault(h.getId(), List.of())) {
+                if (t.getTransactionDate() == null || t.getPrice() == null || t.getQuantity() == null) continue;
+                if (t.getType() == Transaction.TransactionType.BONUS
+                        || t.getType() == Transaction.TransactionType.SPLIT) continue;
+                BigDecimal amount = t.getPrice().multiply(t.getQuantity());
+                if (t.getType() == Transaction.TransactionType.BUY) amount = amount.negate();
+                flows.add(new com.marketai.portfolio.util.XirrCalculator.CashFlow(t.getTransactionDate(), amount));
+            }
+        }
+        if (currentValue != null && currentValue.signum() > 0) {
+            flows.add(new com.marketai.portfolio.util.XirrCalculator.CashFlow(LocalDate.now(), currentValue));
+        }
+        Double pct = com.marketai.portfolio.util.XirrCalculator.computeXirrPercent(flows);
+        return pct != null ? BigDecimal.valueOf(pct).setScale(2, RoundingMode.HALF_UP) : null;
     }
 
     private static BigDecimal sumWhere(List<Holding> holdings, boolean mf,
@@ -1582,7 +1609,7 @@ public class PortfolioService {
         // (and zeroes it when this sale closes the position).
         BigDecimal costBasis = h.getAverageCost().multiply(qtySold).setScale(2, RoundingMode.HALF_UP);
 
-        transactionRepository.save(Transaction.builder()
+        Transaction sale = transactionRepository.save(Transaction.builder()
             .holding(h)
             .type(Transaction.TransactionType.SELL)
             .quantity(qtySold)
@@ -1596,9 +1623,10 @@ public class PortfolioService {
         recomputeFromLedger(h);
 
         // Mutual funds carry their STCG/LTCG record in MfRedemption. No try/catch fallback: if
-        // it can't be written, the whole sale rolls back rather than half-recording.
+        // it can't be written, the whole sale rolls back rather than half-recording. Tax lots
+        // come from a FIFO replay of this sale, not the position average cost.
         if (h.getSymbol() != null && h.getSymbol().endsWith(".MF")) {
-            redemptionService.recordRedemption(userId, h, qtySold, salePrice, costBasis, date);
+            redemptionService.recordRedemption(userId, h, qtySold, salePrice, costBasis, date, sale.getId());
         }
     }
 
@@ -1639,7 +1667,7 @@ public class PortfolioService {
                 if (h.getSymbol() == null || h.getSymbol().endsWith(".MF")) continue;
                 List<com.marketai.tax.lot.FifoLedger.Trade> trades = transactionRepository
                     .findByHoldingIdOrderByTransactionDateAscIdAsc(h.getId()).stream()
-                    .map(com.marketai.tax.lot.FifoLedger.Trade::of)
+                    .map(t -> com.marketai.tax.lot.FifoLedger.Trade.of(t, grandfatherFmv(h.getSymbol(), t)))
                     .toList();
                 com.marketai.tax.lot.FifoLedger.Result r = com.marketai.tax.lot.FifoLedger.replay(trades);
                 st = st.add(r.shortTermGain(from, to));
@@ -1652,5 +1680,25 @@ public class PortfolioService {
             }
         }
         return new RealisedEquity(st.setScale(2, RoundingMode.HALF_UP), lt.setScale(2, RoundingMode.HALF_UP), out, unmatched);
+    }
+
+    /**
+     * Fair-market value per unit on 31 Jan 2018 for a purchase that was held that day.
+     * Null when the lot is too new for grandfathering, or when no price history covers that date.
+     */
+    private BigDecimal grandfatherFmv(String symbol, Transaction t) {
+        if (symbol == null || t == null || !t.addsUnits() || t.getTransactionDate() == null) return null;
+        if (!t.getTransactionDate().isBefore(com.marketai.tax.lot.CapitalGainsRates.GRANDFATHER_DATE.plusDays(1))) {
+            return null;
+        }
+        return priceHistoryRepository.findNewestDailyOnOrBefore(
+                java.util.List.of(symbol, symbol.endsWith(".NS") ? symbol : symbol + ".NS"),
+                com.marketai.tax.lot.CapitalGainsRates.GRANDFATHER_DATE,
+                org.springframework.data.domain.PageRequest.of(0, 1))
+            .stream()
+            .map(com.marketai.market.entity.PriceHistory::getClose)
+            .filter(c -> c != null && c.signum() > 0)
+            .findFirst()
+            .orElse(null);
     }
 }

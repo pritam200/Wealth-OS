@@ -51,7 +51,8 @@ class PortfolioServiceTest {
 
         service = new PortfolioService(portfolioRepository, holdingRepository, transactionRepository,
             mock(com.marketai.auth.repository.UserRepository.class), marketDataService, redemptionService,
-            mock(com.marketai.mf.service.MfNavHistoryService.class));
+            mock(com.marketai.mf.service.MfNavHistoryService.class),
+            mock(com.marketai.market.repository.PriceHistoryRepository.class));
 
         Portfolio portfolio = Portfolio.builder().id(PORTFOLIO_ID).name("Test").build();
         when(portfolioRepository.findByIdAndUserId(PORTFOLIO_ID, USER_ID)).thenReturn(Optional.of(portfolio));

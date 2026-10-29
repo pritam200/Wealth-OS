@@ -77,6 +77,18 @@ class FifoLedgerTest {
     }
 
     @Test
+    void grandfatheringStepsCostUpToFmvButNotAboveSalePrice() {
+        // Bought at ₹50 before Feb 2018; FMV on 31 Jan 2018 was ₹120; sold at ₹200.
+        // Effective cost = min(max(50, 120), 200) = 120 → gain 80 per unit, not 150.
+        FifoLedger.Result r = FifoLedger.replay(List.of(
+            FifoLedger.Trade.buy("b1", LocalDate.parse("2017-06-01"), new BigDecimal("10"),
+                new BigDecimal("50"), new BigDecimal("120")),
+            sell("s1", "2026-06-01", "10", "200")));
+
+        assertThat(r.longTermGain(null, null)).isEqualByComparingTo("800");
+    }
+
+    @Test
     void chargesAddToCostAndComeOffProceeds() {
         var b = com.marketai.portfolio.entity.Transaction.builder().id(1L)
             .type(com.marketai.portfolio.entity.Transaction.TransactionType.BUY)

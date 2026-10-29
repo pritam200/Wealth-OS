@@ -53,6 +53,18 @@ public interface PriceHistoryRepository extends JpaRepository<PriceHistory, Long
         @org.springframework.data.repository.query.Param("symbols") java.util.Collection<String> symbols,
         org.springframework.data.domain.Pageable page);
 
+    /**
+     * Newest daily bar on or before {@code date} under any of {@code symbols} — used for the
+     * 31 Jan 2018 grandfathering FMV when the exact calendar day is a market holiday.
+     */
+    @org.springframework.data.jpa.repository.Query(
+        "SELECT p FROM PriceHistory p WHERE p.symbol IN :symbols AND p.date <= :date"
+            + " AND (p.interval IS NULL OR p.interval = '1d') ORDER BY p.date DESC")
+    List<PriceHistory> findNewestDailyOnOrBefore(
+        @org.springframework.data.repository.query.Param("symbols") java.util.Collection<String> symbols,
+        @org.springframework.data.repository.query.Param("date") LocalDate date,
+        org.springframework.data.domain.Pageable page);
+
     /** Every symbol with a daily bar on or after {@code since}. */
     @org.springframework.data.jpa.repository.Query(
         "SELECT DISTINCT p.symbol FROM PriceHistory p WHERE p.date >= :since AND (p.interval IS NULL OR p.interval = '1d')")

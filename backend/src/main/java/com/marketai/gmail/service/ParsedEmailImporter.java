@@ -268,7 +268,16 @@ public class ParsedEmailImporter {
             .linkGroup(linkGroup(pe, gmailMessageId))
             .build();
         boolean booked = routeImport(userId, user, pe, gmailMessageId, provenance);
-        if (booked && emailSignals != null) emailSignals.record(userId, pe, gmailMessageId, fp);
+        if (booked && emailSignals != null) {
+            boolean signalOk = emailSignals.record(userId, pe, gmailMessageId, fp);
+            if (!signalOk) {
+                // Legacy tables have the row; the canonical ledger does not. Surface it for review
+                // instead of leaving the two stores silently divergent.
+                duplicateState = com.marketai.gmail.entity.DuplicateState.NEEDS_REVIEW;
+                log.warn("Canonical email signal failed after booking {} — fingerprint flagged NEEDS_REVIEW",
+                    pe.getSourceDescription());
+            }
+        }
 
         // Recorded only after a successful import, so a failed attempt stays retryable. A
         // duplicate the domain checks caught still gets one, so the next re-read stops at tier 2.
