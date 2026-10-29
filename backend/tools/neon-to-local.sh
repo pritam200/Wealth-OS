@@ -61,6 +61,16 @@ psql_local -d postgres -c "DO \$\$BEGIN
     CREATE ROLE $APP_USER LOGIN PASSWORD '$LOCAL_PW';
   END IF; END\$\$;"
 
+has_db() { psql_local -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname = '$1'" | grep -q 1; }
+if ! has_db "$DB"; then
+  psql_local -d postgres -c "CREATE DATABASE $DB OWNER $APP_USER"
+fi
+if [ ! -f "$DIR/neon.env" ]; then
+  echo "Local database $DB is ready (empty; the backend creates its tables on first start)."
+  echo "To copy your Neon data into it, put neon.env in $DIR and run this again."
+  exit 0
+fi
+
 # 2. Dump Neon (read-only). The dump holds your financial data: it stays in backend/.run, owner-only.
 set -a; source "$DIR/neon.env"; set +a
 mkdir -p "$DIR/.run" && chmod 700 "$DIR/.run"
@@ -72,12 +82,15 @@ PGPASSWORD="$DB_PASSWORD" "$PGBIN/pg_dump" \
 chmod 600 "$DUMP"
 echo "Dump saved: $DUMP"
 
-# 3. Restore into a fresh local database owned by the app user. An existing local copy is renamed,
-#    not dropped, so a second run can't lose anything.
-if psql_local -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname = '$DB'" | grep -q 1; then
+# 3. Restore into a fresh local database owned by the app user. A local database that already has
+#    tables is renamed, not dropped, so a second run can't lose anything; an empty one is replaced.
+#    The backend must be stopped for this.
+if [ "$(psql_local -d "$DB" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'")" != 0 ]; then
   OLD="${DB}_before_$(date +%Y%m%d_%H%M%S)"
   psql_local -d postgres -c "ALTER DATABASE $DB RENAME TO $OLD"
   echo "Previous local copy kept as $OLD"
+else
+  psql_local -d postgres -c "DROP DATABASE $DB"
 fi
 psql_local -d postgres -c "CREATE DATABASE $DB OWNER $APP_USER"
 PGPASSWORD="$LOCAL_PW" "$PGBIN/pg_restore" -h localhost -p "$PORT" -U "$APP_USER" -d "$DB" \
